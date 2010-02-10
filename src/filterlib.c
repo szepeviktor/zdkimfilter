@@ -51,8 +51,6 @@ static volatile int
 	signal_hangup = 0;
 static int live_children = 0;
 
-static char const filter_pass[] = "X-checked-" THE_FILTER;
-
 typedef struct ctl_fname_chain
 {
 	 struct ctl_fname_chain *next;
@@ -236,17 +234,14 @@ static void print_alert(char const*fname, char const* msg, int ctl, int ctltot)
 		ctl, ctltot, fname, strerror(errno));
 }
 
-/* get sender, rtc freed by caller */
-char *fl_get_sender(fl_parm *fl)
+/* read single record from ctlfile, via callback */
+static int
+read_ctlfile(fl_parm *fl, int ch, int (*cb)(char *, void*), void* arg)
 {
-	char *rtc = NULL;
-	int ctl = 0, done = 0;
+	int ctl = 0, rtc = 0;
 	ctl_fname_chain *cfc = fl->cfc;
 
-	if (fl_get_test_mode(fl) == fl_testing)
-		return strdup("test@test.test"); // dummy ctlfile given (the ids)
-	
-	while (cfc && !done)
+	while (cfc && rtc == 0)
 	{
 		char const *irtc = NULL;
 		FILE *fp = fopen(cfc->fname, "r");
@@ -255,7 +250,7 @@ char *fl_get_sender(fl_parm *fl)
 		{
 			char buf[4096];
 			
-			while (fgets(buf, sizeof(buf), fp))
+			while (fgets(buf, sizeof buf - 1, fp))
 			{
 				char *ends = strchr(buf, '\n');
 				if (ends)
@@ -265,12 +260,12 @@ char *fl_get_sender(fl_parm *fl)
 					int c;
 					while ((c = fgetc(fp)) != EOF && c != '\n')
 						continue;
+					buf[sizeof buf -1] = 0;
 				}
 
-				if (buf[0] == 's')
+				if (buf[0] == ch)
 				{
-					rtc = strdup(&buf[1]);
-					done = 1;
+					rtc = (*cb)(&buf[1], arg);
 					break;
 				}
 			}
@@ -288,6 +283,60 @@ char *fl_get_sender(fl_parm *fl)
 		cfc = cfc->next;
 	}
 
+	return rtc;
+}
+
+/* get (auth) sender callback */
+static my_strdup(char *s, void*arg)
+{
+	char **rtc = (char**)arg;
+	assert(rtc && *rtc == NULL);
+	*rtc = strdup(s);
+	return 1;
+}
+
+/* get sender, rtc freed by caller */
+char *fl_get_sender(fl_parm *fl)
+{
+	char *rtc = NULL;
+
+	if (fl_get_test_mode(fl) == fl_testing)
+		return strdup("test@test.test"); // dummy ctlfile given (the ids)
+	
+	read_ctlfile(fl, 's', &my_strdup, &rtc);
+	return rtc;
+}
+
+/* get sender, rtc freed by caller */
+char *fl_get_authsender(fl_parm *fl)
+{
+	char *rtc = NULL;
+
+	if (fl_get_test_mode(fl) == fl_testing)
+		return strdup("test@test.test"); // dummy ctlfile given (the ids)
+	
+	read_ctlfile(fl, 'i', &my_strdup, &rtc);
+	return rtc;
+}
+
+/* relayclient callback */
+static chk_authsmtp(char *s, void*arg)
+{
+	int *rtc = (int*)arg;
+	assert(rtc && *rtc == 0);
+	*rtc = strcmp(s, "authsmtp") == 0;
+	return 1;
+}
+
+/* get relayclient, if set during submit */
+int fl_is_relayclient(fl_parm *fl)
+{
+	int rtc = 0;
+
+	if (fl_get_test_mode(fl) == fl_testing)
+		return 0; // dummy ctlfile given (the ids)
+	
+	read_ctlfile(fl, 'u', &chk_authsmtp, &rtc);
 	return rtc;
 }
 
@@ -506,20 +555,6 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 	free(from_mta);
 	return rtc;
 }
-
-#if 0
-int fl_is_pass_signed(fl_parm*fl, char const *hdr, size_t length)
-{
-	if (length > sizeof filter_pass &&
-		strncmp(filter_pass, hdr, sizeof filter_pass - 1) == 0)
-	{
-		char const *text = hdr + sizeof filter_pass;
-		char const *end = hdr + length;
-		//while (text < end && ...)
-	}
-	return 0;
-}
-#endif
 
 /* ----- core filter functions ----- */
 

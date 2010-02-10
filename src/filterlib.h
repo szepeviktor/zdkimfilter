@@ -44,13 +44,11 @@ void fl_pass_message(fl_parm*, char const *);
 void fl_alarm(unsigned seconds);
 int fl_keep_running(void);
 char *fl_get_sender(fl_parm *);
+char *fl_get_authsender(fl_parm *);
 void fl_rcpt_clear(fl_rcpt_enum*);
 fl_rcpt_enum *fl_rcpt_start(fl_parm*);
 char *fl_rcpt_next(fl_rcpt_enum*);
-char *fl_get_sender(fl_parm *fl);
-
-// int fl_rewrite_message(fl_parm*);
-// int fl_is_pass_signed(fl_parm*, char const *header, size_t header_length);
+int fl_is_relayclient(fl_parm *);
 
 #define FILTERLIB_H_INCLUDED 1
 #endif
