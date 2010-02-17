@@ -25,6 +25,13 @@ typedef struct fl_init_parm
 		test_fn1, test_fn2, test_fn3, test_fn4; // test functions
 } fl_init_parm;
 
+typedef struct fl_msg_info
+{
+	char *id, *authsender; //freed by caller
+	int is_relayclient;
+	int count;
+} fl_msg_info;
+
 int fl_main(fl_init_parm const*, void *parm,
 	int argc, char*argv[], int allmode, int verbose);
 
@@ -39,6 +46,7 @@ fl_test_mode fl_get_test_mode(fl_parm*);
 
 /* utilities only for filter function */
 FILE* fl_get_file(fl_parm*);
+FILE *fl_get_write_file(fl_parm*);
 int fl_drop_message(fl_parm*, char const* reason);
 void fl_pass_message(fl_parm*, char const *);
 void fl_alarm(unsigned seconds);
@@ -48,7 +56,11 @@ char *fl_get_authsender(fl_parm *);
 void fl_rcpt_clear(fl_rcpt_enum*);
 fl_rcpt_enum *fl_rcpt_start(fl_parm*);
 char *fl_rcpt_next(fl_rcpt_enum*);
-int fl_is_relayclient(fl_parm *);
+int fl_get_msg_info(fl_parm *, fl_msg_info *);
+#if defined __GNUC__
+__attribute__ ((format(printf, 2, 3)))
+#endif
+void fl_report(int, char const*, ...);
 
 #define FILTERLIB_H_INCLUDED 1
 #endif

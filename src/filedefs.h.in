@@ -1,0 +1,24 @@
+/*
+** filedefs.h - written by vesely in milan on Thursday 11 February 2010 
+*/
+#if !defined PACKAGE_BUGREPORT
+#define PACKAGE_BUGREPORT "@PACKAGE_BUGREPORT@"
+#endif
+#if !defined(MAILUID)
+#define MAILUID @MAILUID@
+#endif
+#if !defined(MAILGID)
+#define MAILGID @MAILGID@
+#endif
+#if !defined(MAILUSER)
+#define MAILUSER "@MAILUSER@"
+#endif
+#if !defined(ALLFILTERSOCKETDIR)
+#define ALLFILTERSOCKETDIR "@ALLFILTERSOCKETDIR@"
+#endif
+#if !defined(FILTERSOCKETDIR)
+#define FILTERSOCKETDIR "@FILTERSOCKETDIR@"
+#endif
+#if !defined(COURIER_SYSCONF_INSTALL)
+#define COURIER_SYSCONF_INSTALL "@COURIER_SYSCONF_INSTALL@"
+#endif

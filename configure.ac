@@ -4,8 +4,6 @@
 AC_PREREQ(2.55)
 AC_INIT([zdkimfilter for courier], 0.1, [vesely@tana.it], zdkimfilter)
 
-av_save_CFLAGS="$CFLAGS"
-
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_LANG([C])
 AM_INIT_AUTOMAKE([no-dependencies])
@@ -14,22 +12,12 @@ AC_CONFIG_HEADER([config.h])
 
 # Checks for programs, this may alter CFLAGS
 AC_PROG_CC
+AC_PROG_CC_C99
 AM_PROG_CC_C_O()
 
 AC_PROG_AWK
 AC_PROG_EGREP
 AC_PATH_PROG([PKG_CONFIG], [pkg-config])
-
-# Set debug and warning flags for gcc
-D_CFLAGS=""
-test "$GCC" = yes && D_CFLAGS=" -g -O0"
-AC_ARG_VAR([D_CFLAGS], [additional compiler flags for debugging])
-W_CFLAGS=""
-test "$GCC" = yes && W_CFLAGS=" -W -Wall -Wno-sign-compare -Wno-parentheses -Wno-pointer-sign"
-AC_ARG_VAR([W_CFLAGS], [additional compiler flags for warnings])
-O_CFLAGS=""
-test "$GCC" = yes && O_CFLAGS=" -O"
-AC_ARG_VAR([O_CFLAGS], [additional compiler flags for optimisation])
 
 # check the filter mode
 zdkimfilter_mode="all"
@@ -319,19 +307,15 @@ AC_SUBST([FILTERSOCKETDIR], ["${courier_localstatedir}/filters"])
 AC_SUBST([ALLFILTERSOCKETDIR], ["${courier_localstatedir}/allfilters"])
 
 
-CFLAGS="$av_save_CFLAGS"
-
 # make tests/atconfig
-AC_CONFIG_TESTDIR([tests], [src])
+# AC_CONFIG_TESTDIR([tests], [src])
 
 AM_MISSING_PROG([AUTOM4TE], [autom4te])
 
 AC_CONFIG_FILES([Makefile
                  src/Makefile
-                 src/avfiledefs.h
+                 src/filedefs.h
                  etc/Makefile
-                 etc/dotmailfilter.dist
                  etc/zdkimfilter.conf.dist
-                 tests/atlocal
-                 tests/Makefile])
+                ])
 AC_OUTPUT

@@ -23,7 +23,7 @@
 #include <errno.h>
 #include <ctype.h>
 #include <syslog.h>
- 
+#include <stdarg.h> 
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -32,8 +32,9 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <time.h>
+#include <limits.h>
 
-#include <avfiledefs.h>
+#include "filedefs.h"
 
 #if defined(FILTER_NAME)
 #define STRING2(P) #P
@@ -44,6 +45,7 @@
 #endif
 
 #include "filterlib.h"
+#include <assert.h>
 
 static volatile int
 	signal_timed_out = 0,
@@ -60,18 +62,20 @@ typedef struct ctl_fname_chain
 struct filter_lib_struct
 {
 	void *parm;
-	unsigned int verbose:4;
-	unsigned int testing:4;
-	unsigned int batch_test:4;
-	fl_callback filter_fn;
 
 	char const *resp;
 	int in, out;
-	char *data_fname;
-	FILE *data_fp;
+	char *data_fname, *write_fname;
+	FILE *data_fp, *write_fp;
 	ctl_fname_chain *cfc;
 	char *argv0;
+
+	fl_callback filter_fn;
+
 	int ctl_count;
+	unsigned int verbose:4;
+	unsigned int testing:4;
+	unsigned int batch_test:4;
 };
 
 /* ----- sig handlers ----- */
@@ -220,10 +224,77 @@ FILE* fl_get_file(fl_parm*fl)
 	return fl->data_fp;
 }
 
+FILE *fl_get_write_file(fl_parm *fl)
+{
+	if (fl->write_fp == NULL)
+	{
+		if (fl->write_fname == NULL)
+		{
+			assert(fl->data_fname);
+			
+			char buf[PATH_MAX];
+			int sz = snprintf(buf, sizeof buf, "%s" THE_FILTER "%d",
+				fl->data_fname, (int)getpid());
+			if (sz < 0 || sz >= sizeof buf ||
+				(fl->write_fname = strdup(buf)) == NULL)
+			{
+				fputs("ALERT:" THE_FILTER ": writename\n", stderr);
+				return NULL;
+			}
+		}
+		
+		if ((fl->write_fp = fopen(fl->write_fname, "w")) == NULL)
+			perror("ALERT:" THE_FILTER ": openwritename");
+	}
+	
+	return fl->write_fp;
+}
+
 fl_test_mode fl_get_test_mode(fl_parm* fl)
 {
 	return fl->testing ? fl->batch_test ?
 		fl_batch_test : fl_testing : fl_no_test;
+}
+
+void fl_report(int severity, char const* fmt, ...)
+{
+	char const *logmsg;
+	switch (severity) // see liblog/logger.c
+	{
+		case LOG_EMERG:
+		case LOG_ALERT:
+			logmsg = "ALERT";
+			break;
+
+		case LOG_CRIT:
+			logmsg = "CRIT";
+			break;
+
+		case LOG_ERR:
+		default:
+			logmsg = "ERR";
+			break;
+
+		case LOG_WARNING:
+			logmsg = "WARN";
+			break;
+
+		case LOG_NOTICE:
+		case LOG_INFO:
+			logmsg = "INFO";
+			break;
+
+		case LOG_DEBUG:
+			logmsg = "DEBUG";
+			break;
+	}
+	
+	fprintf(stderr, "%s:" THE_FILTER "[%d]:", logmsg, (int)getpid());
+	va_list ap;
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+	fputc('\n', stderr);
 }
 
 static void print_alert(char const*fname, char const* msg, int ctl, int ctltot)
@@ -236,7 +307,7 @@ static void print_alert(char const*fname, char const* msg, int ctl, int ctltot)
 
 /* read single record from ctlfile, via callback */
 static int
-read_ctlfile(fl_parm *fl, int ch, int (*cb)(char *, void*), void* arg)
+read_ctlfile(fl_parm *fl, char const *chs, int (*cb)(char *, void*), void* arg)
 {
 	int ctl = 0, rtc = 0;
 	ctl_fname_chain *cfc = fl->cfc;
@@ -263,11 +334,9 @@ read_ctlfile(fl_parm *fl, int ch, int (*cb)(char *, void*), void* arg)
 					buf[sizeof buf -1] = 0;
 				}
 
-				if (buf[0] == ch)
-				{
-					rtc = (*cb)(&buf[1], arg);
-					break;
-				}
+				if (strchr(chs, buf[0]) != NULL &&
+					(rtc = (*cb)(&buf[0], arg)) != 0)
+						break;
 			}
 			if (ferror(fp))
 				irtc = "reading";
@@ -287,11 +356,11 @@ read_ctlfile(fl_parm *fl, int ch, int (*cb)(char *, void*), void* arg)
 }
 
 /* get (auth) sender callback */
-static my_strdup(char *s, void*arg)
+static int my_strdup(char *s, void*arg)
 {
 	char **rtc = (char**)arg;
 	assert(rtc && *rtc == NULL);
-	*rtc = strdup(s);
+	*rtc = strdup(s + 1);
 	return 1;
 }
 
@@ -303,7 +372,7 @@ char *fl_get_sender(fl_parm *fl)
 	if (fl_get_test_mode(fl) == fl_testing)
 		return strdup("test@test.test"); // dummy ctlfile given (the ids)
 	
-	read_ctlfile(fl, 's', &my_strdup, &rtc);
+	read_ctlfile(fl, "s", &my_strdup, &rtc);
 	return rtc;
 }
 
@@ -315,29 +384,41 @@ char *fl_get_authsender(fl_parm *fl)
 	if (fl_get_test_mode(fl) == fl_testing)
 		return strdup("test@test.test"); // dummy ctlfile given (the ids)
 	
-	read_ctlfile(fl, 'i', &my_strdup, &rtc);
+	read_ctlfile(fl, "i", &my_strdup, &rtc);
 	return rtc;
 }
 
-/* relayclient callback */
-static chk_authsmtp(char *s, void*arg)
+/* msg info callback */
+static int msg_info_cb(char *s, void *arg)
 {
-	int *rtc = (int*)arg;
-	assert(rtc && *rtc == 0);
-	*rtc = strcmp(s, "authsmtp") == 0;
-	return 1;
-}
+	fl_msg_info *info = (fl_msg_info*)arg;
+	switch (*s++)
+	{
+		case 'u':
+			info->is_relayclient = strcmp(s, "authsmtp") == 0;
+			break;
 
-/* get relayclient, if set during submit */
-int fl_is_relayclient(fl_parm *fl)
-{
-	int rtc = 0;
+		case 'M':
+			info->id = strdup(s);
+			break;
 
-	if (fl_get_test_mode(fl) == fl_testing)
-		return 0; // dummy ctlfile given (the ids)
+		case 'i':
+			info->authsender = strdup(s);
+			break;
+
+		default:
+			assert(0);
+			break;
+	}
 	
-	read_ctlfile(fl, 'u', &chk_authsmtp, &rtc);
-	return rtc;
+	return ++info->count == 3;
+}
+
+int fl_get_msg_info(fl_parm *fl, fl_msg_info *info)
+{
+	memset(info, 0, sizeof *info);
+	read_ctlfile(fl, "uMi", &msg_info_cb, info);
+	return info->count != 3;
 }
 
 /* enumerate recipients */
@@ -748,12 +829,44 @@ static void fl_runchild(fl_parm* fl)
 				fl->resp = NULL;
 				if (fl->filter_fn)
 					(*fl->filter_fn)(fl);
-				resp = fl->resp;
 				
 				alarm(0);
 
 				fclose(fl->data_fp);
 				fl->data_fp = NULL;
+				
+				if (fl->write_fp)
+				{
+					int fail = ferror(fl->write_fp);
+					if (fail)
+						fprintf(stderr, "ALERT:"
+							THE_FILTER ": error writing %s: %s\n",
+							fl->write_fname, strerror(errno));
+					
+					if (fclose(fl->write_fp))
+					{
+						fprintf(stderr, "ALERT:"
+							THE_FILTER ": error closing %s: %s\n",
+							fl->write_fname, strerror(errno));
+						fail = 1;
+					}					
+					fl->write_fp = NULL;
+
+					if (fail == 0 && rename(fl->data_fname, fl->write_fname))
+					{
+						fprintf(stderr, "ALERT:"
+							THE_FILTER ": error renaming %s %s: %s\n",
+							fl->data_fname, fl->write_fname, strerror(errno));
+						fail = 1;
+					}
+					
+					if (fail)
+						unlink(fl->write_fname);
+					else
+						resp = fl->resp;
+				}
+				else
+					resp = fl->resp;
 				
 				while (fl->cfc)
 					free(cfc_shift(&fl->cfc));
@@ -773,6 +886,8 @@ static void fl_runchild(fl_parm* fl)
 			}
 			free(fl->data_fname);
 			fl->data_fname = NULL;
+			free(fl->write_fname);
+			fl->write_fname = NULL;
 		}
 		
 		/* 
@@ -781,9 +896,10 @@ static void fl_runchild(fl_parm* fl)
 		if (rtc == 0 && resp == NULL)
 		{
 			resp = "432 Mail filter temporarily unavailable.\n";
-			fprintf(stderr, "ERR:"
-				THE_FILTER "[%d]: response was NULL!!\n",
-				(int)getpid());
+			if (fl->resp == NULL)
+				fprintf(stderr, "ERR:"
+					THE_FILTER "[%d]: response was NULL!!\n",
+					(int)getpid());
 		}
 		l = rtc ? 0 : strlen(resp);
 		while (w < l && fl_keep_running())

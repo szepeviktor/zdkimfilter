@@ -1,0 +1,91 @@
+
+# config file for zdkimfilter
+#
+
+mode = @zdkimfilter_mode@
+
+# verbosity
+
+verbose = 2
+
+# directory for domain private keys
+# file names should be identical with the [user and] domain name:
+# if user@example.com sends via authenticated smtp, then zdkimfilter looks
+# for a file named example.com in this directory.
+# domain_keys = @COURIER_SYSCONF_INSTALL@/filters/keys
+
+# canonicalization for header/body. can be simple or relaxed
+# canonicalization = simple/simple
+
+# sign_algo can be rsa-sha1 or rsa-sha256
+# sign_algo = rsa-sha1
+
+# selector for all keys.
+# Each key should be a softlink; the basename of the linked to file
+# contains the selector. If the basename starts with the same string as the
+# link, i.e. the domain name, then that initial part and an optional dot
+# are skipped. E.g., the following will all result in assigning selector "s"
+# to the key for "example.com":
+#
+#    example.com -> ../somewhere/example.com.s
+#    example.com -> ../somewhere/example.coms
+#    example.com -> ../somewhere/s
+#    example.com -> /somewhere/else/example.com.s
+#    example.com -> /somewhere/else/example.coms
+#    example.com -> /somewhere/else/s
+#    example.com -> example.com.s
+#    example.com -> example.coms
+#    example.com -> s
+#
+# If a selector name cannot be determined that way, then the selector specified
+# here, if any, or the constant "s" will be used.
+#
+# selector
+
+
+# no_signlen
+# set this to avoid specifying the l= parameter of the body length
+# no_signlen
+
+# temporary directory. libopendkim uses /var/tmp by default.
+# if you specify a value of /tmp/xyz, zdkimfilter attempts mkdir
+# on loading, if it cannot stat it
+tmp = /tmp/dkim
+
+# on some errors, return 432; otherwise, just let the msg through
+# tempfail_on_error
+
+
+# default_domain
+# used if no domain can be inferred from authenticated user id
+
+# no_spf
+# if Courier set Received-SPF: pass for sender or helo, report that in A-R
+# unless no_spf is set
+# no_spf
+
+# add_a_r_anyway
+# Add an A-R field also if no signature or other A-R had been found
+
+# check_domain
+# Check the "author" domain (determined by the OpenDKIM library using the most
+# significant header field among "From", "Reply-To", etc.) exists.
+# If NXDOMAIN, reject the message. If the domain publishes an ADSP policy
+# that states that any message from them can be discarded if it doesn't have
+# a valid author domain signature, the message is also rejected.
+# If the policy just says they sign all messages, the message is accepted and
+# the result reported in A-R for method "x-dkim-adsp".
+
+# check_reputation
+# make a query to get the reputation of the signer. The result is reported in
+# A-R for method "x-dkim-rep" according to the two values specified next
+
+# reputation_fail
+# any values greater or equal than this are reported as "fail"
+
+# reputation_pass
+# any values less or equal to this are reported as "pass"
+# values V in between, reputation_fail < V < reputation_pass, are reported
+# as "neutral".
+
+
