@@ -12,5 +12,5 @@ filterexecPROGRAMS_INSTALL = $(INSTALL_PROGRAM)@PROGRAM_OWNER@
 zdkimfilter_SOURCES = zdkimfilter.c filterlib.c
 zdkimfilter_LDADD = @OPENDKIM_LIB@
 zdkimfilter_LDFLAGS = @OPENDKIM_LIB_PATH@
-zdkimfilter_CFLAGS = -DNDEBUG -DFILTER_NAME=zdkimfilter $(AM_CFLAGS)@OPENDKIM_CFLAGS@
+zdkimfilter_CFLAGS = -DFILTER_NAME=zdkimfilter $(AM_CFLAGS)@OPENDKIM_CFLAGS@
 

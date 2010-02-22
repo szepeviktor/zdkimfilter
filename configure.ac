@@ -6,6 +6,7 @@ AC_INIT([zdkimfilter for courier], 0.1, [vesely@tana.it], zdkimfilter)
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_LANG([C])
+AC_USE_SYSTEM_EXTENSIONS
 AM_INIT_AUTOMAKE([no-dependencies])
 # dnl AC_PROG_MAKE_SET
 AC_CONFIG_HEADER([config.h])
@@ -19,16 +20,28 @@ AC_PROG_AWK
 AC_PROG_EGREP
 AC_PATH_PROG([PKG_CONFIG], [pkg-config])
 
+# check debugging
+ZDKIMFILTER_DEBUG="0"
+AC_ARG_ENABLE([debug],
+	[[  --enable-debug          enable debugging code and macros
+  --disable-debug         use release mode (this is the default)]],
+	[
+	if test "$enableval" = "yes" -o "$enableval" = "on" -o "$enableval" = "1"; then
+		ZDKIMFILTER_DEBUG="1"
+	fi
+	])
+AC_DEFINE_UNQUOTED([ZDKIMFILTER_DEBUG], [$ZDKIMFILTER_DEBUG], [enable debug / NDEBUG])
+
 # check the filter mode
-zdkimfilter_mode="all"
+zdkimfilter_mode="Y"
 AC_ARG_ENABLE([allfilter],
 	[[  --enable-allfilter      filter all mail (this is the default)
   --disable-allfilter     optional use with maildrop filtering API]],
 	[
-	if test "$enableval" = "yes" -o "$enableval" = "on"; then
+	if test "$enableval" = "yes" -o "$enableval" = "on" -o "$enableval" = "all"; then
 		:
 	else
-		zdkimfilter_mode="$enableval"
+		zdkimfilter_mode="N"
 	fi
 	])
 AC_SUBST([zdkimfilter_mode])

@@ -25,6 +25,12 @@ If you modify zdkimfilter, or any covered work, by linking or combining it
 with OpenDKIM, containing parts covered by the applicable licence, the licensor
 or zdkimfilter grants you additional permission to convey the resulting work.
 */
+#if defined(HAVE_CONFIG_H)
+#include <config.h>
+#endif
+#if !ZDKIMFILTER_DEBUG
+#define NDEBUG
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -34,7 +40,7 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include <unistd.h>
 #include <errno.h>
 #include <syslog.h> // for LOG_DEBUG,... constants
-
+#include <unistd.h>
 #include <opendkim/dkim.h>
 #include <config.h>
 #include <stddef.h>
@@ -164,9 +170,10 @@ typedef struct dkimfl_parm
 {
 	DKIM_LIB *dklib;
 	fl_parm *fl;
-	char const *domain_keys;
+	char *domain_keys;
 	char *selector;
 	char *default_domain;
+	char *tmp;
 
 	// end of pointers (some malloc'd but never free'd)
 	per_message_parm dyn;
@@ -179,57 +186,150 @@ typedef struct dkimfl_parm
 	char tempfail_on_error;
 	char check_domain;
 	char check_reputation;
+	char all_mode;
+	char sign_rsa_sha1;
+	char header_canon_relaxed;
+	char body_canon_relaxed;
 	
 } dkimfl_parm;
 
 static void config_default(dkimfl_parm *parm) // only non-zero...
 {
 	static char const keys[] = COURIER_SYSCONF_INSTALL "/filters/keys";
-	parm->domain_keys = keys;
+	parm->domain_keys = (char*) keys; // won't be freed
 	parm->reputation_fail = parm->reputation_pass = UINT_MAX;
 	parm->verbose = 4;
 }
 
+static void config_wrapup(dkimfl_parm *parm)
+{
+	if (parm->reputation_fail < parm->reputation_pass)
+	{
+		fl_report(LOG_WARNING,
+			"reputation_fail = %u < reputation_pass = %u: swapped?",
+				parm->reputation_fail, parm->reputation_pass);
+		parm->reputation_fail = UINT_MAX;
+	}
+
+	if (parm->tmp && strncmp(parm->tmp, "/tmp/", 5) == 0)
+	{
+		struct stat st;
+		int rtc = stat(parm->tmp, &st);
+		if (rtc && errno == ENOENT)
+		{
+			if (mkdir(parm->tmp, 0770))
+				fl_report(LOG_CRIT,
+					"mkdir %s failed: %s",
+						parm->tmp, strerror(errno));
+			rtc = stat(parm->tmp, &st);
+		}
+		if (rtc || !S_ISDIR(st.st_mode) ||
+			euidaccess(parm->tmp, R_OK|W_OK|X_OK))
+		{
+			fl_report(LOG_WARNING,
+				"disabling tmp = %s", parm->tmp);
+			free(parm->tmp);
+			parm->tmp = NULL;
+		}
+	}
+}
+
 typedef struct config_conf
 {
-	char *name;
+	char const *name, *descr;
+	int (*assign_fn)(dkimfl_parm*,struct config_conf const*, char*);
 	size_t offset, size;
 } config_conf;
 
-static void assign_ptr(dkimfl_parm *parm, config_conf const *c, char*s)
+#define PARM_PTR(T) *(T*)(((char*)parm) + c->offset)
+
+static int assign_ptr(dkimfl_parm *parm, config_conf const *c, char*s)
 {
+	assert(parm && c && s && c->size == sizeof(char*));
+	char *v = strdup(s);
+	if (v == NULL)
+	{
+		fl_report(LOG_ALERT, "MEMORY FAULT");
+		return -1;
+	}
+	PARM_PTR(char*) = v;
+	return 0;
 }
 
-static void assign_char(dkimfl_parm *parm, config_conf const *c, char*s)
+static int assign_char(dkimfl_parm *parm, config_conf const *c, char*s)
 {
+	assert(parm && c && s && c->size == sizeof(char));
+	char ch = *s, v;
+	if (strchr("YyTt1", ch)) v = 1; //incl. ch == 0
+	else if (strchr("Nn0", ch)) v = 0;
+	else return -1;
+	PARM_PTR(char) = v;
+	return 0;
 }
 
-static void assign_uint(dkimfl_parm *parm, config_conf const *c, char*s)
+static int assign_uint(dkimfl_parm *parm, config_conf const *c, char*s)
 {
+	assert(parm && c && s && c->size == sizeof(unsigned int));
+	char *t = NULL;
+	unsigned long l = strtoul(s, &t, 0);
+	if (l > UINT_MAX || !t || *t) return -1;
+	
+	PARM_PTR(unsigned int) = (unsigned int)l;
+	return 0;
 }
+
 
 #define STRING2(P) #P
 #define STRING(P) STRING2(P)
-#define CONFIG(P) {STRING(P), offsetof(dkimfl_parm, P), sizeof(((dkimfl_parm*)0)->P)}
+#define CONFIG(P,D,F) {STRING(P), D, F, \
+	offsetof(dkimfl_parm, P), sizeof(((dkimfl_parm*)0)->P)}
 
 static config_conf const conf[] =
 {
-	CONFIG(domain_keys),
-	CONFIG(selector),
-	CONFIG(default_domain),
-	CONFIG(verbose),
-	CONFIG(dns_timeout),
-	CONFIG(reputation_fail),
-	CONFIG(reputation_pass),
-	CONFIG(add_a_r_anyway),
-	CONFIG(no_spf),
-	CONFIG(no_signlen),
-	CONFIG(tempfail_on_error),
-	CONFIG(check_domain),
-	CONFIG(check_reputation),
-	{NULL, 0, 0}
+	CONFIG(domain_keys, "key's directory", assign_ptr),
+	CONFIG(selector, "global", assign_ptr),
+	CONFIG(default_domain, "dns", assign_ptr),
+	CONFIG(tmp, "temp directory", assign_ptr),
+	CONFIG(verbose, "int", assign_uint),
+	CONFIG(dns_timeout, "secs", assign_uint),
+	CONFIG(reputation_fail, "high int", assign_uint),
+	CONFIG(reputation_pass, "low int", assign_uint),
+	CONFIG(add_a_r_anyway, "Y/N", assign_char),
+	CONFIG(no_spf, "Y/N", assign_char),
+	CONFIG(no_signlen, "Y/N", assign_char),
+	CONFIG(tempfail_on_error, "Y/N", assign_char),
+	CONFIG(check_domain, "Y/N", assign_char),
+	CONFIG(check_reputation, "Y/N", assign_char),
+	CONFIG(all_mode, "Y/N", assign_char),
+	CONFIG(sign_rsa_sha1, "Y/N, N for rsa-sha256", assign_char),
+	CONFIG(header_canon_relaxed, "Y/N, N for simple", assign_char),
+	CONFIG(body_canon_relaxed, "Y/N, N for simple", assign_char),
+	{NULL, NULL, NULL, 0, 0}
 };
+
+static void report_config(fl_parm *fl)
+{
+	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	config_conf const *c = &conf[0];
+	while (c->name)
+	{
+		printf("%-16s = ", c->name);
+		if (c->size == 1U)
+			fputc(PARM_PTR(char)? 'Y': 'N', stdout);
+		else if (c->assign_fn == assign_ptr)
+		{
+			char const * const p = PARM_PTR(char*);
+			fputs(p? p: "NULL", stdout);
+		}
+		else
+			printf("%u", PARM_PTR(unsigned int));
+		printf(" (%s, %zu byte(s) at %zu)\n", c->descr, c->size, c->offset);
+		++c;
+	}
+}
+
 #undef CONFIG
+#undef PARM_PTR
 
 static config_conf const* conf_name(char const *p)
 {
@@ -240,16 +340,28 @@ static config_conf const* conf_name(char const *p)
 	return NULL;
 }
 
-static int parm_config(dkimfl_parm *parm)
-// initialization, 0 on success
-{
-	static char const conf[] =
+static char const default_config_file[] =
 		COURIER_SYSCONF_INSTALL "/filters/zdkimfilter.conf";
 
+static int parm_config(dkimfl_parm *parm, char const *fname)
+// initialization, 0 on success
+{
+	if (fname == NULL)
+		fname = default_config_file;
+
 	config_default(parm);
-	size_t const non_ptr = offsetof(dkimfl_parm, dyn);
-	FILE *fp = fopen(conf, "r");
-	if (fp)
+	errno = 0;
+	FILE *fp = fopen(fname, "r");
+	if (fp == NULL)
+	{
+		if (fname == default_config_file && errno == ENOENT)
+			return 0; // can do without it
+
+		fl_report(LOG_ALERT,
+			"Cannot read %s: %s", fname, strerror(errno));
+		return -1;
+	}
+	else
 	{
 		char buf[4096];
 		int line_no = 0, errs = 0;
@@ -261,13 +373,13 @@ static int parm_config(dkimfl_parm *parm)
 			if (strchr(s, '\n') == NULL)
 			{
 				fl_report(LOG_ERR,
-					"Line too long at line %d in %s", line_no, conf);
+					"Line too long at line %d in %s", line_no, fname);
 				fclose(fp);
 				return -1;
 			}
 			while (isspace(ch = *(unsigned char*)s))
 				++s;
-			if (ch == '#')
+			if (ch == '#' || ch == 0)
 				continue;
 
 			char *const name = s;
@@ -278,7 +390,7 @@ static int parm_config(dkimfl_parm *parm)
 			if (c == NULL)
 			{
 				fl_report(LOG_ERR,
-					"Invalid name %s at line %d in %s", name, line_no, conf);
+					"Invalid name %s at line %d in %s", name, line_no, fname);
 				++errs;
 				continue;
 			}
@@ -287,22 +399,25 @@ static int parm_config(dkimfl_parm *parm)
 			while (isspace(ch = *(unsigned char*)s) || ch == '=')
 				++s;
 			
-			if (c->offset < non_ptr)
-				assign_ptr(parm, c, s);
-			else
-				switch (c->size)
-				{
-					case sizeof(char):
-						assign_char(parm, c, s);
-						break;
-					case sizeof(unsigned):
-						assign_uint(parm, c, s);
-						break;
-					default:
-						assert(0);
-						break;
-				}
+			char *const value = s;
+			s += strlen(s) - 1;
+			while (s >= value && isspace(ch = *(unsigned char*)s))
+				*s-- = 0;
+
+			if ((*c->assign_fn)(parm, c, value) != 0)
+			{
+				fl_report(LOG_ERR,
+					"Invalid value %s for %s at line %d in %s",
+						value, c->name, line_no, fname);
+				++errs;
+			}
 		}
+		
+		fclose(fp);
+		if (errs == 0)
+			config_wrapup(parm);
+
+		return errs;
 	}
 }
 
@@ -536,7 +651,9 @@ static void sign_message(dkimfl_parm *parm)
 		DKIM_STAT status;
 		DKIM *dkim = dkim_sign(parm->dklib, parm->dyn.info.id, NULL,
 			parm->dyn.key, selector, domain,
-			DKIM_CANON_SIMPLE, DKIM_CANON_SIMPLE, DKIM_SIGN_RSASHA1,
+			parm->header_canon_relaxed? DKIM_CANON_RELAXED: DKIM_CANON_SIMPLE,
+			parm->body_canon_relaxed? DKIM_CANON_RELAXED: DKIM_CANON_SIMPLE,
+			parm->sign_rsa_sha1? DKIM_SIGN_RSASHA1: DKIM_SIGN_RSASHA256,
 			ULONG_MAX /* signbytes */, &status);
 
 		memset(parm->dyn.key, 0, strlen(parm->dyn.key));
@@ -641,6 +758,10 @@ static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 		return DKIM_CBSTAT_TRYAGAIN;
 
 	size_t const helolen = vh->helo_domain? strlen(vh->helo_domain): 0;
+
+	// will this always be supported here?
+	if (vh->dkim_domain == NULL)
+		vh->dkim_domain = dkim_getdomain(dkim);
 	
 	// establish a value for each signature
 	for (int c = 0; c < nsigs; ++c)
@@ -700,6 +821,7 @@ static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 			--c;
 		}
 
+	free(val);
 	return DKIM_CBSTAT_CONTINUE;
 }
 
@@ -804,13 +926,13 @@ static int verify_headers(verify_parms *vh)
 						if (sender)
 						{
 							sender += 7;
-							char *esender = strchr(esender, ';');
+							char *esender = strchr(sender, ';');
 							if (esender)
 							{
 								*esender = 0;
 								if (vh->helo_domain == NULL &&
 									strincmp(s, "HELO", 4) == 0)
-									vh->helo_domain = strdup(sender);
+										vh->helo_domain = strdup(sender);
 								else if (vh->sender_domain == NULL &&
 									strincmp(s, "MAILFROM", 8) == 0)
 								{
@@ -832,20 +954,21 @@ static int verify_headers(verify_parms *vh)
 				(s = hdrval(start, "Received")) != NULL)
 			{
 				seen_received = 1;
-				while (parm->dyn.authserv_id == NULL)
+				while (s && parm->dyn.authserv_id == NULL)
 				{
 					s = strstr(s, " by ");
 					if (s)
 					{
+						s += 4;
 						while (isspace(*(unsigned char*)s))
 							++s;
-						char *const authserv_id = s + 4, ch;
+						char *const authserv_id = s, ch;
 						while (isalnum(ch = *(unsigned char*)s) || ch == '.')
 							++s;
 						char *ea = s;
-						*ea = 0;
 						while (isspace(*(unsigned char*)s))
 							++s;
+						*ea = 0;
 						if (strincmp(s, "with ", 5) == 0 && s > ea &&
 							(parm->dyn.authserv_id = strdup(authserv_id)) == NULL)
 								return parm->dyn.rtc = -1;
@@ -1067,8 +1190,18 @@ static void verify_message(dkimfl_parm *parm)
 				
 				if (id)
 				{
-					char const *const err = status == DKIM_STAT_OK? NULL:
-						dkim_sig_geterrorstr(dkim_sig_geterror(vh.sig));
+					char const *err = NULL;
+					
+					if (status != DKIM_STAT_OK)
+					{
+						DKIM_SIGERROR rc = dkim_sig_geterror(vh.sig);
+						if (rc == DKIM_SIGERROR_OK && 
+							dkim_sig_getbh(vh.sig) == DKIM_SIGBH_MISMATCH)
+								err = "body hash mismatch";
+						else
+							err = dkim_sig_geterrorstr(rc);
+					}
+
 					if (vh.dkim_result)
 					{
 						fprintf(fp, ";\n  dkim=%s ", vh.dkim_result);
@@ -1079,7 +1212,7 @@ static void verify_message(dkimfl_parm *parm)
 					{
 						unsigned int const flags = dkim_sig_getflags(vh.sig);
 						int const is_test = (flags & DKIM_SIGFLAG_TESTKEY) != 0;
-						fprintf(fp, ";\n dkim=%s ", is_test? "neutral": "fail");
+						fprintf(fp, ";\n  dkim=%s ", is_test? "neutral": "fail");
 						if (err && is_test)
 							fprintf(fp, "(test key, %s) ", err);
 						else if (err)
@@ -1120,12 +1253,11 @@ static void verify_message(dkimfl_parm *parm)
 			* now for the rest of the header, and body
 			*/
 			vh.step = 1;
-			vh.dkim_or_file = fl_get_file(parm->fl);
-			assert(vh.dkim_or_file);
-			rewind((FILE*)vh.dkim_or_file);
+			vh.dkim_or_file = fp;
+			rewind(fl_get_file(parm->fl));
 			if (verify_headers(&vh) == 0 &&
 				fputc('\n', fp) != EOF &&
-				filecopy((FILE*)vh.dkim_or_file, fp) == 0)
+				filecopy(fl_get_file(parm->fl), fp) == 0)
 					parm->dyn.rtc = 1;
 			else
 				parm->dyn.rtc = -1;
@@ -1141,13 +1273,100 @@ static void dkimfilter(fl_parm *fl)
 	static char const resp_tempfail[] =
 		"432 Mail filter temporarily unavailable.\n";
 
+	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	parm->fl = fl;
+	if (parm->dyn.rtc == 0)
+	{
+		fl_get_msg_info(fl, &parm->dyn.info);
+		if (parm->dyn.info.is_relayclient)
+		{
+			if (parm->dyn.info.authsender)
+				sign_message(parm);
+		}
+		else
+		{
+			verify_message(parm);
+		}
+	}
+
+	switch (parm->dyn.rtc)
+	{
+		case -1: // unrecoverable error
+			if (parm->tempfail_on_error)
+			{
+				fl_pass_message(fl, resp_tempfail);
+				break;
+			}
+			// else through
+		case 0: // not rewritten
+		case 1: // rewritten
+			fl_pass_message(fl, resp_ok);
+			break;
+
+		case 2: // rejected, message already passed
+			break;
+	}
+	// should? (what is EVP_cleanup?)   dkim_close(parm->dklib);
+}
+
+static fl_init_parm functions =
+{
+	dkimfilter,
+	NULL,
+	NULL, NULL, NULL,
+	report_config, NULL, NULL, NULL	
+};
+
+int main(int argc, char *argv[])
+{
+	int rtc, i;
+	char *config_file = NULL;
+
+	for (i = 1; i < argc; ++i)
+	{
+		char const *const arg = argv[i];
+		
+		if (strcmp(arg, "-f") == 0)
+		{
+			config_file = ++i < argc ? argv[i] : NULL;
+		}
+		else if (strcmp(arg, "--version") == 0)
+		{
+			printf(PACKAGE_NAME ", version " PACKAGE_VERSION "\n"
+				"Compiled with"
+#if defined NDEBUG
+				"out"
+#endif
+				" debugging support\n"
+				"Compiled with OpenDKIM library version: %#lX\n"
+				"Reported OpenSSL version: %#lX\n",
+				(long)(OPENDKIM_LIB_VERSION), dkim_ssl_version());
+			return 0;
+		}
+		else if (strcmp(arg, "--help") == 0)
+		{
+			printf("zdkimfilter command line args:\n"
+			/*  12345678901234567890123456 */
+				"  -f config-filename      override %s\n"
+				"  --help                  print this stuff and exit\n"
+				"  --version               print version string and exit\n",
+					default_config_file);
+			fl_main(NULL, NULL, argc - i + 1, argv + i - 1, 0, 0);
+			return 0;
+		}
+	}
+
 	dkimfl_parm parm;
 	memset(&parm, 0, sizeof parm);
 
-	parm.dklib = dkim_init(NULL, NULL); // should this be before fork?
-	parm.fl = fl;
-	if (parm.dklib == NULL || parm_config(&parm))
-		parm.dyn.rtc = -1;
+	parm.dklib = dkim_init(NULL, NULL);
+	// parm.fl = fl;
+	if (parm.dklib == NULL || parm_config(&parm, config_file))
+	{
+		rtc = 2;
+		fl_report(LOG_ERR, "Unable to %s",
+			parm.dklib? "dkim_init": "read config file");
+	}
 	else
 	{
 		int nok = 0;
@@ -1167,87 +1386,24 @@ static void dkimfilter(fl_parm *fl)
 				&parm.dns_timeout, sizeof parm.dns_timeout) != DKIM_STAT_OK;
 		}
 		
-		if (nok)
-			parm.dyn.rtc = -1;
-	}
-	
-	if (parm.dyn.rtc == 0)
-	{
-		fl_get_msg_info(fl, &parm.dyn.info);
-		if (parm.dyn.info.is_relayclient)
+		if (parm.tmp)
 		{
-			if (parm.dyn.info.authsender)
-				sign_message(&parm);
+			nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_TMPDIR,
+				parm.tmp, sizeof parm.tmp) != DKIM_STAT_OK;
 		}
-		else
-		{
-			verify_message(&parm);
-		}
-	}
-
-	switch (parm.dyn.rtc)
-	{
-		case -1: // unrecoverable error
-			if (parm.tempfail_on_error)
-			{
-				fl_pass_message(fl, resp_tempfail);
-				break;
-			}
-			// else through
-		case 0: // not rewritten
-		case 1: // rewritten
-			fl_pass_message(fl, resp_ok);
-			break;
-
-		case 2: // rejected, message already passed
-			break;
-	}
-	dkim_close(parm.dklib);
-}
-
-static fl_init_parm functions =
-{
-	dkimfilter,
-	NULL,
-	NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL	
-};
-
-int main(int argc, char *argv[])
-{
-	int rtc, i;
-
-	for (i = 1; i < argc; ++i)
-	{
-		char const *const arg = argv[i];
 		
-		if (strcmp(arg, "--version") == 0)
+		if (nok)
 		{
-			puts(PACKAGE_STRING);
-			printf("Compiled with OpenDKIM library version: %#lX\n"
-				"Reported OpenSSL version: %#lX\n",
-				(long)(OPENDKIM_LIB_VERSION), dkim_ssl_version());
-			return 0;
-		}
-		else if (strcmp(arg, "--help") == 0)
-		{
-			fputs("zdkimfilter command line args:\n"
-			/*  12345678901234567890123456 */
-				"  --help                  print this stuff and exit\n"
-				"  --version               print version string and exit\n",
-					stdout);
-			fl_main(NULL, NULL, argc - i + 1, argv + i - 1, 0, 0);
-			return 0;
+			rtc = 2;
+			fl_report(LOG_ERR, "Unable to set lib options");
 		}
 	}
-	
-	rtc = fl_main(&functions, NULL, argc, argv, 1,
-#if !defined NDEBUG  /* verbose */
-	10
-#else
-	4
-#endif
-	);
 
+	if (rtc == 0)
+		rtc =
+			fl_main(&functions, &parm, argc, argv, parm.all_mode, parm.verbose);
+
+	if (parm.dklib)
+		dkim_close(parm.dklib);
 	return rtc;
 }

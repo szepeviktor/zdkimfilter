@@ -1,18 +1,44 @@
 /*
 ** filterlib.c - written in milano by vesely on 19 oct 2001
-** sophos anti virus for courier-mta global filters (with
-** variations from original libfilter.c)
+** for sophos anti virus for courier-mta global filters (with
+** variations from Courier's libfilter.c) and modified for
+** zdkimfilter
 **
 ** This is a modular software, not object oriented:
 ** compile with:
 **       "-DFILTER_NAME=blah_blah"
 */
 /*
-** Copyright (c) 1999-2008 Alessandro Vesely
-** All rights reserved. see COPYING
+* zdkimfilter - Sign outgoing, verify incoming mail messages
+
+Copyright (C) 2010 Alessandro Vesely
+
+This file is part of zdkimfilter
+
+zdkimfilter is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+zdkimfilter is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License version 3
+along with zdkimfilter.  If not, see <http://www.gnu.org/licenses/>.
+
+Additional permission under GNU GPLv3 section 7:
+
+If you modify zdkimfilter, or any covered work, by linking or combining it
+with OpenDKIM, containing parts covered by the applicable licence, the licensor
+or zdkimfilter grants you additional permission to convey the resulting work.
 */
 #if defined(HAVE_CONFIG_H)
 #include <config.h>
+#endif
+#if !ZDKIMFILTER_DEBUG
+#define NDEBUG
 #endif
 
 #include <stdio.h>
@@ -235,7 +261,7 @@ FILE *fl_get_write_file(fl_parm *fl)
 			char buf[PATH_MAX];
 			int sz = snprintf(buf, sizeof buf, "%s" THE_FILTER "%d",
 				fl->data_fname, (int)getpid());
-			if (sz < 0 || sz >= sizeof buf ||
+			if (sz < 0 || (unsigned)sz >= sizeof buf ||
 				(fl->write_fname = strdup(buf)) == NULL)
 			{
 				fputs("ALERT:" THE_FILTER ": writename\n", stderr);
@@ -369,9 +395,6 @@ char *fl_get_sender(fl_parm *fl)
 {
 	char *rtc = NULL;
 
-	if (fl_get_test_mode(fl) == fl_testing)
-		return strdup("test@test.test"); // dummy ctlfile given (the ids)
-	
 	read_ctlfile(fl, "s", &my_strdup, &rtc);
 	return rtc;
 }
@@ -380,9 +403,6 @@ char *fl_get_sender(fl_parm *fl)
 char *fl_get_authsender(fl_parm *fl)
 {
 	char *rtc = NULL;
-
-	if (fl_get_test_mode(fl) == fl_testing)
-		return strdup("test@test.test"); // dummy ctlfile given (the ids)
 	
 	read_ctlfile(fl, "i", &my_strdup, &rtc);
 	return rtc;
@@ -457,13 +477,6 @@ char *fl_rcpt_next(fl_rcpt_enum* fre)
 {
 	if (fre)
 	{
-		if (fl_get_test_mode(fre->fl) == fl_testing)
-		{
-			if (++fre->ctl < 3)
-				return strdup("test@test.test"); // dummy ctlfile given (the ids)
-			return NULL;
-		}
-	
 		while  (fre->cfc || fre->fp)
 		{			
 			while (fre->fp == NULL && fre->cfc)
@@ -551,9 +564,6 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 			(int)getpid(), fl->ctl_count);
 	}
 
-	if (fl_get_test_mode(fl) == fl_testing)
-		return 1; // dummy ctlfile given (the ids)
-	
 	time(&tt);
 
 	while (fl->cfc)
@@ -743,13 +753,6 @@ static int read_fname(fl_parm* fl)
 	return rtc;
 }
 
-#if !defined(NDEBUG)
-static void fl_break(void)
-{
-	fputs("execution resumed\n", stderr);
-}
-#endif
-
 static void fl_reset_signal(void)
 {
 	struct sigaction act;
@@ -766,6 +769,13 @@ static void fl_reset_signal(void)
 	sigaction(SIGUSR1, &act, NULL);
 	sigaction(SIGUSR2, &act, NULL);
 }
+
+#if !defined(NDEBUG)
+static void fl_break(void)
+{
+	fputs("execution resumed\n", stderr);
+}
+#endif
 
 static void fl_runchild(fl_parm* fl)
 {
@@ -824,7 +834,8 @@ static void fl_runchild(fl_parm* fl)
 				
 				/* kill me after 15 minutes, no matter what */
 				fl_reset_signal();
-				alarm(900);
+				if (fl_get_test_mode(fl) != fl_testing)
+					alarm(900);
 
 				fl->resp = NULL;
 				if (fl->filter_fn)
@@ -852,7 +863,7 @@ static void fl_runchild(fl_parm* fl)
 					}					
 					fl->write_fp = NULL;
 
-					if (fail == 0 && rename(fl->data_fname, fl->write_fname))
+					if (fail == 0 && rename(fl->write_fname, fl->data_fname))
 					{
 						fprintf(stderr, "ALERT:"
 							THE_FILTER ": error renaming %s %s: %s\n",
@@ -1000,11 +1011,11 @@ static void fl_init(void)
 	sigaction(SIGUSR2, &act, NULL);
 }
 
-static int fl_runtest(fl_parm* fl, int argc, char *argv[])
+static int fl_runtest(fl_parm* fl, int ctlfiles, int argc, char *argv[])
 {
 	int rtc = 0;
-	int mypipe[2], i;
-	for (i = 0; i < argc && fl_keep_running(); ++i)
+	int mypipe[2], i, j;
+	for (i = ctlfiles; i < argc && fl_keep_running(); ++i)
 	{
 		int irtc = 0;
 		if (pipe(mypipe) == 0)
@@ -1021,7 +1032,10 @@ static int fl_runtest(fl_parm* fl, int argc, char *argv[])
 					fprintf(stderr, THE_FILTER "[%d]: Running %d child(ren)\n",
 						(int)getpid(), live_children);
 #endif
-				fprintf(fp, "%s\nthe ids\n\n", argv[i]);
+				fprintf(fp, "%s\n", argv[i]);
+				for (j = 0; j < ctlfiles; ++j)
+					fprintf(fp, "%s\n", argv[j]);
+				fputc('\n', fp);
 				fclose(fp);
 			}
 			else
@@ -1322,15 +1336,28 @@ int fl_main(fl_init_parm const*fn, void *parm,
 	for (i = 1; i < argc; ++i)
 	{
 		char const *const arg = argv[i];
-		if (strcmp(arg, "-t") == 0)
+		if (arg[0] == '-' && arg[1] == 't')
 		{
+			char *t = NULL;
+			unsigned long l = strtoul(&arg[2], &t, 0);
 			fl.testing = 1;
-			fl_init();
-			if (fl.verbose > 1)
+			if (l <= 0 || t == NULL || *t != 0 || l > INT_MAX ||
+				(int)l >= argc - i - 1)
+			{
 				fprintf(stderr,
-					THE_FILTER ": running test on %d files\n",
-					argc - i - 1);
-			rtc = fl_runtest(&fl, argc - i - 1, argv + i + 1);
+					THE_FILTER ": bad parameter %s; expected 1-%d ctlfiles\n",
+						arg, argc - i - 2);
+				rtc = 1;
+			}
+			else
+			{
+				fl_init();
+				if (fl.verbose > 1)
+					fprintf(stderr,
+						THE_FILTER ": running test on 1 ctl +%d mail files\n",
+						argc - i - 2);
+				rtc = fl_runtest(&fl, (int)l, argc - i - 1, argv + i + 1);
+			}
 			break;
 		}
 
@@ -1349,7 +1376,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		{
 			fputs(
 			/*  12345678901234567890123456 */
-				"  -t file...              scan rest of args as mail file(s)\n"
+				"  -tN file...             scan rest of args as N ctl and mail file(s)\n"
 				"  --batch-test            enter batch test mode\n",
 					stdout);
 			return 1;

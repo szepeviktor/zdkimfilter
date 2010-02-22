@@ -2,7 +2,7 @@
 # config file for zdkimfilter
 #
 
-mode = @zdkimfilter_mode@
+all_mode = @zdkimfilter_mode@
 
 # verbosity
 
@@ -15,10 +15,11 @@ verbose = 2
 # domain_keys = @COURIER_SYSCONF_INSTALL@/filters/keys
 
 # canonicalization for header/body. can be simple or relaxed
-# canonicalization = simple/simple
+# header_canon_relaxed = N
+# body_canon_relaxed = N
 
 # sign_algo can be rsa-sha1 or rsa-sha256
-# sign_algo = rsa-sha1
+# sign_rsa_sha1 = N
 
 # selector for all keys.
 # Each key should be a softlink; the basename of the linked to file
@@ -48,9 +49,9 @@ verbose = 2
 # no_signlen
 
 # temporary directory. libopendkim uses /var/tmp by default.
-# if you specify a value of /tmp/xyz, zdkimfilter attempts mkdir
+# if you specify a value of /tmp/xyz, zdkimfilter attempts mkdir of it
 # on loading, if it cannot stat it
-tmp = /tmp/dkim
+# tmp = /var/tmp
 
 # on some errors, return 432; otherwise, just let the msg through
 # tempfail_on_error
