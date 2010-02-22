@@ -184,8 +184,8 @@ typedef struct dkimfl_parm
 	char no_spf;
 	char no_signlen;
 	char tempfail_on_error;
-	char check_domain;
-	char check_reputation;
+	char no_author_domain;
+	char no_reputation;
 	char all_mode;
 	char sign_rsa_sha1;
 	char header_canon_relaxed;
@@ -298,8 +298,8 @@ static config_conf const conf[] =
 	CONFIG(no_spf, "Y/N", assign_char),
 	CONFIG(no_signlen, "Y/N", assign_char),
 	CONFIG(tempfail_on_error, "Y/N", assign_char),
-	CONFIG(check_domain, "Y/N", assign_char),
-	CONFIG(check_reputation, "Y/N", assign_char),
+	CONFIG(no_author_domain, "Y=skip \"From:\" check", assign_char),
+	CONFIG(no_reputation, "Y=skip reputation lookup", assign_char),
 	CONFIG(all_mode, "Y/N", assign_char),
 	CONFIG(sign_rsa_sha1, "Y/N, N for rsa-sha256", assign_char),
 	CONFIG(header_canon_relaxed, "Y/N, N for simple", assign_char),
@@ -1101,7 +1101,7 @@ static void verify_message(dkimfl_parm *parm)
 				break;
 		}
 
-		if (parm->dyn.rtc == 0 && parm->check_domain)
+		if (parm->dyn.rtc == 0 && !parm->no_author_domain)
 		{
 			if (dkim_policy(dkim, &vh.policy, NULL) == DKIM_STAT_OK)
 			{
@@ -1131,7 +1131,7 @@ static void verify_message(dkimfl_parm *parm)
 		}
 		
 		if (parm->dyn.rtc == 0 &&
-			parm->check_reputation && status == DKIM_STAT_OK && vh.sig)
+			!parm->no_reputation && status == DKIM_STAT_OK && vh.sig)
 		{
 			int rep;
 			/*

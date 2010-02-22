@@ -68,9 +68,8 @@ verbose = 2
 # add_a_r_anyway
 # Add an A-R field also if no signature or other A-R had been found
 
-# check_domain
-# Check the "author" domain (determined by the OpenDKIM library using the most
-# significant header field among "From", "Reply-To", etc.) exists.
+# no_author_domain
+# Check the "From:" domain (as determined by the OpenDKIM library) exists.
 # If NXDOMAIN, reject the message. If the domain publishes an ADSP policy
 # that states that any message from them can be discarded if it doesn't have
 # a valid author domain signature, the message is also rejected.
