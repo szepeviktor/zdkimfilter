@@ -1,0 +1,53 @@
+# Process this file with autom4te to create testsuite. -*- Autotest -*-
+
+# config file, accept extra lines as a parameter
+m4_define([ZF_CONFIG],
+[cat >zftest.conf <<'_ZEOF'
+verbose = 0
+domain_keys = .
+$1
+_ZEOF
+])
+
+# invocation with config file
+m4_define([FILTER], [zdkimfilter -f zftest.conf])
+
+AT_INIT
+AT_TESTED([zdkimfilter])
+
+
+#
+AT_SETUP([test default parameters])
+ZF_CONFIG
+AT_DATA([batch],
+[test1
+exit
+])
+AT_CHECK(
+FILTER [--batch-test <batch],
+0,
+[domain_keys          = . (key's directory)
+selector             = NULL (global)
+default_domain       = NULL (dns)
+tmp                  = NULL (temp directory)
+sign_hfields         = NULL (space-separated, no colon)
+skip_hfields         = NULL (space-separated, no colon)
+verbose              = 0 (int)
+dns_timeout          = 0 (secs)
+reputation_fail      = 32767 (high int)
+reputation_pass      = -32768 (low int)
+add_a_r_anyway       = N (Y/N)
+no_spf               = N (Y/N)
+no_signlen           = N (Y/N)
+tempfail_on_error    = N (Y/N)
+no_author_domain     = N (Y=skip "From:" check)
+no_reputation        = N (Y=skip reputation lookup)
+all_mode             = N (Y/N)
+sign_rsa_sha1        = N (Y/N, N for rsa-sha256)
+header_canon_relaxed = N (Y/N, N for simple)
+body_canon_relaxed   = N (Y/N, N for simple)
+],
+[zdkimfilter: batch run 0 msg(s)
+])
+AT_CLEANUP
+

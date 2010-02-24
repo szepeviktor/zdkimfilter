@@ -1,5 +1,7 @@
 ## Automake
 
+@SET_MAKE@
+
 AM_CFLAGS = -I$(top_srcdir) -fno-strict-aliasing
 noinst_HEADERS = filterlib.h filedefs.h
 

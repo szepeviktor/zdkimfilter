@@ -2,5 +2,5 @@
 
 @SET_MAKE@
 
-SUBDIRS = src etc
+SUBDIRS = src etc tests
 

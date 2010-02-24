@@ -321,7 +321,7 @@ AC_SUBST([ALLFILTERSOCKETDIR], ["${courier_localstatedir}/allfilters"])
 
 
 # make tests/atconfig
-# AC_CONFIG_TESTDIR([tests], [src])
+AC_CONFIG_TESTDIR([tests], [src])
 
 AM_MISSING_PROG([AUTOM4TE], [autom4te])
 
@@ -330,5 +330,6 @@ AC_CONFIG_FILES([Makefile
                  src/filedefs.h
                  etc/Makefile
                  etc/zdkimfilter.conf.dist
+                 tests/Makefile
                 ])
 AC_OUTPUT
