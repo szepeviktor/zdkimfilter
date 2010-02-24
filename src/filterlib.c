@@ -241,6 +241,14 @@ int fl_keep_running(void)
 }
 
 void fl_pass_message(fl_parm*fl, char const *resp)
+/*
+* see courier/cdfilters.C for meaning of responses:
+* each line should start with three digits; if the first digit is
+* '0', '4', or '5', execution of filters is stopped and the response
+* is given to the remote client --replacing the first '0' with '2',
+* or rejecting the message.
+* 2xx responses are not parsed. However, we log them.
+*/
 {
 	fl->resp = resp;
 }
@@ -716,10 +724,13 @@ static int read_fname(fl_parm* fl)
 
 			if (++found == 1) /* first line */
 				fl->data_fname = strdup(buf);
-			else if (cfc_unshift(&fl->cfc, buf, count))
-				fprintf(stderr, "ALERT:"
-					THE_FILTER "[%d]: malloc on filename #%d\n",
-					(int)getpid(), found);
+			else if (count > 1 || buf[0] != ' ') /* discard dummy placeholders */
+			{
+				if (cfc_unshift(&fl->cfc, buf, count))
+					fprintf(stderr, "ALERT:"
+						THE_FILTER "[%d]: malloc on filename #%d\n",
+							(int)getpid(), found);
+			}
 			count = 0;
 		}
 	}
@@ -1163,7 +1174,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 					run_sig_function(fn, fl, SIGUSR2);
 				else if (strcmp(s, "sighup") == 0)
 					run_sig_function(fn, fl, SIGHUP);
-				else if (strncmp(s, "test", 4) == 0)
+				else if (strncmp(s, "test", 4) == 0 && isdigit(s[4]))
 				{
 					fl_callback handler;
 					switch (s[4])

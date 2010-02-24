@@ -1,16 +1,27 @@
+# Config file for zdkimfilter
+# Syntax of each line: [ "#" comment ] | name [ "=" ] [ value ]
+# Backslashes ("\") can be used to wrap multiple physical lines into a single
+# logical one, up to 8K.
+# Valid names are shown below.
+# Value types can be strings, array of strings, integers, or boolean,
+# according to the name. Types and default values are shown commented; all
+# boolean values default to "N", and "Y" is assumed if the value is omitted.
 
-# config file for zdkimfilter
-#
-
+# all_mode
+# Courier runs all-mode filters after non-all-mode ones, in alphabetical order.
+# Non-all-mode filters can be whitelisted by local filters. In addition, any
+# global filter can whitelist the filters running after it.
 all_mode = @zdkimfilter_mode@
 
-# verbosity
-
+# verbose
+# Loosely control the amount of output.
+# The filter prints to stderr, assuming that courier's logger will capture it
+# and send to syslog.
 verbose = 2
 
 # directory for domain private keys
-# file names should be identical with the [user and] domain name:
-# if user@example.com sends via authenticated smtp, then zdkimfilter looks
+# File names should be identical to the domain name:
+# If user@example.com sends via authenticated smtp, then zdkimfilter looks
 # for a file named example.com in this directory.
 # domain_keys = @COURIER_SYSCONF_INSTALL@/filters/keys
 
@@ -21,27 +32,44 @@ verbose = 2
 # sign_algo can be rsa-sha1 or rsa-sha256
 # sign_rsa_sha1 = N
 
-# selector for all keys.
+# Global selector
 # Each key should be a softlink; the basename of the linked to file
 # contains the selector. If the basename starts with the same string as the
 # link, i.e. the domain name, then that initial part and an optional dot
-# are skipped. E.g., the following will all result in assigning selector "s"
-# to the key for "example.com":
+# are skipped. In addition, an extension of ".private" or ".pem" is discarded.
+# E.g., the following will all result in assigning selector "s" to the key for
+# "example.com":
 #
-#    example.com -> ../somewhere/example.com.s
-#    example.com -> ../somewhere/example.coms
-#    example.com -> ../somewhere/s
-#    example.com -> /somewhere/else/example.com.s
-#    example.com -> /somewhere/else/example.coms
-#    example.com -> /somewhere/else/s
-#    example.com -> example.com.s
-#    example.com -> example.coms
-#    example.com -> s
+#    example.com -> ../anywhere/example.com.s
+#    example.com -> ../anywhere/example.coms
+#    example.com -> ../anywhere/s
+#    example.com -> ../anywhere/example.com.s.private
+#    example.com -> ../anywhere/example.coms.private
+#    example.com -> ../anywhere/s.private
+#    example.com -> ../anywhere/example.com.s.pem
+#    example.com -> ../anywhere/example.coms.pem
+#    example.com -> ../anywhere/s.pem
 #
 # If a selector name cannot be determined that way, then the selector specified
 # here, if any, or the constant "s" will be used.
 #
-# selector
+# selector = s
+
+# sign_hfields
+# header fields to be signed.
+# This is a space-separated list of header field names.
+# The default value is implemented in OpenDKIM according to RFC 4871 Sect. 5.5
+# sign_hfields = From Sender Reply-To Subject Date Message-ID To Cc    \
+# MIME-Version Content-Type Content-Transfer-Encoding Content-ID       \
+# Content-Description Resent-Date Resent-From Resent-Sender Resent-To  \
+# Resent-Cc Resent-Message-ID In-Reply-To References List-Id List-Help \
+# List-Unsubscribe List-Subscribe List-Post List-Owner List-Archive
+
+# skip_hfields
+# header fields not to be signed.
+# This is a space-separated list of header field names.
+# The default value is implemented in OpenDKIM according to RFC 4871 Sect. 5.5
+# skip_hfields = Return-Path Received Comments Keywords
 
 
 # no_signlen
@@ -82,10 +110,14 @@ verbose = 2
 
 # reputation_fail
 # any values greater or equal than this are reported as "fail"
+# reputation_fail = 32767
 
 # reputation_pass
 # any values less or equal to this are reported as "pass"
-# values V in between, reputation_fail < V < reputation_pass, are reported
-# as "neutral".
+# values V in between, reputation_pass < V < reputation_fail, are reported
+# as "neutral". According to dkim-reputation.org, 0 is neutral and positive
+# values give an estimate of the spamminess of a given user. They reserve
+# negative values for whitelisting. Their range is thus -1000 <= rep <= 1000.
+# reputation_pass = -32768
 
 
