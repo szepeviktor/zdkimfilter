@@ -284,13 +284,9 @@ AC_TYPE_SIZE_T
 # Checks for library functions.
 AC_FUNC_FORK
 AC_FUNC_MALLOC
-AC_FUNC_MMAP
-AC_FUNC_MEMCMP
-AC_FUNC_SELECT_ARGTYPES
-AC_FUNC_SETPGRP
 AC_FUNC_STAT
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([alarm memchr pagesize memmove memset select strchr strdup strerror strtol strtoul])
+AC_CHECK_FUNCS([alarm memmove memset select strchr strdup strerror strtol strtoul])
 
 # get mailuser/mailgroup for the executable stuff
 AC_CACHE_CHECK([user:group for courier executables],
@@ -319,6 +315,8 @@ AC_SUBST([MAILUSER], ["$courier_mailuser"])
 AC_SUBST([FILTERSOCKETDIR], ["${courier_localstatedir}/filters"])
 AC_SUBST([ALLFILTERSOCKETDIR], ["${courier_localstatedir}/allfilters"])
 
+# LN_S used in tests/aclocal.in
+AC_PROG_LN_S
 
 # make tests/atconfig
 AC_CONFIG_TESTDIR([tests], [src])
@@ -330,6 +328,7 @@ AC_CONFIG_FILES([Makefile
                  src/filedefs.h
                  etc/Makefile
                  etc/zdkimfilter.conf.dist
+                 tests/atlocal
                  tests/Makefile
                 ])
 AC_OUTPUT

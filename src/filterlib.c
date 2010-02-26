@@ -118,7 +118,7 @@ static void child_reaper(int sig)
 	{
 		--live_children;
 #if !defined(NDEBUG)
-		if (sig_verbose > 0)
+		if (sig_verbose >= 6)
 		{
 			char buf[80];
 			unsigned s = snprintf(buf, sizeof buf,
@@ -135,6 +135,12 @@ static void child_reaper(int sig)
 	}
 }
 
+int is_batch_test;
+static inline my_getpid(void)
+{
+	return is_batch_test? 0: (int)getpid();
+}
+
 static void sig_catcher(int sig)
 {
 #if !defined(NDEBUG)
@@ -143,7 +149,7 @@ static void sig_catcher(int sig)
 		char buf[80];
 		unsigned s = snprintf(buf, sizeof buf,
 			THE_FILTER "[%d]: received signal %d: keep=%d\n",
-			(int)getpid(), sig, fl_keep_running());
+			my_getpid(), sig, fl_keep_running());
 		if (s >= sizeof buf)
 		{
 			buf[sizeof buf - 1] = '\n';
@@ -268,7 +274,7 @@ FILE *fl_get_write_file(fl_parm *fl)
 			
 			char buf[PATH_MAX];
 			int sz = snprintf(buf, sizeof buf, "%s" THE_FILTER "%d",
-				fl->data_fname, (int)getpid());
+				fl->data_fname, my_getpid());
 			if (sz < 0 || (unsigned)sz >= sizeof buf ||
 				(fl->write_fname = strdup(buf)) == NULL)
 			{
@@ -323,7 +329,7 @@ void fl_report(int severity, char const* fmt, ...)
 			break;
 	}
 	
-	fprintf(stderr, "%s:" THE_FILTER "[%d]:", logmsg, (int)getpid());
+	fprintf(stderr, "%s:" THE_FILTER "[%d]:", logmsg, my_getpid());
 	va_list ap;
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
@@ -335,7 +341,7 @@ static void print_alert(char const*fname, char const* msg, int ctl, int ctltot)
 {
 	fprintf(stderr, "ALERT:"
 		THE_FILTER "[%d]: error %s ctl file %d/%d (%s): %s\n",
-		(int)getpid(), msg,
+		my_getpid(), msg,
 		ctl, ctltot, fname, strerror(errno));
 }
 
@@ -569,7 +575,7 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 	{
 		fprintf(stderr,
 			THE_FILTER "[%d]: about to drop msg with %d ctl file(s)\n",
-			(int)getpid(), fl->ctl_count);
+			my_getpid(), fl->ctl_count);
 	}
 
 	time(&tt);
@@ -613,12 +619,12 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 					goterrno = errno;
 			}
 			fclose(fp);
-			if (fl->verbose > 4)
+			if (fl->verbose >= 5)
 			{
 				fprintf(stderr,
 					THE_FILTER
 					"[%d]: dropped %d/%d recipient(s) time=%ld on ctl file %s\n",
-					(int)getpid(), i, count, (long)tt, cfc->fname);
+					my_getpid(), i, count, (long)tt, cfc->fname);
 			}
 		}
 		else
@@ -632,7 +638,7 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 			rtc = irtc;
 			fprintf(stderr, "ALERT:"
 				THE_FILTER "[%d]: error on ctl file %d/%d (%s): %s\n",
-				(int)getpid(), ctl, fl->ctl_count, cfc->fname, strerror(goterrno));
+				my_getpid(), ctl, fl->ctl_count, cfc->fname, strerror(goterrno));
 		}
 		else if (fl->verbose)
 		/*
@@ -644,7 +650,7 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 				"ERR:dropped,From-MTA=<%s>: "
 				THE_FILTER "[%d]: %s",
 				from_mta ? from_mta : "",
-				(int)getpid(),
+				my_getpid(),
 				reason ? reason : "w/o apparent reason\n");
 		}
 		
@@ -675,9 +681,9 @@ static int read_fname(fl_parm* fl)
 	fl->data_fname = NULL;
 
 #if !defined(NDEBUG)
-	if (fl->verbose > 1)
+	if (fl->verbose >= 6)
 		fprintf(stderr, THE_FILTER "[%d]: reading fd %d\n",
-			(int)getpid(), fd);
+			my_getpid(), fd);
 #endif
 	
 	fl_alarm(30);
@@ -696,14 +702,14 @@ static int read_fname(fl_parm* fl)
 			}
 			fprintf(stderr, "ALERT:"
 				THE_FILTER "[%d]: cannot read fname pipe: %s\n",
-				(int)getpid(), strerror(errno));
+				my_getpid(), strerror(errno));
 			break;
 		}
 		else if (p != 1)
 		{
 			fprintf(stderr, "ALERT:"
 				THE_FILTER "[%d]: Unexpected %s (%d) on fname pipe\n",
-				(int)getpid(), p == 0 ? "EOF" : "rtc from read", p);
+				my_getpid(), p == 0 ? "EOF" : "rtc from read", p);
 			break;
 		}
 
@@ -716,10 +722,10 @@ static int read_fname(fl_parm* fl)
 			buf[count] = 0;
 
 #if !defined(NDEBUG)
-			if (fl->verbose > 1)
+			if (fl->verbose >= 6)
 				fprintf(stderr, THE_FILTER 
 					"[%d]: piped fname[%d]: %s (len=%u)\n",
-					(int)getpid(), found, buf, count);
+					my_getpid(), found, buf, count);
 #endif
 
 			if (++found == 1) /* first line */
@@ -729,7 +735,7 @@ static int read_fname(fl_parm* fl)
 				if (cfc_unshift(&fl->cfc, buf, count))
 					fprintf(stderr, "ALERT:"
 						THE_FILTER "[%d]: malloc on filename #%d\n",
-							(int)getpid(), found);
+							my_getpid(), found);
 			}
 			count = 0;
 		}
@@ -745,18 +751,18 @@ static int read_fname(fl_parm* fl)
 			fprintf(stderr, "ALERT:"
 				THE_FILTER
 				"[%d]: reading fname pipe terminated prematurely\n",
-					(int)getpid());
+					my_getpid());
 		if (found != 2 || empty == 0 || fl->data_fname == NULL)
 			fprintf(stderr, "ALERT:"
 				THE_FILTER "[%d]: found%s %d file name(s)%s%s\n",
-				(int)getpid(),
+				my_getpid(),
 				found < 2 ? " only" : "", found,
 				empty ? "" : " no empty line",
 				fl->data_fname == NULL ? " malloc failure" : "");
 		if (count >= sizeof buf)
 			fprintf(stderr, "ALERT:"
 				THE_FILTER "[%d]: Buffer overflow reading fname pipe\n",
-					(int)getpid());
+					my_getpid());
 		free(fl->data_fname);
 		fl->data_fname = NULL;
 	}
@@ -803,9 +809,9 @@ static void fl_runchild(fl_parm* fl)
 		unsigned w = 0, l;
 		int rtc = 0;
 		
-		if (fl->verbose > 3)
+		if (fl->verbose >= 6)
 			fprintf(stderr, THE_FILTER "[%d]: started child\n",
-				(int)getpid());
+				my_getpid());
 			
 #if !defined(NDEBUG)
 		if (fl_get_test_mode(fl) == fl_testing)
@@ -828,7 +834,7 @@ static void fl_runchild(fl_parm* fl)
 				nsec = sleep(nsec);
 				fl_break();
 			}
-			else if (fl->verbose > 1)
+			else if (fl->verbose >= 2)
 				fprintf(stderr,
 					"set DEBUG_FILTER to debug the child in gdb\n");
 		}
@@ -894,9 +900,9 @@ static void fl_runchild(fl_parm* fl)
 					free(cfc_shift(&fl->cfc));
 				if (!fl_keep_running() || resp == NULL)
 					logmsg = "ERR";
-				if (fl->verbose > 3 || fl->verbose && logmsg != infomsg)
+				if (fl->verbose >= 6 || fl->verbose && logmsg != infomsg)
 					fprintf(stderr, "%s:"
-						THE_FILTER "[%d]: %s%s", logmsg, (int)getpid(),
+						THE_FILTER "[%d]: %s%s", logmsg, my_getpid(),
 						fl_keep_running() ? "" : "interrupted: ",
 						resp ? resp : "(null response)");
 			}
@@ -921,7 +927,7 @@ static void fl_runchild(fl_parm* fl)
 			if (fl->resp == NULL)
 				fprintf(stderr, "ERR:"
 					THE_FILTER "[%d]: response was NULL!!\n",
-					(int)getpid());
+					my_getpid());
 		}
 		l = rtc ? 0 : strlen(resp);
 		while (w < l && fl_keep_running())
@@ -939,7 +945,7 @@ static void fl_runchild(fl_parm* fl)
 				}
 				fprintf(stderr, "ALERT:"
 					THE_FILTER "[%d]: unable to write resp: %s\n",
-					(int)getpid(), strerror(errno));
+					my_getpid(), strerror(errno));
 				break;
 			}
 			w += p;
@@ -1039,9 +1045,9 @@ static int fl_runtest(fl_parm* fl, int ctlfiles, int argc, char *argv[])
 				fl->out = 1; // stdout
 				fl_runchild(fl);
 #if !defined(NDEBUG)
-				if (fl->verbose > 1)
+				if (fl->verbose >= 6)
 					fprintf(stderr, THE_FILTER "[%d]: Running %d child(ren)\n",
-						(int)getpid(), live_children);
+						my_getpid(), live_children);
 #endif
 				fprintf(fp, "%s\n", argv[i]);
 				for (j = 0; j < ctlfiles; ++j)
@@ -1063,7 +1069,7 @@ static int fl_runtest(fl_parm* fl, int ctlfiles, int argc, char *argv[])
 		{
 			rtc = 1;
 			fprintf(stderr, "ALERT:" THE_FILTER "[%d]: cannot %s: %s\n",
-				(int)getpid(), irtc == 1? "pipe": "fdopen", strerror(errno));
+				my_getpid(), irtc == 1? "pipe": "fdopen", strerror(errno));
 		}
 	}
 	return rtc;
@@ -1116,7 +1122,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 			
 			if (sleep_arg == 0)
 			{
-				if (fl->verbose)
+				if (isatty(fileno(stdout)))
 				{
 					fprintf(stdout, "%d: ", total);
 					fflush(stdout);
@@ -1212,7 +1218,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 				
 				else
 				{
-					if (fl->verbose > 2)
+					if (fl->verbose >= 6)
 						fprintf(stdout,
 							"interpreted as %s file\n",
 								pending == 0 ? "mail" : "ctl");
@@ -1223,7 +1229,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 			else if (ferror(stdin))
 			{
 				int const handled = errno == EINTR || errno == EAGAIN;
-				if (fl->verbose > 2 || !handled)
+				if (fl->verbose >= 6 || !handled)
 					fprintf(stderr, "error reading stdin: %s\n",
 						strerror(errno));
 				if (!handled)
@@ -1237,7 +1243,8 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 		}
 		fclose(fp);
 		close(mypipe[0]);
-		fprintf(stderr, THE_FILTER ": batch run %d msg(s)\n", total);
+		if (fl->verbose >= 6)
+			fprintf(stderr, THE_FILTER ": batch run %d msg(s)\n", total);
 	}
 	else
 	{
@@ -1376,7 +1383,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		{
 			fl.batch_test = fl.testing = 1;
 			fl_init();
-			if (fl.verbose)
+			if (isatty(fileno(stdout)))
 				fprintf(stdout,
 					THE_FILTER ": batch test. Type `?' for help.\n");
 			rtc = fl_run_batchtest(fn, &fl);
@@ -1458,8 +1465,8 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		}		
 	}
 
-	if (fl.verbose && live_children == 0)
-		fprintf(stderr, THE_FILTER "[%d]: exiting\n", (int)getpid());
+	if (fl.verbose >= 6 && live_children == 0)
+		fprintf(stderr, THE_FILTER "[%d]: exiting\n", my_getpid());
 
 	wait_child += live_children;
 
@@ -1482,7 +1489,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 
 		if (fl.batch_test == 0 && i == 0)
 			fprintf(stderr, THE_FILTER "[%d]: waiting for %d child(ren)\n",
-				(int)getpid(), live_children);
+				my_getpid(), live_children);
 
 		if (sleep(nsec) != 0)
 			continue;
@@ -1495,7 +1502,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 				fprintf(stderr, "WARN:"
 					THE_FILTER
 					"[%d]: leaving %d naughty child(ren) running\n",
-					(int)getpid(), live_children);
+					my_getpid(), live_children);
 			}
 		}
 	}

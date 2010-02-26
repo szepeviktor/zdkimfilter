@@ -14,10 +14,10 @@ $(srcdir)/package.m4: $(top_srcdir)/configure.ac
 	  echo 'm4_define([AT_PACKAGE_URL],       [@PACKAGE_URL@])'; \
 	} >$(srcdir)/package.m4
 
-EXTRA_DIST = testsuite.at $(srcdir)/package.m4 $(TESTSUITE)
+EXTRA_DIST = testsuite.at $(srcdir)/package.m4 $(TESTSUITE) atlocal.in
 TESTSUITE = $(srcdir)/testsuite
 
-check-local: atconfig $(TESTSUITE)
+check-local: atconfig atlocal $(TESTSUITE)
 	$(SHELL) '$(TESTSUITE)' $(TESTSUITEFLAGS)
 
 CONFIG_CLEAN_FILES = atconfig

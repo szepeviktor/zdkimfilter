@@ -1530,12 +1530,32 @@ static void dkimfilter(fl_parm *fl)
 	// TODO: free dyn allocated stuff
 }
 
+static void set_keyfile(fl_parm *fl)
+{
+	assert(fl);
+	
+	dkim_query_t qtype = DKIM_QUERY_FILE;
+	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	static char const keyfile[] = "KEYFILE";
+	
+	assert(parm);
+
+	int nok = dkim_options(parm->dklib, DKIM_OP_SETOPT,
+			DKIM_OPTS_QUERYMETHOD, &qtype, sizeof qtype) |
+		dkim_options(parm->dklib, DKIM_OP_SETOPT,
+			DKIM_OPTS_QUERYINFO, keyfile, strlen(keyfile));
+	
+	if (nok || parm->verbose >= 6)
+		fl_report(nok? LOG_ERR: LOG_INFO,
+			"DKIM query method set to file \"%s\"", keyfile);
+}
+
 static fl_init_parm functions =
 {
 	dkimfilter,
 	NULL,
 	NULL, NULL, NULL,
-	report_config, NULL, NULL, NULL	
+	report_config, set_keyfile, NULL, NULL	
 };
 
 int main(int argc, char *argv[])
@@ -1575,20 +1595,27 @@ int main(int argc, char *argv[])
 			fl_main(NULL, NULL, argc - i + 1, argv + i - 1, 0, 0);
 			return 0;
 		}
+		else if (strcmp(arg, "--batch-test") == 0)
+			is_batch_test = 1;
 	}
 
 	dkimfl_parm parm;
 	memset(&parm, 0, sizeof parm);
-
-	parm.dklib = dkim_init(NULL, NULL);
 	// parm.fl = fl;
-	if (parm.dklib == NULL || parm_config(&parm, config_file))
+	if (parm_config(&parm, config_file))
 	{
 		rtc = 2;
-		fl_report(LOG_ERR, "Unable to %s",
-			parm.dklib? "dkim_init": "read config file");
+		fl_report(LOG_ERR, "Unable to read config file");
 	}
-	else
+
+	parm.dklib = dkim_init(NULL, NULL);
+	if (parm.dklib == NULL)
+	{
+		rtc = 2;
+		fl_report(LOG_ERR, "dkim_init fault");
+	}
+
+	if (rtc == 0)
 	{
 		int nok = 0;
 		if (!parm.no_signlen)
