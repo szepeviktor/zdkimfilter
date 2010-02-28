@@ -75,7 +75,7 @@ m4_define([ZF_SIGOTHER],
 m4_define([ZF_MESSAGE],
 [$1Received: from server.example by test.example with ESMTP
 Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
-$2Received from mail.example.com by server.example with ESMTPA
+$2Received: from mail.example.com by server.example with ESMTPA
 $3Message-ID: <123456@author.example>
 Date: Mon, 08 Feb 2010 13:12:55 +0100
 From: Author <user@author.example>
@@ -97,28 +97,30 @@ SPF record. We relay on Courier's SPF checking for that.
 ])
 
 
-# private key ( domain, selector)
-m4_define([ZF_PRIVATEKEY], [AT_DATA([$2],
+# private (author) key ( domain, selector)
+m4_define([ZF_PRIVATEKEY], [AT_DATA(m4_if([$#], [2], [$2], [$1]),
 [-----BEGIN RSA PRIVATE KEY-----
-MIICXQIBAAKBgQC4GUGr+d/6SFNzVLYpphnRd0QPGKz2uWnV65RAxa1Pw352Bqiz
-qiKOBjgYGzj8pJQSs8tOvv/2k6jpI809RnESqOFgF0gu3UJbNnu3+cd8k/kiQj+q
-4cKKRpAT92ccxc7svhCNgN1sBGmROYZuysG3Vu3Dyc079gSLtnSrgXb+gQIDAQAB
-AoGAemlI0opm1Kvs2T4VliH8/tvX5FXbBH8LEZQAUwVeFTB/UQlieXyCV39pIxZO
-0Sa50qm8YNL9rb5HTSZiHQFOwyAKNqS4m/7JCsbuH4gQkPgPF561BHNL9oKfYgJq
-9P4kEFfDTBoXKBMxwWtT7AKV8dYvCa3vYzPQ/1BnqQdw2zECQQDyscdgR9Ih59PQ
-b72ddibdsxS65uXS2vzYLe7SKl+4R5JgJzw0M6DTAnoYFf6JAsKGZM15PCC0E16t
-RRo47U9VAkEAwjEVrlQ0/8yPACbDggDJg/Zz/uRu1wK0zjqj4vKjleubaX4SEvj7
-r6xxZm9hC1pMJAC9y3bbkbgCRBjXfyY6fQJBANe5aq2MaZ41wTOPf45NjbKXEiAo
-SbUpboKCIbyyaa8V/2h0t7D3C0dE9l4efsguqdZoF7Rh2/f1F70QpYRgfJkCQQCH
-oRrAeGXP50JVW72fNgeJGH/pnghgOa6of0JpxwhENJuGMZxUDfxTtUA6yD3iXP3j
-A3WL/wbaHsfOYf9Y+g1NAkAGLhx67Ah+uBNK4Xvfz0YPGINX20m+CMsxAw7FOaNv
-IW2oWFfZCB4APkIis79Ql45AHpavwx5XodBMzZwJUvlL
+MIICXAIBAAKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk
+5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9
+GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
+AoGARPaCa4eHJWQnF2MwB2cQD7MdUsizx6GFs5ms9bGxxwyknTmmT2PA/rFEYjb+
+V8PmTCu4Y/Nk88IzgXTfJ8pN6GfnN1O0qMTUoMuHTf/LMWT/WsFstjiuuFCQddBz
+xVyup6Rnl30mYU5WE0PheUTG0AVbzMn2Aj/SEYXlEYPnENECQQDbsLlcEitqnj+i
+ipFz9H5RnfoDC4pFHSSqMlddYIA9e2DoNdxjU275eyt2g2p9hQMMXdB7LnoyFeHz
+jeRpK3RlAkEAxsj5uOvBctleM2ERPPXTm0nYUWSH4aPZkE/olThgQMogTwSQc6vI
+M6RkzKfF5Dr5g/b2kyoZhxIvdtUcPzfGVwJBALrZaA3C9mJMDdt095kjzXwlXMrS
+OdvmmZSYFG468VdZZGabyMJB6BUQiTrXMu9m/dy6veLG+O84ZWD8wdQhPXECQBf4
+nlyVWXOfEMQDXY/LWSQtyH8wL06fcpn7eOGdtcW6WiENPNomCfNoTJt9U9jM38/x
+FRT0C7YFFGIxGsHo2OsCQF2PGJ3yKn2l9VX+M6qj4hE+POdgnJLqNMp5kRIBj9De
+rlKqG0nWxNFVhVzXsgeNUTDCmVm3cdODa94wXn9WNvY=
 -----END RSA PRIVATE KEY-----
 ])
-$LN_S $2 $1
+m4_if([$#], [2],
+[$LN_S $2 $1
+])
 ])
 
-
+#
 AT_INIT
 AT_TESTED([zdkimfilter])
 
@@ -206,11 +208,135 @@ body_canon_relaxed   = N (Y/N, N for simple)
 [])
 AT_CLEANUP
 
+#
+AT_SETUP([Sign and verify my signature])
+ZF_CONFIG(5, [no_author_domain
+no_reputation
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctls], [Msignmsg
+uauthsmtp
+iuser@example.com
+])
+ZF_BATCH([mail
+ctls
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user@example.com with domain example.com, selector s
+])
+AT_DATA([ctlv], [Mverifymsg
+usmtp
+])
+AT_DATA([KEYFILE],
+[s._domainkey.example.com v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
+])
+ZF_BATCH([test2
+mail
+ctlv
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: verified: pass (id=@example.com, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Sign with default domain])
+ZF_CONFIG(5, [no_author_domain
+no_reputation
+default_domain example.com
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Sign with default domain, selector given])
+ZF_CONFIG(5, [no_author_domain
+no_reputation
+default_domain example.com
+selector given
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector given
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Sign with default domain, selector linked])
+ZF_CONFIG(5, [no_author_domain
+no_reputation
+default_domain example.com
+selector given
+])
+ZF_PRIVATEKEY([example.com], [linked])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector linked
+])
+AT_CLEANUP
+
 
 # common setup for author signature verification
+#
+# since this relies on libopendkim, it is enough to check the logs of its
+# results, rather than going down to verify file contents.
+#
 m4_define([ZF_KEYCONFIG],
 [ZF_KEYFILE
 ZF_CONFIG(5, [no_author_domain
+no_reputation
 ])])
 
 m4_define([ZF_CTLBATCH],
@@ -298,35 +424,35 @@ AT_CLEANUP
 
 
 #
-AT_SETUP([Verify author signature mixed with other 2/6])
+AT_SETUP([Verify sender signature mixed with other 2/6])
 ZF_KEYCONFIG
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGOTHER, ZF_SIGSENDER)])
 ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
 AT_CLEANUP
 
 #
-AT_SETUP([Verify author signature mixed with other 3/6])
+AT_SETUP([Verify sender signature mixed with other 3/6])
 ZF_KEYCONFIG
 AT_DATA([mail], [ZF_MESSAGE(ZF_SIGSENDER, ZF_FAILAUTHOR, ZF_SIGOTHER)])
 ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
 AT_CLEANUP
 
 #
-AT_SETUP([Verify author signature mixed with other 4/6])
+AT_SETUP([Verify sender signature mixed with other 4/6])
 ZF_KEYCONFIG
 AT_DATA([mail], [ZF_MESSAGE(ZF_SIGSENDER, ZF_SIGOTHER, ZF_FAILAUTHOR)])
 ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
 AT_CLEANUP
 
 #
-AT_SETUP([Verify author signature mixed with other 5/6])
+AT_SETUP([Verify sender signature mixed with other 5/6])
 ZF_KEYCONFIG
 AT_DATA([mail], [ZF_MESSAGE(ZF_SIGOTHER, ZF_FAILAUTHOR, ZF_SIGSENDER)])
 ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
 AT_CLEANUP
 
 #
-AT_SETUP([Verify author signature mixed with other 6/6])
+AT_SETUP([Verify sender signature mixed with other 6/6])
 ZF_KEYCONFIG
 AT_DATA([mail], [ZF_MESSAGE(ZF_SIGOTHER, ZF_SIGSENDER, ZF_FAILAUTHOR)])
 ZF_CTLBATCH([pass (id=@sender.example, stat=0)])

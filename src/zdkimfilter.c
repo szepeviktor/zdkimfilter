@@ -582,7 +582,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	ssize_t lsz = readlink(buf, buf2, sizeof buf2);
 	if (lsz < 0 || (size_t)lsz >= sizeof buf2)
 	{
-		if (errno != EINVAL || parm->verbose >= 4)
+		if (errno != EINVAL || parm->verbose >= 6)
 			fl_report(errno == EINVAL? LOG_INFO: LOG_ALERT,
 				"id=%s: cannot readlink for %s: no selector in %zd: %s",
 				parm->dyn.info.id,
