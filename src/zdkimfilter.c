@@ -1067,7 +1067,7 @@ static int verify_headers(verify_parms *vh)
 					if (parm->dyn.authserv_id &&
 						stricmp(authserv_id, parm->dyn.authserv_id) == 0)
 					{
-						if (parm->verbose >= 3)
+						if (parm->verbose >= 3 && dkim == NULL) // 2nd pass only
 							fl_report(LOG_INFO,
 								"id=%s: removing Authentication-Results from %s",
 								parm->dyn.info.id, authserv_id);
@@ -1384,6 +1384,7 @@ static void verify_message(dkimfl_parm *parm)
 			if (vh.sig)
 			{
 				char buf[80], *id = NULL, htype;
+				memset(buf, 0, sizeof buf);
 				if (dkim_sig_getidentity(dkim, vh.sig, buf, sizeof buf) ==
 					DKIM_STAT_OK)
 				{

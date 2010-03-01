@@ -20,7 +20,7 @@ TESTSUITE = $(srcdir)/testsuite
 check-local: atconfig atlocal $(TESTSUITE)
 	$(SHELL) '$(TESTSUITE)' $(TESTSUITEFLAGS)
 
-CONFIG_CLEAN_FILES = atconfig
+CONFIG_CLEAN_FILES = atconfig atlocal
 
 clean-local:
 	test ! -f '$(TESTSUITE)' || $(SHELL) '$(TESTSUITE)' --clean
