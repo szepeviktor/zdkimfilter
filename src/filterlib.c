@@ -136,7 +136,7 @@ static void child_reaper(int sig)
 }
 
 int is_batch_test;
-static inline my_getpid(void)
+static inline int my_getpid(void)
 {
 	return is_batch_test? 0: (int)getpid();
 }
@@ -257,6 +257,11 @@ void fl_pass_message(fl_parm*fl, char const *resp)
 */
 {
 	fl->resp = resp;
+}
+
+char const *fl_get_passed_message(fl_parm *fl)
+{
+	return fl->resp;
 }
 
 FILE* fl_get_file(fl_parm*fl)
@@ -532,7 +537,7 @@ char *fl_rcpt_next(fl_rcpt_enum* fre)
 
 
 /* ----- drop message ----- */
-
+#if defined FILTERLIB_DROP_MESSAGE_SUPPORT
 static int count_recipients(FILE *fp, char **from_mta)
 {
 	int count = 0;
@@ -571,7 +576,7 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 	time_t tt;
 	char *from_mta = NULL;
 	
-	if (fl->verbose > 4)
+	if (fl->verbose >= 5)
 	{
 		fprintf(stderr,
 			THE_FILTER "[%d]: about to drop msg with %d ctl file(s)\n",
@@ -660,7 +665,7 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 	free(from_mta);
 	return rtc;
 }
-
+#endif /* defined FILTERLIB_DROP_MESSAGE_SUPPORT */
 /* ----- core filter functions ----- */
 
 static int read_fname(fl_parm* fl)
@@ -846,9 +851,6 @@ static void fl_runchild(fl_parm* fl)
 		{
 			if ((fl->data_fp = fopen(fl->data_fname, "r")) != NULL)
 			{
-				static const char infomsg[] = "INFO";
-				char const *logmsg = infomsg;
-				
 				/* kill me after 15 minutes, no matter what */
 				fl_reset_signal();
 				if (fl_get_test_mode(fl) != fl_testing)
@@ -898,13 +900,8 @@ static void fl_runchild(fl_parm* fl)
 				
 				while (fl->cfc)
 					free(cfc_shift(&fl->cfc));
-				if (!fl_keep_running() || resp == NULL)
-					logmsg = "ERR";
-				if (fl->verbose >= 6 || fl->verbose && logmsg != infomsg)
-					fprintf(stderr, "%s:"
-						THE_FILTER "[%d]: %s%s", logmsg, my_getpid(),
-						fl_keep_running() ? "" : "interrupted: ",
-						resp ? resp : "(null response)");
+				if (fl->verbose && !fl_keep_running())
+					fl_report(LOG_ERR, "interrupted");
 			}
 			else
 			{
@@ -1370,7 +1367,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			else
 			{
 				fl_init();
-				if (fl.verbose > 1)
+				if (fl.verbose >= 2)
 					fprintf(stderr,
 						THE_FILTER ": running test on 1 ctl +%d mail files\n",
 						argc - i - 2);
@@ -1407,9 +1404,8 @@ int fl_main(fl_init_parm const*fn, void *parm,
 	{
 		int listensock = -1;
 		
-		if (fl.verbose > 2)
-			fprintf(stderr,
-				THE_FILTER ": running\n");
+		if (fl.verbose >= 3)
+			fl_report(LOG_INFO, "running");
 		setsid();
 		/*
 		int rtc = setpgrp();
@@ -1465,8 +1461,9 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		}		
 	}
 
-	if (fl.verbose >= 6 && live_children == 0)
-		fprintf(stderr, THE_FILTER "[%d]: exiting\n", my_getpid());
+	if ((fl.testing == 0 && fl.verbose >= 3 || fl.verbose >= 6) &&
+		live_children == 0)
+			fl_report(LOG_INFO, "exiting");
 
 	wait_child += live_children;
 

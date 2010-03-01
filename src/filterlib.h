@@ -73,6 +73,7 @@ FILE* fl_get_file(fl_parm*);
 FILE *fl_get_write_file(fl_parm*);
 int fl_drop_message(fl_parm*, char const* reason);
 void fl_pass_message(fl_parm*, char const *);
+char const *fl_get_passed_message(fl_parm*);
 void fl_alarm(unsigned seconds);
 int fl_keep_running(void);
 char *fl_get_sender(fl_parm *);

@@ -246,7 +246,7 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: verified: pass (id=@example.com, stat=0) rep=0
+[INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@example.com, stat=0) rep=0
 ])
 AT_CLEANUP
 
@@ -353,7 +353,7 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: verified: $1 rep=0
+[INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=$1 rep=0
 ])
 ])
 
@@ -411,7 +411,7 @@ AT_CLEANUP
 AT_SETUP([Verify simple author failed signature])
 ZF_KEYCONFIG
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
-ZF_CTLBATCH([signature verification failed (id=@author.example, stat=1)])
+ZF_CTLBATCH([fail (id=@author.example, signature verification failed, stat=1)])
 AT_CLEANUP
 
 # for any possible order of the 3 signatures, must be id=@sender.example

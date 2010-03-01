@@ -16,8 +16,18 @@ all_mode = @zdkimfilter_mode@
 # verbose
 # Loosely control the amount of output.
 # The filter prints to stderr, assuming that courier's logger will capture it
-# and send to syslog.
-verbose = 2
+# and send to syslog. Hence log entries can also be filtered by severity.
+# Verbosity and severity are not strictly related. Verbosity is tentatively
+# being used as follows:
+# 0: startup issues or totally unexpected errors
+# 1: failures or unexpected events
+# 2: removal of A-R on verify; missing domain on sign
+# 3: start/stop info, response given for every message
+# 4: no signature on verify, no key or domain/selector on signing, etc
+# 5: summary of A-R written on verify
+# 6: debugging
+# default:
+# verbose = 4
 
 # directory for domain private keys
 # File names should be identical to the domain name:

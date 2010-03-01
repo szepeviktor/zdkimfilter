@@ -230,6 +230,9 @@ static void config_wrapup(dkimfl_parm *parm)
 			"dns_timeout cannot be negative (%d)", parm->dns_timeout);
 		parm->dns_timeout = 0;
 	}
+	
+	if (parm->verbose < 0)
+		parm->verbose = 0;
 
 	no_trailing_slash(parm->domain_keys);
 	no_trailing_slash(parm->tmp);
@@ -582,7 +585,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	ssize_t lsz = readlink(buf, buf2, sizeof buf2);
 	if (lsz < 0 || (size_t)lsz >= sizeof buf2)
 	{
-		if (errno != EINVAL || parm->verbose >= 6)
+		if ((errno != EINVAL && parm->verbose) || parm->verbose >= 6)
 			fl_report(errno == EINVAL? LOG_INFO: LOG_ALERT,
 				"id=%s: cannot readlink for %s: no selector in %zd: %s",
 				parm->dyn.info.id,
@@ -626,11 +629,12 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	return 0;
 
 	error_exit:
-		fl_report(LOG_ERR,
-			"id=%s: error reading key %s: %s",
-			parm->dyn.info.id,
-			fname,
-			strerror(errno));
+		if (parm->verbose)
+			fl_report(LOG_ERR,
+				"id=%s: error reading key %s: %s",
+				parm->dyn.info.id,
+				fname,
+				strerror(errno));
 
 	error_exit_no_msg:
 		if (fp)
@@ -707,7 +711,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 	status = dkim_eoh(dkim);
 	if (status != DKIM_STAT_OK)
 	{
-		if (parm->verbose >= 3)
+		if (parm->verbose >= 4)
 		{
 			char const *err = dkim_getresultstr(status);
 			fl_report(LOG_INFO,
@@ -781,9 +785,9 @@ static void sign_message(dkimfl_parm *parm)
 
 	if (domain == NULL)
 	{
-		if (parm->verbose >= 4)
+		if (parm->verbose >= 2)
 			fl_report(LOG_INFO,
-				"id=%s: not signing for %s: no default domain",
+				"id=%s: not signing for %s: no domain",
 				parm->dyn.info.id,
 				parm->dyn.info.authsender);
 	}
@@ -1067,7 +1071,7 @@ static int verify_headers(verify_parms *vh)
 					if (parm->dyn.authserv_id &&
 						stricmp(authserv_id, parm->dyn.authserv_id) == 0)
 					{
-						if (parm->verbose >= 3 && dkim == NULL) // 2nd pass only
+						if (parm->verbose >= 2 && dkim == NULL) // 2nd pass only
 							fl_report(LOG_INFO,
 								"id=%s: removing Authentication-Results from %s",
 								parm->dyn.info.id, authserv_id);
@@ -1209,7 +1213,7 @@ static int verify_headers(verify_parms *vh)
 		DKIM_STAT status = dkim_eoh(dkim);
 		if (status != DKIM_STAT_OK)
 		{
-			if (parm->verbose >= 3)
+			if (parm->verbose >= 4)
 			{
 				char const *err = dkim_getresultstr(status);
 				fl_report(LOG_INFO,
@@ -1372,6 +1376,7 @@ static void verify_message(dkimfl_parm *parm)
 			*/
 			fprintf(fp, "Authentication-Results: %s", parm->dyn.authserv_id);
 			int auth_given = 0;
+			int log_written = 0;
 			
 			if (vh.sender_domain || vh.helo_domain)
 			{
@@ -1422,7 +1427,8 @@ static void verify_message(dkimfl_parm *parm)
 					{
 						unsigned int const flags = dkim_sig_getflags(vh.sig);
 						int const is_test = (flags & DKIM_SIGFLAG_TESTKEY) != 0;
-						fprintf(fp, ";\n  dkim=%s ", is_test? "neutral": "fail");
+						vh.dkim_result = is_test? "neutral": "fail";
+						fprintf(fp, ";\n  dkim=%s ", vh.dkim_result);
 						if (err && is_test)
 							fprintf(fp, "(test key, %s) ", err);
 						else if (err)
@@ -1435,14 +1441,20 @@ static void verify_message(dkimfl_parm *parm)
 					++auth_given;
 					
 					if (parm->verbose >= 5)
+					{
 						fl_report(LOG_INFO,
-							"id=%s: verified: %s (id=%s, stat=%d)%s rep=%d",
+							"id=%s: verified:%s dkim=%s (id=%s, %s%sstat=%d)%s rep=%d",
 							parm->dyn.info.id,
-							vh.dkim_result? vh.dkim_result: err? err: "NULL",
-							id, (int)status,
+							(vh.sender_domain || vh.helo_domain)? " spf=pass,": "",
+							vh.dkim_result,
+							id,
+							err? err: "", err? ", ": "",
+							(int)status,
 							vh.policy == DKIM_POLICY_DISCARDABLE? " adsp: discard":
 								vh.policy == DKIM_POLICY_ALL? " adsp: all": "",
 							vh.dkim_reputation);
+						log_written += 1;
+					}
 				}
 			}
 			
@@ -1469,6 +1481,14 @@ static void verify_message(dkimfl_parm *parm)
 			dkim_free(dkim);
 			dkim = NULL;
 
+			if (log_written == 0 && parm->verbose >= 5)
+			{
+				fl_report(LOG_INFO,
+					"id=%s: verified: %d A-R with auth type(s) writen",
+					parm->dyn.info.id,
+					auth_given);
+			}
+
 			/*
 			* now for the rest of the header, and body
 			*/
@@ -1491,21 +1511,19 @@ static void dkimfilter(fl_parm *fl)
 {
 	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
 	parm->fl = fl;
-	if (parm->dyn.rtc == 0)
-	{
-		fl_get_msg_info(fl, &parm->dyn.info);
-		if (parm->dyn.info.id == NULL)
-			parm->dyn.info.id = "NULL";
 
-		if (parm->dyn.info.is_relayclient)
-		{
-			if (parm->dyn.info.authsender)
-				sign_message(parm);
-		}
-		else
-		{
-			verify_message(parm);
-		}
+	fl_get_msg_info(fl, &parm->dyn.info);
+	if (parm->dyn.info.id == NULL)
+		parm->dyn.info.id = "NULL";
+
+	if (parm->dyn.info.is_relayclient)
+	{
+		if (parm->dyn.info.authsender)
+			sign_message(parm);
+	}
+	else
+	{
+		verify_message(parm);
 	}
 
 	static char const resp_tempfail[] =
@@ -1526,8 +1544,21 @@ static void dkimfilter(fl_parm *fl)
 			break;
 
 		case 2: // rejected, message already passed
+			assert(fl_get_passed_message(fl) != NULL);
 			break;
 	}
+
+	assert(fl_get_passed_message(fl) != NULL);
+
+	if (parm->verbose >= 3 && fl_get_test_mode(fl) != fl_batch_test)
+	{
+		char const *msg = fl_get_passed_message(fl);
+		int l = strlen(msg) - 1;
+		assert(l > 0 && msg[l] == '\n');
+		fl_report(LOG_INFO,
+			"id=%s: response: %.*s", parm->dyn.info.id, l, msg);
+	}
+
 	// TODO: free dyn allocated stuff
 }
 
@@ -1537,7 +1568,7 @@ static void set_keyfile(fl_parm *fl)
 	
 	dkim_query_t qtype = DKIM_QUERY_FILE;
 	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
-	static char const keyfile[] = "KEYFILE";
+	static char keyfile[] = "KEYFILE";
 	
 	assert(parm);
 
