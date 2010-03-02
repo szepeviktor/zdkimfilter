@@ -18,16 +18,18 @@ all_mode = @zdkimfilter_mode@
 # The filter prints to stderr, assuming that courier's logger will capture it
 # and send to syslog. Hence log entries can also be filtered by severity.
 # Verbosity and severity are not strictly related. Verbosity is tentatively
-# being used as follows:
+# being used as follows (each level includes the preceding ones):
 # 0: startup issues or totally unexpected errors
 # 1: failures or unexpected events
 # 2: removal of A-R on verify; missing domain on sign
-# 3: start/stop info, response given for every message
-# 4: no signature on verify, no key or domain/selector on signing, etc
-# 5: summary of A-R written on verify
-# 6: debugging
+# 3: start/stop info, relevant verify results, sign errors
+# 4: response returned to courier each message
+# 5: verify errors except no signature
+# 6: domain/selector used on signing, any A-R field found
+# 7: no key on signing; no signature and count of A-R written on verify
+# 8: more debugging
 # default:
-# verbose = 4
+# verbose = 3
 
 # directory for domain private keys
 # File names should be identical to the domain name:
@@ -76,7 +78,7 @@ all_mode = @zdkimfilter_mode@
 # List-Unsubscribe List-Subscribe List-Post List-Owner List-Archive
 
 # skip_hfields
-# header fields not to be signed.
+# header fields not to be signed; they are discarded at an earlier stage.
 # This is a space-separated list of header field names.
 # The default value is implemented in OpenDKIM according to RFC 4871 Sect. 5.5
 # skip_hfields = Return-Path Received Comments Keywords

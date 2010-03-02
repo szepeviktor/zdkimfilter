@@ -118,7 +118,7 @@ static void child_reaper(int sig)
 	{
 		--live_children;
 #if !defined(NDEBUG)
-		if (sig_verbose >= 6)
+		if (sig_verbose >= 8)
 		{
 			char buf[80];
 			unsigned s = snprintf(buf, sizeof buf,
@@ -576,7 +576,7 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 	time_t tt;
 	char *from_mta = NULL;
 	
-	if (fl->verbose >= 5)
+	if (fl->verbose >= 7)
 	{
 		fprintf(stderr,
 			THE_FILTER "[%d]: about to drop msg with %d ctl file(s)\n",
@@ -624,7 +624,7 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 					goterrno = errno;
 			}
 			fclose(fp);
-			if (fl->verbose >= 5)
+			if (fl->verbose >= 7)
 			{
 				fprintf(stderr,
 					THE_FILTER
@@ -686,7 +686,7 @@ static int read_fname(fl_parm* fl)
 	fl->data_fname = NULL;
 
 #if !defined(NDEBUG)
-	if (fl->verbose >= 6)
+	if (fl->verbose >= 8)
 		fprintf(stderr, THE_FILTER "[%d]: reading fd %d\n",
 			my_getpid(), fd);
 #endif
@@ -727,7 +727,7 @@ static int read_fname(fl_parm* fl)
 			buf[count] = 0;
 
 #if !defined(NDEBUG)
-			if (fl->verbose >= 6)
+			if (fl->verbose >= 8)
 				fprintf(stderr, THE_FILTER 
 					"[%d]: piped fname[%d]: %s (len=%u)\n",
 					my_getpid(), found, buf, count);
@@ -814,7 +814,7 @@ static void fl_runchild(fl_parm* fl)
 		unsigned w = 0, l;
 		int rtc = 0;
 		
-		if (fl->verbose >= 6)
+		if (fl->verbose >= 8)
 			fprintf(stderr, THE_FILTER "[%d]: started child\n",
 				my_getpid());
 			
@@ -1042,7 +1042,7 @@ static int fl_runtest(fl_parm* fl, int ctlfiles, int argc, char *argv[])
 				fl->out = 1; // stdout
 				fl_runchild(fl);
 #if !defined(NDEBUG)
-				if (fl->verbose >= 6)
+				if (fl->verbose >= 8)
 					fprintf(stderr, THE_FILTER "[%d]: Running %d child(ren)\n",
 						my_getpid(), live_children);
 #endif
@@ -1115,7 +1115,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 		while (!feof(stdin) && fl_keep_running())
 		{
 			char cmdbuf[1024];
-			unsigned char *s, *es;
+			unsigned char *s, *es = NULL;
 			
 			if (sleep_arg == 0)
 			{
@@ -1215,7 +1215,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 				
 				else
 				{
-					if (fl->verbose >= 6)
+					if (fl->verbose >= 8)
 						fprintf(stdout,
 							"interpreted as %s file\n",
 								pending == 0 ? "mail" : "ctl");
@@ -1226,7 +1226,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 			else if (ferror(stdin))
 			{
 				int const handled = errno == EINTR || errno == EAGAIN;
-				if (fl->verbose >= 6 || !handled)
+				if (fl->verbose >= 8 || !handled)
 					fprintf(stderr, "error reading stdin: %s\n",
 						strerror(errno));
 				if (!handled)
@@ -1240,7 +1240,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 		}
 		fclose(fp);
 		close(mypipe[0]);
-		if (fl->verbose >= 6)
+		if (fl->verbose >= 8)
 			fprintf(stderr, THE_FILTER ": batch run %d msg(s)\n", total);
 	}
 	else
@@ -1461,7 +1461,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		}		
 	}
 
-	if ((fl.testing == 0 && fl.verbose >= 3 || fl.verbose >= 6) &&
+	if ((fl.testing == 0 && fl.verbose >= 3 || fl.verbose >= 8) &&
 		live_children == 0)
 			fl_report(LOG_INFO, "exiting");
 

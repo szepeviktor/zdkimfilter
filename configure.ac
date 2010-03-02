@@ -153,28 +153,6 @@ else
 fi
 AC_SUBST([COURIER_SYSCONF_INSTALL])
 
-# check directory for zdkimfilter.pid
-AC_MSG_CHECKING([directory for zdkimfilter.pid])
-AC_ARG_WITH([piddir],
-	[[  --with-piddir=dir       directory for filter pid file (default: same as courier's)]],
-	[
-		ZDKIMFILTER_PID_DIR="$withval"
-	],
-	[
-		ZDKIMFILTER_PID_DIR=${courier_localstatedir}/tmp
-	])
-if test -d "$ZDKIMFILTER_PID_DIR"; then
-	:
-elif test -d /var/run; then
-	ZDKIMFILTER_PID_DIR=/var/run
-elif test -d /var/tmp; then
-	ZDKIMFILTER_PID_DIR=/var/tmp
-else
-	ZDKIMFILTER_PID_DIR=/tmp
-fi
-AC_MSG_RESULT([$ZDKIMFILTER_PID_DIR])
-AC_SUBST([ZDKIMFILTER_PID_DIR])
-
 # Checks for libraries.
 SOCKET_LIB=""
 SAVE_LIBS="$LIBS"

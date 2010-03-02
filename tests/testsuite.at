@@ -210,7 +210,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign and verify my signature])
-ZF_CONFIG(5, [no_author_domain
+ZF_CONFIG(6, [no_author_domain
 no_reputation
 ])
 ZF_PRIVATEKEY([example.com])
@@ -252,7 +252,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign with default domain])
-ZF_CONFIG(5, [no_author_domain
+ZF_CONFIG(6, [no_author_domain
 no_reputation
 default_domain example.com
 ])
@@ -277,7 +277,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign with default domain, selector given])
-ZF_CONFIG(5, [no_author_domain
+ZF_CONFIG(6, [no_author_domain
 no_reputation
 default_domain example.com
 selector given
@@ -303,7 +303,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign with default domain, selector linked])
-ZF_CONFIG(5, [no_author_domain
+ZF_CONFIG(6, [no_author_domain
 no_reputation
 default_domain example.com
 selector given
@@ -335,7 +335,7 @@ AT_CLEANUP
 #
 m4_define([ZF_KEYCONFIG],
 [ZF_KEYFILE
-ZF_CONFIG(5, [no_author_domain
+ZF_CONFIG(3, [no_author_domain
 no_reputation
 ])])
 

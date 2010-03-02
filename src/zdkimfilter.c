@@ -201,7 +201,7 @@ static void config_default(dkimfl_parm *parm) // only non-zero...
 	parm->domain_keys = (char*) keys; // won't be freed
 	parm->reputation_fail = 32767;
 	parm->reputation_pass = -32768;
-	parm->verbose = 4;
+	parm->verbose = 3;
 }
 
 static void no_trailing_slash(char *s)
@@ -473,7 +473,7 @@ static int parm_config(dkimfl_parm *parm, char const *fname)
 
 		while (fgets(p, ebuf - p, fp))
 		{
-			int ch;
+			int ch = 0;
 			++line_no;
 			char *eol = strchr(p, '\n');
 			if (eol == NULL)
@@ -563,7 +563,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	{
 		if (errno == ENOENT)
 		{
-			if (parm->verbose >= 4)
+			if (parm->verbose >= 7)
 				fl_report(LOG_INFO,
 					"id=%s: not signing for %s: no key",
 					parm->dyn.info.id,
@@ -585,7 +585,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	ssize_t lsz = readlink(buf, buf2, sizeof buf2);
 	if (lsz < 0 || (size_t)lsz >= sizeof buf2)
 	{
-		if ((errno != EINVAL && parm->verbose) || parm->verbose >= 6)
+		if (errno != EINVAL && parm->verbose || parm->verbose >= 8)
 			fl_report(errno == EINVAL? LOG_INFO: LOG_ALERT,
 				"id=%s: cannot readlink for %s: no selector in %zd: %s",
 				parm->dyn.info.id,
@@ -711,7 +711,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 	status = dkim_eoh(dkim);
 	if (status != DKIM_STAT_OK)
 	{
-		if (parm->verbose >= 4)
+		if (parm->verbose >= 3)
 		{
 			char const *err = dkim_getresultstr(status);
 			fl_report(LOG_INFO,
@@ -804,7 +804,7 @@ static void sign_message(dkimfl_parm *parm)
 			parm->sign_rsa_sha1? DKIM_SIGN_RSASHA1: DKIM_SIGN_RSASHA256,
 			ULONG_MAX /* signbytes */, &status);
 
-		if (parm->verbose >= 4 && dkim && status == DKIM_STAT_OK)
+		if (parm->verbose >= 6 && dkim && status == DKIM_STAT_OK)
 			fl_report(LOG_INFO,
 				"id=%s: signing for %s with domain %s, selector %s",
 				parm->dyn.info.id,
@@ -1064,18 +1064,24 @@ static int verify_headers(verify_parms *vh)
 					zap = 1;
 				else
 				{
+					int my_zap = 0;
 					*s = 0;
 					/*
 					* An A-R field before any received must have been set by us
 					*/
 					if (parm->dyn.authserv_id &&
 						stricmp(authserv_id, parm->dyn.authserv_id) == 0)
+							my_zap = zap = 1;
+					if (dkim == NULL && parm->verbose >= 2) // log on 2nd pass only
 					{
-						if (parm->verbose >= 2 && dkim == NULL) // 2nd pass only
-							fl_report(LOG_INFO,
+						if (my_zap)
+							fl_report(LOG_NOTICE,
 								"id=%s: removing Authentication-Results from %s",
 								parm->dyn.info.id, authserv_id);
-						zap = 1;
+						else if (parm->verbose >= 6)
+							fl_report(LOG_INFO,
+								"id=%s: found Authentication-Results by %s",
+								parm->dyn.info.id, authserv_id);
 					}
 					// TODO: check a list of trusted/untrusted id's
 					*s = ch;
@@ -1164,7 +1170,10 @@ static int verify_headers(verify_parms *vh)
 			if (dkim)
 				err = (status = dkim_header(dkim, start, len)) != DKIM_STAT_OK;
 			else
+			{
 				err = fwrite(start, len + 1, 1, out) != 1;
+				status = DKIM_STAT_OK; // happy compiler
+			}
 
 			if (err)
 			{
@@ -1213,7 +1222,8 @@ static int verify_headers(verify_parms *vh)
 		DKIM_STAT status = dkim_eoh(dkim);
 		if (status != DKIM_STAT_OK)
 		{
-			if (parm->verbose >= 4)
+			if (parm->verbose >= 7 ||
+				parm->verbose >= 5 && status != DKIM_STAT_NOSIG)
 			{
 				char const *err = dkim_getresultstr(status);
 				fl_report(LOG_INFO,
@@ -1440,7 +1450,7 @@ static void verify_message(dkimfl_parm *parm)
 					fprintf(fp, "header.%c=%s", htype, id);
 					++auth_given;
 					
-					if (parm->verbose >= 5)
+					if (parm->verbose >= 3)
 					{
 						fl_report(LOG_INFO,
 							"id=%s: verified:%s dkim=%s (id=%s, %s%sstat=%d)%s rep=%d",
@@ -1481,10 +1491,10 @@ static void verify_message(dkimfl_parm *parm)
 			dkim_free(dkim);
 			dkim = NULL;
 
-			if (log_written == 0 && parm->verbose >= 5)
+			if (log_written == 0 && parm->verbose >= 7)
 			{
 				fl_report(LOG_INFO,
-					"id=%s: verified: %d A-R with auth type(s) writen",
+					"id=%s: verified: %d auth method(s) written",
 					parm->dyn.info.id,
 					auth_given);
 			}
@@ -1550,7 +1560,7 @@ static void dkimfilter(fl_parm *fl)
 
 	assert(fl_get_passed_message(fl) != NULL);
 
-	if (parm->verbose >= 3 && fl_get_test_mode(fl) != fl_batch_test)
+	if (parm->verbose >= 4 && fl_get_test_mode(fl) != fl_batch_test)
 	{
 		char const *msg = fl_get_passed_message(fl);
 		int l = strlen(msg) - 1;
@@ -1577,9 +1587,10 @@ static void set_keyfile(fl_parm *fl)
 		dkim_options(parm->dklib, DKIM_OP_SETOPT,
 			DKIM_OPTS_QUERYINFO, keyfile, strlen(keyfile));
 	
-	if (nok || parm->verbose >= 6)
+	if (nok || parm->verbose >= 8)
 		fl_report(nok? LOG_ERR: LOG_INFO,
-			"DKIM query method set to file \"%s\"", keyfile);
+			"DKIM query method%s set to file \"%s\"",
+			nok? " not": "", keyfile);
 }
 
 static fl_init_parm functions =
