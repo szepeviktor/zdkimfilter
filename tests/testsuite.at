@@ -24,7 +24,7 @@ m4_define([ZF_KEYFILE], [AT_DATA([KEYFILE],
 [x1._domainkey.author.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
 x2._domainkey.sender.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCz8gES8szE0tPe1NgAENU7BoVZHZRhWiPs6MdCCIYJ06RoV9vmAXlXzcHK/IM7fSHVQKYvf1E7dUwQIwCUe5S+qdkB0KxtmzCCBqjqcju8b6EEJb5e6HiMHjErS+33fNtS8qYCQNt1Xl5Ga94o1oXeZxroYSjeps8z82j/JQsPswIDAQAB
 x3._domainkey.other.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDFTpY+8YuikRLRfNLU3krD8h7lNnbK4eZ0TuPfRur6TDEg+bOQD1g1yJ1bnyQ1uCtwEkZ54Zs56C8PVpvU7jjR2/YcS92PiOhm3MXWyD3caekCZ7ezXvEkD/KaTkuKypiTmDlefQ39t5oq60fufb61/lUGzLech/kKLOexYohqEwIDAQAB
-])])
+$1])])
 
 m4_define([ZF_SIGAUTHOR],
 [DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
@@ -97,7 +97,7 @@ SPF record. We relay on Courier's SPF checking for that.
 ])
 
 
-# private (author) key ( domain, selector)
+# private author key ( domain, selector)
 m4_define([ZF_PRIVATEKEY], [AT_DATA(m4_if([$#], [2], [$2], [$1]),
 [-----BEGIN RSA PRIVATE KEY-----
 MIICXAIBAAKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk
@@ -229,6 +229,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [INFO:zdkimfilter[[0]]:id=signmsg: signing for user@example.com with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
 ])
 AT_DATA([ctlv], [Mverifymsg
 usmtp
@@ -247,6 +248,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@example.com, stat=0) rep=0
+INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
 ])
 AT_CLEANUP
 
@@ -272,6 +274,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
 ])
 AT_CLEANUP
 
@@ -298,6 +301,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector given
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
 ])
 AT_CLEANUP
 
@@ -324,9 +328,9 @@ ZF_RUN,
 [250 Ok.
 ],
 [INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector linked
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
 ])
 AT_CLEANUP
-
 
 # common setup for author signature verification
 #
@@ -457,4 +461,259 @@ ZF_KEYCONFIG
 AT_DATA([mail], [ZF_MESSAGE(ZF_SIGOTHER, ZF_SIGSENDER, ZF_FAILAUTHOR)])
 ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
 AT_CLEANUP
+
+#
+AT_SETUP([Reject message with non-existent From: domain])
+ZF_CONFIG(0)
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Mfraudmsg
+usmtp
+])
+ZF_BATCH([test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 Invalid author domain
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify author signature with policy: all])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
+author.example X
+])
+ZF_CONFIG(3)
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) adsp: all/pass rep=0
+])
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  x-dkim-adsp=pass
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify author signature with policy: discard])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(3)
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) adsp: discardable/pass rep=0
+])
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  x-dkim-adsp=pass
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Fail author signature with policy: all])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
+author.example X
+])
+ZF_CONFIG(3)
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=fail (id=@author.example, signature verification failed, stat=1) adsp: all/fail rep=0
+])
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=fail (signature verification failed) header.i=@author.example;
+  x-dkim-adsp=fail
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Fail author signature with policy: discard])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(0)
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 DKIM signature required by policy
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify sender, fail author, policy: all])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
+author.example X
+])
+ZF_CONFIG(3)
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp: all/fail rep=0
+])
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@sender.example;
+  x-dkim-adsp=fail
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify sender, fail author, policy: discard])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(0)
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 DKIM signature required by policy
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Missing author signature with policy: all])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
+author.example X
+])
+ZF_CONFIG(0)
+AT_DATA([POLICYFILE], [dkim=all
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  x-dkim-adsp=fail
+Received: from server.example by test.example with ESMTP
+], [])
+
+AT_CLEANUP
+
+#
+AT_SETUP([Missing author signature with policy: discard])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(0)
+AT_DATA([POLICYFILE], [dkim=discardable
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 DKIM signature required by policy
+],
+[])
+AT_CLEANUP
+
 

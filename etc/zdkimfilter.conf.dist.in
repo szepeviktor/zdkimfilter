@@ -22,8 +22,8 @@ all_mode = @zdkimfilter_mode@
 # 0: startup issues or totally unexpected errors
 # 1: failures or unexpected events
 # 2: removal of A-R on verify; missing domain on sign
-# 3: start/stop info, relevant verify results, sign errors
-# 4: response returned to courier each message
+# 3: start/stop info, relevant verify results, sign errors, response except 250
+# 4: response returned to courier for each message
 # 5: verify errors except no signature
 # 6: domain/selector used on signing, any A-R field found
 # 7: no key on signing; no signature and count of A-R written on verify

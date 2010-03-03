@@ -1395,7 +1395,17 @@ static void verify_message(dkimfl_parm *parm)
 					vh.sender_domain? vh.sender_domain: vh.helo_domain);
 				++auth_given;
 			}
-			
+
+			char const *policy_type = "", *policy_result = "";
+			if (vh.policy == DKIM_POLICY_ALL)
+				policy_type = " adsp: all/";
+			else if (vh.policy == DKIM_POLICY_DISCARDABLE)
+				policy_type = " adsp: discardable/";
+
+			if (*policy_type)
+				policy_result = vh.sig_is_author && status == DKIM_STAT_OK?
+					"pass": "fail";
+
 			if (vh.sig)
 			{
 				char buf[80], *id = NULL, htype;
@@ -1453,26 +1463,23 @@ static void verify_message(dkimfl_parm *parm)
 					if (parm->verbose >= 3)
 					{
 						fl_report(LOG_INFO,
-							"id=%s: verified:%s dkim=%s (id=%s, %s%sstat=%d)%s rep=%d",
+							"id=%s: verified:%s dkim=%s (id=%s, %s%sstat=%d)%s%s rep=%d",
 							parm->dyn.info.id,
 							(vh.sender_domain || vh.helo_domain)? " spf=pass,": "",
 							vh.dkim_result,
 							id,
 							err? err: "", err? ", ": "",
 							(int)status,
-							vh.policy == DKIM_POLICY_DISCARDABLE? " adsp: discard":
-								vh.policy == DKIM_POLICY_ALL? " adsp: all": "",
+							policy_type, policy_result,
 							vh.dkim_reputation);
 						log_written += 1;
 					}
 				}
 			}
-			
-			if (vh.policy == DKIM_POLICY_ALL ||
-				vh.policy == DKIM_POLICY_DISCARDABLE)
+
+			if (*policy_result)
 			{
-				fprintf(fp, ";\n  x-dkim-adsp=%s",
-					vh.sig_is_author && status == DKIM_STAT_OK? "pass": "fail");
+				fprintf(fp, ";\n  x-dkim-adsp=%s", policy_result);
 				++auth_given;
 			}
 			
@@ -1538,29 +1545,35 @@ static void dkimfilter(fl_parm *fl)
 
 	static char const resp_tempfail[] =
 		"432 Mail filter temporarily unavailable.\n";
+	int verbose_threshold = 4;
 	switch (parm->dyn.rtc)
 	{
 		case -1: // unrecoverable error
 			if (parm->tempfail_on_error)
+			{
 				fl_pass_message(fl, resp_tempfail);
+				verbose_threshold = 3;
+			}
 			else
 				fl_pass_message(fl, "250 Failed.\n");
 			break;
+
 		case 0: // not rewritten
 			fl_pass_message(fl, "250 not filtered.\n");
 			break;
+
 		case 1: // rewritten
 			fl_pass_message(fl, "250 Ok.\n");
 			break;
 
 		case 2: // rejected, message already passed
-			assert(fl_get_passed_message(fl) != NULL);
+			verbose_threshold = 3;
 			break;
 	}
 
 	assert(fl_get_passed_message(fl) != NULL);
 
-	if (parm->verbose >= 4 && fl_get_test_mode(fl) != fl_batch_test)
+	if (parm->verbose >= verbose_threshold)
 	{
 		char const *msg = fl_get_passed_message(fl);
 		int l = strlen(msg) - 1;
@@ -1593,12 +1606,68 @@ static void set_keyfile(fl_parm *fl)
 			nok? " not": "", keyfile);
 }
 
+static char policyfile[] = "POLICYFILE";
+
+DKIM_CBSTAT my_policy_lookup(DKIM *dkim, unsigned char *query,
+	_Bool excheck, unsigned char *buf, size_t buflen, int *qstat)
+{
+	assert(qstat);
+	verify_parms *const vh = (verify_parms*)dkim_get_user_context(dkim);
+	if (vh && vh->parm && vh->parm->verbose >= 8)
+		fl_report(LOG_DEBUG, "query: %s", query);
+	
+	struct stat st;
+	if (stat(policyfile, &st) != 0 || !S_ISREG(st.st_mode))
+	{
+		if (excheck)
+		{
+			*qstat = 3; // NXDOMAIN
+			return DKIM_CBSTAT_CONTINUE;
+		}
+		return DKIM_CBSTAT_NOTFOUND;
+	}
+
+	*qstat = 0; // NOERROR
+	if (excheck)
+		return DKIM_CBSTAT_CONTINUE;
+
+	if (st.st_size >= 0 && buflen > (unsigned)st.st_size)
+	{
+		FILE *fp = fopen(policyfile, "r");
+		if (fp)
+		{
+			if (fread(buf, st.st_size, 1, fp) != 1)
+				*qstat = 2; // SERVFAIL?
+			fclose(fp);
+			buf[st.st_size] = 0;
+			return DKIM_CBSTAT_CONTINUE;
+		}
+	}
+	
+	return DKIM_CBSTAT_ERROR;
+}
+
+static void set_policyfile(fl_parm *fl)
+{
+	assert(fl);
+
+	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+
+	assert(parm);
+	
+	DKIM_STAT status = dkim_set_policy_lookup(parm->dklib, &my_policy_lookup);
+	if (status != DKIM_STAT_OK || parm->verbose >= 8)
+		fl_report(status != DKIM_STAT_OK? LOG_ERR: LOG_INFO,
+			"DKIM policy method%s set to file \"%s\"",
+			status != DKIM_STAT_OK? " not": "", policyfile);
+}
+
 static fl_init_parm functions =
 {
 	dkimfilter,
 	NULL,
 	NULL, NULL, NULL,
-	report_config, set_keyfile, NULL, NULL	
+	report_config, set_keyfile, set_policyfile, NULL	
 };
 
 int main(int argc, char *argv[])
