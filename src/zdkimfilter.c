@@ -176,6 +176,7 @@ typedef struct dkimfl_parm
 	char *tmp;
 	const u_char **sign_hfields;
 	const u_char **skip_hfields;
+	const u_char **spf_whitelist;
 
 	// end of pointers (some malloc'd but never free'd)
 	per_message_parm dyn;
@@ -375,6 +376,7 @@ static config_conf const conf[] =
 	CONFIG(tmp, "temp directory", assign_ptr),
 	CONFIG(sign_hfields, "space-separated, no colon", assign_array),
 	CONFIG(skip_hfields, "space-separated, no colon", assign_array),
+	CONFIG(spf_whitelist, "space-separated domains", assign_array),
 	CONFIG(verbose, "int", assign_int),
 	CONFIG(dns_timeout, "secs", assign_int),
 	CONFIG(reputation_fail, "high int", assign_int),
@@ -1162,6 +1164,7 @@ static int verify_headers(verify_parms *vh)
 			}
 		}
 
+
 		if (!zap)
 		{
 			int err = 0;
@@ -1250,6 +1253,23 @@ static int verify_headers(verify_parms *vh)
 	return parm->dyn.rtc;
 }
 
+static int sender_is_whitelisted(verify_parms const *vh)
+{
+	assert(vh);
+	assert(vh->parm);
+	
+	u_char const ** const wl = vh->parm->spf_whitelist;
+	char const *const s = vh->sender_domain;
+	if (wl == NULL || s == NULL)
+		return 0; // no whitelist given
+
+	for (int i = 0; wl[i] != 0; ++i)
+		if (stricmp(wl[i], s) == 0)
+			return 1;
+
+	return 0;
+}
+
 static void verify_message(dkimfl_parm *parm)
 /*
 * add/remove A-R records, set rtc 1 if ok, 2 if rejected, -1 if failed,
@@ -1325,8 +1345,19 @@ static void verify_message(dkimfl_parm *parm)
 				*/
 				if (vh.presult == DKIM_PRESULT_NXDOMAIN)
 				{
-					fl_pass_message(parm->fl, "550 Invalid author domain\n");
-					parm->dyn.rtc = 2;
+					int whitelisted = sender_is_whitelisted(&vh);
+					if (parm->verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: invalid domain %s, %swhitelisted",
+							parm->dyn.info.id,
+							vh.dkim_domain? vh.dkim_domain: "(NULL)",
+							whitelisted? "": "NOT ");
+
+					if (!whitelisted)
+					{
+						fl_pass_message(parm->fl, "550 Invalid author domain\n");
+						parm->dyn.rtc = 2;
+					}
 				}
 
 				/*
@@ -1336,6 +1367,12 @@ static void verify_message(dkimfl_parm *parm)
 					vh.presult == DKIM_PRESULT_AUTHOR &&
 					(!vh.sig_is_author || status != DKIM_STAT_OK))
 				{
+					if (parm->verbose >= 3 && vh.dkim_domain)
+						fl_report(LOG_INFO,
+							"id=%s: discardable policy: %s",
+							parm->dyn.info.id,
+							vh.dkim_domain);
+
 					fl_pass_message(parm->fl,
 						"550 DKIM signature required by policy\n");
 					parm->dyn.rtc = 2;
@@ -1566,8 +1603,9 @@ static void dkimfilter(fl_parm *fl)
 			fl_pass_message(fl, "250 Ok.\n");
 			break;
 
-		case 2: // rejected, message already passed
-			verbose_threshold = 3;
+		case 2:
+			// rejected, message already given to fl_pass_message
+			// available info already logged if verbose >= 3
 			break;
 	}
 
