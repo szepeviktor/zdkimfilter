@@ -1338,6 +1338,9 @@ static void verify_message(dkimfl_parm *parm)
 		{
 			if (dkim_policy(dkim, &vh.policy, NULL) == DKIM_STAT_OK)
 			{
+				if (vh.dkim_domain == NULL)
+					vh.dkim_domain = dkim_getdomain(dkim);
+
 				vh.presult = dkim_getpresult(dkim);
 
 				/*
@@ -1348,10 +1351,11 @@ static void verify_message(dkimfl_parm *parm)
 					int whitelisted = sender_is_whitelisted(&vh);
 					if (parm->verbose >= 3)
 						fl_report(LOG_INFO,
-							"id=%s: invalid domain %s, %swhitelisted",
+							"id=%s: invalid domain %s, %swhitelisted: %s",
 							parm->dyn.info.id,
 							vh.dkim_domain? vh.dkim_domain: "(NULL)",
-							whitelisted? "": "NOT ");
+							whitelisted? "": "NOT ",
+							vh.sender_domain? vh.sender_domain: "(no SPF MAILFROM)");
 
 					if (!whitelisted)
 					{

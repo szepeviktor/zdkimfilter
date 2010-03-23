@@ -466,7 +466,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Reject message with non-existent From: domain])
-ZF_CONFIG(0)
+ZF_CONFIG(3)
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctl], [Mfraudmsg
 usmtp
@@ -481,7 +481,51 @@ ZF_RUN,
 0,
 [550 Invalid author domain
 ],
+[INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, NOT whitelisted: sender.example
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Accept message with non-existent From: domain])
+ZF_CONFIG(3, [no_author_domain
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Mfraudmsg
+usmtp
+])
+ZF_BATCH([test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 not filtered.
+],
 [])
+AT_CLEANUP
+
+#
+AT_SETUP([Whitelisted sender, non-existent From: domain])
+ZF_CONFIG(3, [spf_whitelist sender.example
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Musenetmsg
+usmtp
+])
+ZF_BATCH([test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted: sender.example
+])
 AT_CLEANUP
 
 #
