@@ -110,17 +110,17 @@ all_mode = @zdkimfilter_mode@
 
 # no_author_domain
 # Check the "From:" domain (as determined by the OpenDKIM library) exists.
-# If NXDOMAIN, reject the message, unless its spf-authenticated sender is
-# whitelisted (see next option). If the domain publishes an ADSP policy that
+# If NXDOMAIN, reject the message. If the domain publishes an ADSP policy that
 # states that any message from them can be discarded if it doesn't have a valid
-# author domain signature, the message is also rejected.
+# author domain signature, rejected the message. Both cases can be whitelisted
+# on a per sender basis, if the sender is spf-authenticated (see next option).
 # If the policy just says they sign all messages, the message is accepted and
-# the result reported in A-R for method "x-dkim-adsp".
+# the result reported in A-R for method "dkim-adsp".
 
 # spf_whitelist
 # Exceptions for rejecting invalid domain. If there is a whitelisted spf-
 # authenticated sender, an invalid <john.doe@NOSPAM.example.com> passes even if
-# no_author_domain (see previous option) is false.
+# no_author_domain is false or ADSP requires rejection (see previous option).
 # This is a space-separated list of domain names. By default it's empty.
 
 # check_reputation

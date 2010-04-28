@@ -1371,15 +1371,21 @@ static void verify_message(dkimfl_parm *parm)
 					vh.presult == DKIM_PRESULT_AUTHOR &&
 					(!vh.sig_is_author || status != DKIM_STAT_OK))
 				{
+					int whitelisted = sender_is_whitelisted(&vh);
 					if (parm->verbose >= 3 && vh.dkim_domain)
 						fl_report(LOG_INFO,
-							"id=%s: discardable policy: %s",
+							"id=%s: discardable policy: %s, %swhitelisted: %s",
 							parm->dyn.info.id,
-							vh.dkim_domain);
+							vh.dkim_domain,
+							whitelisted? "": "NOT ",
+							vh.sender_domain? vh.sender_domain: "(no SPF MAILFROM)");
 
-					fl_pass_message(parm->fl,
-						"550 DKIM signature required by policy\n");
-					parm->dyn.rtc = 2;
+					if (!whitelisted)
+					{
+						fl_pass_message(parm->fl,
+							"550 DKIM signature required by policy\n");
+						parm->dyn.rtc = 2;
+					}
 				}
 			}
 		}
@@ -1439,9 +1445,9 @@ static void verify_message(dkimfl_parm *parm)
 
 			char const *policy_type = "", *policy_result = "";
 			if (vh.policy == DKIM_POLICY_ALL)
-				policy_type = " adsp: all/";
+				policy_type = " adsp:all=";
 			else if (vh.policy == DKIM_POLICY_DISCARDABLE)
-				policy_type = " adsp: discardable/";
+				policy_type = " adsp:discardable=";
 
 			if (*policy_type)
 				policy_result = vh.sig_is_author && status == DKIM_STAT_OK?
@@ -1520,7 +1526,7 @@ static void verify_message(dkimfl_parm *parm)
 
 			if (*policy_result)
 			{
-				fprintf(fp, ";\n  x-dkim-adsp=%s", policy_result);
+				fprintf(fp, ";\n  dkim-adsp=%s", policy_result);
 				++auth_given;
 			}
 			
