@@ -123,6 +123,14 @@ all_mode = @zdkimfilter_mode@
 # no_author_domain is false or ADSP requires rejection (see previous option).
 # This is a space-separated list of domain names. By default it's empty.
 
+# dkim_whitelist
+# Exceptions for rejecting invalid domain. An invalid or discardable author
+# domain passes if there is a good DKIM signature from a whitelisted domain.
+# NOTE: no attempt is done to check that the whitelisted domain had
+# validated the author signature before possibly breaking it.
+# no_author_domain is false or ADSP requires rejection (see previous option).
+# This is a space-separated list of domain names. By default it's empty.
+
 # check_reputation
 # make a query to get the reputation of the signer. The result is reported in
 # A-R for method "x-dkim-rep" according to the two values specified next

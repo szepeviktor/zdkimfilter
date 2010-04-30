@@ -10,6 +10,8 @@ _ZEOF
 ])
 
 # batch file preparation
+# NB: before a ctlfile and mailfile, this may call any of test1, test2, test3
+# which do report_config, set_keyfile, set_policyfile, respectively.
 m4_define([ZF_BATCH], [AT_DATA([batch],
 [$1
 
@@ -71,12 +73,9 @@ m4_define([ZF_SIGOTHER],
 	 K5pYsL12X5UfS1+TRnv2ONLxQDgSn+4r8ZwaEWZ8=
 ])
 
-# message with 3 signatures
-m4_define([ZF_MESSAGE],
-[$1Received: from server.example by test.example with ESMTP
-Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
-$2Received: from mail.example.com by server.example with ESMTPA
-$3Message-ID: <123456@author.example>
+# header tail and body of message
+m4_define([ZF_MESSAGE_BODY],
+[Message-ID: <123456@author.example>
 Date: Mon, 08 Feb 2010 13:12:55 +0100
 From: Author <user@author.example>
 MIME-Version: 1.0
@@ -96,6 +95,19 @@ Note that to distinguish the sender we need a valid
 SPF record. We relay on Courier's SPF checking for that.
 ])
 
+# message with up to 3 signatures and SPF pass
+m4_define([ZF_MESSAGE],
+[$1Received: from server.example by test.example with ESMTP
+Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
+$2Received: from mail.example.com by server.example with ESMTPA
+$3][ZF_MESSAGE_BODY])
+
+# message with up to 3 signatures and SPF none
+m4_define([ZF_MESSAGE_NOSPF],
+[$1Received: from server.example by test.example with ESMTP
+Received-SPF: none SPF=MAILFROM sender=someone@sender.example;
+$2Received: from mail.example.com by server.example with ESMTPA
+$3][ZF_MESSAGE_BODY])
 
 # private author key ( domain, selector)
 m4_define([ZF_PRIVATEKEY], [AT_DATA(m4_if([$#], [2], [$2], [$1]),
@@ -139,6 +151,7 @@ tmp                  = NULL (temp directory)
 sign_hfields         = NULL (space-separated, no colon)
 skip_hfields         = NULL (space-separated, no colon)
 spf_whitelist        = NULL (space-separated domains)
+dkim_whitelist       = NULL (space-separated domains)
 verbose              = 0 (int)
 dns_timeout          = 0 (secs)
 reputation_fail      = 32767 (high int)
@@ -192,6 +205,7 @@ tmp                  = NULL (temp directory)
 sign_hfields         = NULL (space-separated, no colon)
 skip_hfields         = NULL (space-separated, no colon)
 spf_whitelist        = NULL (space-separated domains)
+dkim_whitelist       = NULL (space-separated domains)
 verbose              = 0 (int)
 dns_timeout          = 0 (secs)
 reputation_fail      = 32767 (high int)
@@ -481,7 +495,7 @@ ZF_RUN,
 0,
 [550 Invalid author domain
 ],
-[INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, NOT whitelisted: sender.example
+[INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, NOT whitelisted (spf_:sender.example, dkim_:--no)
 ])
 AT_CLEANUP
 
@@ -524,9 +538,86 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted: sender.example
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (have spf_:sender.example, dkim_:--no)
 ])
 AT_CLEANUP
+
+#
+AT_SETUP([Whitelisted signer, non-existent From: domain])
+ZF_CONFIG(3, [dkim_whitelist sender.example
+])
+ZF_KEYFILE
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_DATA([ctl], [Musenetmsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (spf_:--no, have dkim_:sender.example)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: dkim=pass (id=@sender.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Whitelisted both ways, one SPF validated])
+ZF_CONFIG(3, [dkim_whitelist other.example sender.example
+spf_whitelist other.example sender.example
+])
+ZF_KEYFILE
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_DATA([ctl], [Musenetmsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (have spf_:sender.example, have dkim_:sender.example)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Dkim whitelisting with SPF-validated signer])
+ZF_CONFIG(3, [dkim_whitelist other.example
+])
+ZF_KEYFILE
+AT_DATA([mail], [ZF_MESSAGE(, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_DATA([ctl], [Musenetmsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (spf_:sender.example, have dkim_:other.example)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@other.example, stat=0) rep=0
+])
+AT_CLEANUP
+
 
 #
 AT_SETUP([Verify author signature with policy: all])
@@ -644,7 +735,7 @@ ZF_RUN,
 0,
 [550 DKIM signature required by policy
 ],
-[INFO:zdkimfilter[[0]]:id=policymsg: discardable policy: author.example, NOT whitelisted: sender.example
+[INFO:zdkimfilter[[0]]:id=policymsg: discardable policy: author.example, NOT whitelisted (spf_:sender.example, dkim_:--no)
 ])
 AT_CLEANUP
 
@@ -669,7 +760,7 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=policymsg: discardable policy: author.example, whitelisted: sender.example
+[INFO:zdkimfilter[[0]]:id=policymsg: discardable policy: author.example, whitelisted (have spf_:sender.example, dkim_:--no)
 INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=fail (id=@author.example, signature verification failed, stat=1) adsp:discardable=fail rep=0
 ])
 AT_CLEANUP

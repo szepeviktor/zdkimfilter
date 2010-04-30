@@ -177,6 +177,7 @@ typedef struct dkimfl_parm
 	const u_char **sign_hfields;
 	const u_char **skip_hfields;
 	const u_char **spf_whitelist;
+	const u_char **dkim_whitelist;
 
 	// end of pointers (some malloc'd but never free'd)
 	per_message_parm dyn;
@@ -377,6 +378,7 @@ static config_conf const conf[] =
 	CONFIG(sign_hfields, "space-separated, no colon", assign_array),
 	CONFIG(skip_hfields, "space-separated, no colon", assign_array),
 	CONFIG(spf_whitelist, "space-separated domains", assign_array),
+	CONFIG(dkim_whitelist, "space-separated domains", assign_array),
 	CONFIG(verbose, "int", assign_int),
 	CONFIG(dns_timeout, "secs", assign_int),
 	CONFIG(reputation_fail, "high int", assign_int),
@@ -917,6 +919,40 @@ typedef struct verify_parms
 	
 } verify_parms;
 
+static int
+signer_is_whitelisted(verify_parms const *vh, char const *const domain)
+{
+	assert(vh);
+	assert(vh->parm);
+	
+	u_char const ** const wl = vh->parm->dkim_whitelist;
+	if (wl == NULL || domain == NULL)
+		return 0; // no whitelist given
+
+	for (int i = 0; wl[i] != 0; ++i)
+		if (stricmp(wl[i], domain) == 0)
+			return 1;
+
+	return 0;
+}
+
+static int sender_is_whitelisted(verify_parms const *vh)
+{
+	assert(vh);
+	assert(vh->parm);
+	
+	u_char const ** const wl = vh->parm->spf_whitelist;
+	char const *const s = vh->sender_domain;
+	if (wl == NULL || s == NULL)
+		return 0; // no whitelist given
+
+	for (int i = 0; wl[i] != 0; ++i)
+		if (stricmp(wl[i], s) == 0)
+			return 1;
+
+	return 0;
+}
+
 static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 // callback to check useful signatures
 {
@@ -963,7 +999,8 @@ static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 						sigval += 10; // helo domain signature
 				}
 				
-				// TODO: add something if domain is in a set of trusted domains
+				if (signer_is_whitelisted(vh, domain))
+					sigval += 500; // trusted domain signature
 			}
 		}
 
@@ -1253,23 +1290,6 @@ static int verify_headers(verify_parms *vh)
 	return parm->dyn.rtc;
 }
 
-static int sender_is_whitelisted(verify_parms const *vh)
-{
-	assert(vh);
-	assert(vh->parm);
-	
-	u_char const ** const wl = vh->parm->spf_whitelist;
-	char const *const s = vh->sender_domain;
-	if (wl == NULL || s == NULL)
-		return 0; // no whitelist given
-
-	for (int i = 0; wl[i] != 0; ++i)
-		if (stricmp(wl[i], s) == 0)
-			return 1;
-
-	return 0;
-}
-
 static void verify_message(dkimfl_parm *parm)
 /*
 * add/remove A-R records, set rtc 1 if ok, 2 if rejected, -1 if failed,
@@ -1344,46 +1364,47 @@ static void verify_message(dkimfl_parm *parm)
 				vh.presult = dkim_getpresult(dkim);
 
 				/*
-				* reject if dkim_domain is not valid
+				* reject if dkim_domain is not valid or ADSP discard policy
 				*/
-				if (vh.presult == DKIM_PRESULT_NXDOMAIN)
+				if (vh.presult == DKIM_PRESULT_NXDOMAIN ||
+						(vh.policy == DKIM_POLICY_DISCARDABLE &&
+						vh.presult == DKIM_PRESULT_AUTHOR &&
+						(!vh.sig_is_author || status != DKIM_STAT_OK)))
 				{
-					int whitelisted = sender_is_whitelisted(&vh);
+					char const *log_reason, *smtp_reason;
+					int spf_whitelisted = sender_is_whitelisted(&vh);
+					int dkim_whitelisted =
+						status == DKIM_STAT_OK &&
+						vh.sig_domain != NULL &&
+						signer_is_whitelisted(&vh, vh.sig_domain);
+					
+					if (vh.presult == DKIM_PRESULT_NXDOMAIN)
+					{
+						log_reason = "invalid domain";
+						smtp_reason = "550 Invalid author domain\n";
+					}
+					else
+					{
+						log_reason = "discardable policy:";
+						smtp_reason = "550 DKIM signature required by policy\n";
+					}
+
 					if (parm->verbose >= 3)
 						fl_report(LOG_INFO,
-							"id=%s: invalid domain %s, %swhitelisted: %s",
+							"id=%s: %s %s, %swhitelisted (%sspf_:%s, %sdkim_:%s)",
 							parm->dyn.info.id,
+							log_reason,
 							vh.dkim_domain? vh.dkim_domain: "(NULL)",
-							whitelisted? "": "NOT ",
-							vh.sender_domain? vh.sender_domain: "(no SPF MAILFROM)");
+							spf_whitelisted || dkim_whitelisted? "": "NOT ",
+							spf_whitelisted? "have ": "",
+							vh.sender_domain? vh.sender_domain: "--no",
+							dkim_whitelisted? "have ": "",
+							status == DKIM_STAT_OK && vh.sig_domain?
+								vh.sig_domain: "--no");
 
-					if (!whitelisted)
+					if (!spf_whitelisted && !dkim_whitelisted)
 					{
-						fl_pass_message(parm->fl, "550 Invalid author domain\n");
-						parm->dyn.rtc = 2;
-					}
-				}
-
-				/*
-				* reject if absence of good signature mandates it
-				*/
-				else if (vh.policy == DKIM_POLICY_DISCARDABLE &&
-					vh.presult == DKIM_PRESULT_AUTHOR &&
-					(!vh.sig_is_author || status != DKIM_STAT_OK))
-				{
-					int whitelisted = sender_is_whitelisted(&vh);
-					if (parm->verbose >= 3 && vh.dkim_domain)
-						fl_report(LOG_INFO,
-							"id=%s: discardable policy: %s, %swhitelisted: %s",
-							parm->dyn.info.id,
-							vh.dkim_domain,
-							whitelisted? "": "NOT ",
-							vh.sender_domain? vh.sender_domain: "(no SPF MAILFROM)");
-
-					if (!whitelisted)
-					{
-						fl_pass_message(parm->fl,
-							"550 DKIM signature required by policy\n");
+						fl_pass_message(parm->fl, smtp_reason);
 						parm->dyn.rtc = 2;
 					}
 				}
@@ -1695,6 +1716,10 @@ DKIM_CBSTAT my_policy_lookup(DKIM *dkim, unsigned char *query,
 	return DKIM_CBSTAT_ERROR;
 }
 
+/*
+* using the callback above, test3 can be used to set an invalid domain
+* in case no policyfile is found, or the policy specified therein.
+*/
 static void set_policyfile(fl_parm *fl)
 {
 	assert(fl);
