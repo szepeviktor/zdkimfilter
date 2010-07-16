@@ -109,26 +109,44 @@ all_mode = @zdkimfilter_mode@
 # Add an A-R field also if no signature or other A-R had been found
 
 # no_author_domain
-# Check the "From:" domain (as determined by the OpenDKIM library) exists.
-# If NXDOMAIN, reject the message. If the domain publishes an ADSP policy that
-# states that any message from them can be discarded if it doesn't have a valid
-# author domain signature, rejected the message. Both cases can be whitelisted
-# on a per sender basis, if the sender is spf-authenticated (see next option).
-# If the policy just says they sign all messages, the message is accepted and
-# the result reported in A-R for method "dkim-adsp".
+# The filter may reject or drop messages according to ADSP.  The three
+# conditions that cause this behavior are as follows:
+#
+#   Nxdomain:    the author's address, as given in the "From:" header, contains
+#                a non-existing domain name.
+#   All:         the author domain specifies a policy whereby all messages must
+#                have an author domain signature, but this messages has none.
+#   Discardable: as case All, but the author domain further asks that non-
+#                compliant messages be just discarded, in order to avoid
+#                useless backscatter.
+#
+# When ADSP is enabled, the filter rejects messages in cases N and A, and drops
+# messages in case D.  This behavior can be mitigated by whitelisting specific
+# cases by domain name, if such name can be authenticated by SPF or DKIM (see
+# the next two parameters.)
+#
+# When ADSP is disabled, the filter never rejects nor drops messages.  If one
+# of the cases above is detected, the A-R field will have a line specifying
+# the result as dkim-adsp=nxdomain (for Nxdomain), dkim-adsp=fail (for All), or
+# dkim-adsp=discard (for Discardable).
+#
+# In order to enable ADSP, comment out the following line
+no_author_domain
 
 # spf_whitelist
-# Exceptions for rejecting invalid domain. If there is a whitelisted spf-
+# Exceptions for ADSP behavior, if enabled. If there is a whitelisted spf-
 # authenticated sender, an invalid <john.doe@NOSPAM.example.com> passes even if
-# no_author_domain is false or ADSP requires rejection (see previous option).
+# no_author_domain is false and ADSP behavior requires otherwise (see previous
+# option).
+#
 # This is a space-separated list of domain names. By default it's empty.
 
 # dkim_whitelist
-# Exceptions for rejecting invalid domain. An invalid or discardable author
+# Exceptions for ADSP behavior, if enabled. An invalid or discardable author
 # domain passes if there is a good DKIM signature from a whitelisted domain.
-# NOTE: no attempt is done to check that the whitelisted domain had
-# validated the author signature before possibly breaking it.
-# no_author_domain is false or ADSP requires rejection (see previous option).
+# NOTE: no attempt is done to check that the whitelisted domain had validated
+# the author signature before possibly breaking it.
+#
 # This is a space-separated list of domain names. By default it's empty.
 
 # check_reputation
