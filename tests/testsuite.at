@@ -555,6 +555,12 @@ ZF_RUN,
 ],
 [INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (have spf_:sender.example, dkim_:--no)
 ])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim-adsp=nxdomain
+], [])
 AT_CLEANUP
 
 #
@@ -580,6 +586,12 @@ ZF_RUN,
 [INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (spf_:--no, have dkim_:sender.example)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
 ])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim=pass header.i=@sender.example;
+  dkim-adsp=nxdomain
+], [])
 AT_CLEANUP
 
 #
@@ -606,6 +618,13 @@ ZF_RUN,
 [INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (have spf_:sender.example, have dkim_:sender.example)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
 ])
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@sender.example;
+  dkim-adsp=nxdomain  
+], [])
 AT_CLEANUP
 
 #
@@ -631,6 +650,13 @@ ZF_RUN,
 [INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (spf_:sender.example, have dkim_:other.example)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@other.example, stat=0) adsp=nxdomain rep=0
 ])
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@other.example;
+  dkim-adsp=nxdomain  
+], [])
 AT_CLEANUP
 
 
@@ -911,7 +937,6 @@ head -n 4 mail, 0,
   dkim-adsp=fail
 Received: from server.example by test.example with ESMTP
 ], [])
-
 AT_CLEANUP
 
 #
@@ -939,6 +964,112 @@ ZF_RUN,
 [250 Ok.
 ],
 [])
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim-adsp=discard
+Received: from server.example by test.example with ESMTP
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Mandatory author signature without SPF])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(0, [no_author_domain
+])
+AT_DATA([POLICYFILE], [dkim=discardable
+])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim-adsp=discard
+Received: from server.example by test.example with ESMTP
+], [])
+AT_CLEANUP
+
+# it is not practical to thoroughly test dropping...
+AT_SETUP([Drop missing signature with 1 recipient])
+ZF_KEYFILE
+AT_DATA([POLICYFILE], [dkim=discardable
+])
+ZF_CONFIG(0)
+AT_DATA([mail], [ZF_MESSAGE_NOSPF])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+fTesT
+rfoo@example.org
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[])
+AT_CHECK(
+head -n 5 ctl, 0,
+[Mpolicymsg
+usmtp
+fTesT
+rfoo@example.org
+I0 R 250 Dropped.
+], [])
+AT_CLEANUP
+
+
+#
+AT_SETUP([No signature, no policy, and no SPF])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=unknown
+author.example X
+])
+AT_DATA([POLICYFILE], [dkim=unknown
+])
+ZF_CONFIG(0, [no_author_domain
+])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 not filtered.
+],
+[])
+AT_CHECK(
+head -n 1 mail, 0,
+[Received: from server.example by test.example with ESMTP
+], [])
 AT_CLEANUP
 
 

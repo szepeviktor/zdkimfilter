@@ -379,7 +379,8 @@ read_ctlfile(fl_parm *fl, char const *chs, int (*cb)(char *, void*), void* arg)
 					buf[sizeof buf -1] = 0;
 				}
 
-				if (strchr(chs, buf[0]) != NULL &&
+				if (buf[0] &&
+					strchr(chs, buf[0]) != NULL &&
 					(rtc = (*cb)(&buf[0], arg)) != 0)
 						break;
 			}
@@ -612,7 +613,7 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 #endif
 			
 			for (i = 0; i < count && !ferror(fp); ++i)
-				fprintf(fp, "I%d R 200 Dropped.\nS%d %ld\n",
+				fprintf(fp, "I%d R 250 Dropped.\nS%d %ld\n",
 					i, i, (long)tt);
 			fprintf(fp, "C%ld\n", (long)tt);
 			
