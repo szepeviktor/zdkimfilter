@@ -1311,9 +1311,11 @@ static void verify_message(dkimfl_parm *parm)
 
 	vh.dkim_or_file = dkim;
 	vh.parm = parm;
-	if (verify_headers(&vh) == 0 && parm->dyn.authserv_id &&
+	if (verify_headers(&vh) == 0 && parm->dyn.authserv_id)
+	/* not testing:
 		(vh.a_r_count || vh.d_s_count ||
-			parm->add_a_r_anyway || !parm->no_author_domain))
+			parm->add_a_r_anyway || ))
+	*/
 	{
 		if (dkim_minbody(dkim) > 0)
 			copy_body(parm, dkim);
@@ -1354,7 +1356,7 @@ static void verify_message(dkimfl_parm *parm)
 				break;
 		}
 
-		if (parm->dyn.rtc == 0 && !parm->no_author_domain)
+		if (parm->dyn.rtc == 0)
 		{
 			if (dkim_policy(dkim, &vh.policy, NULL) == DKIM_STAT_OK)
 			{
@@ -1364,14 +1366,18 @@ static void verify_message(dkimfl_parm *parm)
 				vh.presult = dkim_getpresult(dkim);
 
 				/*
-				* reject if dkim_domain is not valid or ADSP discard policy
+				* unless disabled by parameter or whitelisted, do action:
+				* reject if dkim_domain is not valid, or ADSP == all,
+				* discard if ADSP == discardable;
 				*/
-				if (vh.presult == DKIM_PRESULT_NXDOMAIN ||
-						(vh.policy == DKIM_POLICY_DISCARDABLE &&
-						vh.presult == DKIM_PRESULT_AUTHOR &&
-						(!vh.sig_is_author || status != DKIM_STAT_OK)))
+				if (!parm->no_author_domain &&
+						(vh.presult == DKIM_PRESULT_NXDOMAIN ||
+							((vh.policy == DKIM_POLICY_DISCARDABLE ||
+								vh.policy == DKIM_POLICY_ALL) &&
+							vh.presult == DKIM_PRESULT_AUTHOR &&
+							(!vh.sig_is_author || status != DKIM_STAT_OK))))
 				{
-					char const *log_reason, *smtp_reason;
+					char const *log_reason, *smtp_reason = NULL;
 					int spf_whitelisted = sender_is_whitelisted(&vh);
 					int dkim_whitelisted =
 						status == DKIM_STAT_OK &&
@@ -1383,11 +1389,13 @@ static void verify_message(dkimfl_parm *parm)
 						log_reason = "invalid domain";
 						smtp_reason = "550 Invalid author domain\n";
 					}
-					else
+					else if (vh.policy != DKIM_POLICY_DISCARDABLE)
 					{
-						log_reason = "discardable policy:";
+						log_reason = "adsp=all policy:";
 						smtp_reason = "550 DKIM signature required by policy\n";
 					}
+					else
+						log_reason = "adsp=discardable policy:";
 
 					if (parm->verbose >= 3)
 						fl_report(LOG_INFO,
@@ -1404,7 +1412,14 @@ static void verify_message(dkimfl_parm *parm)
 
 					if (!spf_whitelisted && !dkim_whitelisted)
 					{
-						fl_pass_message(parm->fl, smtp_reason);
+						if (smtp_reason) //reject
+							fl_pass_message(parm->fl, smtp_reason);
+						else // drop, and stop filtering
+						{
+							fl_pass_message(parm->fl, "050 Message dropped.\n");
+							fl_drop_message(parm->fl, "adsp=discard\n");
+						}
+						
 						parm->dyn.rtc = 2;
 					}
 				}
@@ -1433,12 +1448,38 @@ static void verify_message(dkimfl_parm *parm)
 			}
 		}
 
+
+		/*
+		* check ADSP
+		*/
+		char const *policy_type = "", *policy_result = "";
+		if (parm->dyn.rtc == 0)
+		{
+			if (vh.presult == DKIM_PRESULT_NXDOMAIN)
+			{
+				policy_type = " adsp=";
+				policy_result = "nxdomain";
+			}
+			else if (vh.policy == DKIM_POLICY_ALL)
+			{
+				policy_type = " adsp:all=";
+				policy_result = vh.sig_is_author && status == DKIM_STAT_OK?
+					"pass": "fail";
+			}
+			else if (vh.policy == DKIM_POLICY_DISCARDABLE)
+			{
+				policy_type = " adsp:discardable=";
+				policy_result = vh.sig_is_author && status == DKIM_STAT_OK?
+					"pass": "discard";
+			}
+		}
+
 		/*
 		* write the A-R field if required anyway, spf, or signature
 		*/
 		if (parm->dyn.rtc == 0 &&
 			(parm->add_a_r_anyway ||
-				vh.sender_domain || vh.helo_domain || vh.sig))
+				vh.sender_domain || vh.helo_domain || vh.sig || *policy_result))
 		{
 			FILE *fp = fl_get_write_file(parm->fl);
 			if (fp == NULL)
@@ -1463,16 +1504,6 @@ static void verify_message(dkimfl_parm *parm)
 					vh.sender_domain? vh.sender_domain: vh.helo_domain);
 				++auth_given;
 			}
-
-			char const *policy_type = "", *policy_result = "";
-			if (vh.policy == DKIM_POLICY_ALL)
-				policy_type = " adsp:all=";
-			else if (vh.policy == DKIM_POLICY_DISCARDABLE)
-				policy_type = " adsp:discardable=";
-
-			if (*policy_type)
-				policy_result = vh.sig_is_author && status == DKIM_STAT_OK?
-					"pass": "fail";
 
 			if (vh.sig)
 			{
@@ -1545,7 +1576,7 @@ static void verify_message(dkimfl_parm *parm)
 				}
 			}
 
-			if (*policy_result)
+			if (*policy_result) // TODO: add the "header.from" field
 			{
 				fprintf(fp, ";\n  dkim-adsp=%s", policy_result);
 				++auth_given;
@@ -1635,7 +1666,7 @@ static void dkimfilter(fl_parm *fl)
 			break;
 
 		case 2:
-			// rejected, message already given to fl_pass_message
+			// rejected, message already given to fl_pass_message, or dropped;
 			// available info already logged if verbose >= 3
 			break;
 	}

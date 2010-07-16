@@ -537,7 +537,6 @@ char *fl_rcpt_next(fl_rcpt_enum* fre)
 
 
 /* ----- drop message ----- */
-#if defined FILTERLIB_DROP_MESSAGE_SUPPORT
 static int count_recipients(FILE *fp, char **from_mta)
 {
 	int count = 0;
@@ -665,7 +664,7 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 	free(from_mta);
 	return rtc;
 }
-#endif /* defined FILTERLIB_DROP_MESSAGE_SUPPORT */
+
 /* ----- core filter functions ----- */
 
 static int read_fname(fl_parm* fl)
@@ -1144,11 +1143,19 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 					while (--es >= s && isspace(*es))
 						*es = 0;
 					++es;
-					is_exit = strcmp(s, "exit") == 0;
+					if (strncmp(s, "exit", 4) == 0)
+					{
+						if (s[4] == '+' && s[5] == 0)
+							is_exit = 2;
+						else if (s[4] == 0)
+							is_exit = 1;
+					}
 				}
 				
 				if (s == es || is_exit || sleep_arg)
 				{
+					if (is_exit > 1)
+						fl->batch_test = 0;
 					if (pending)
 					{
 						fputc('\n', fp);
@@ -1209,6 +1216,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 				"                              (usually test1 prints configuration)\n"
 				" sleep nn                   - sleep nn seconds or until signal\n"
 				" exit                       - terminate batch testing\n"
+				" exit+                      - terminate batch, enable plain testing\n"
 				"unrecognized lines are interpreted as mail files and passed to the\n"
 				"filter: mail file first, any number of ctl files until an empty line\n"
 				"or one with a recognized command\n", stdout);
