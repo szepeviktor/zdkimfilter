@@ -1387,12 +1387,12 @@ static void verify_message(dkimfl_parm *parm)
 					if (vh.presult == DKIM_PRESULT_NXDOMAIN)
 					{
 						log_reason = "invalid domain";
-						smtp_reason = "550 Invalid author domain\n";
+						smtp_reason = "554 Invalid author domain\n";
 					}
 					else if (vh.policy != DKIM_POLICY_DISCARDABLE)
 					{
 						log_reason = "adsp=all policy:";
-						smtp_reason = "550 DKIM signature required by policy\n";
+						smtp_reason = "554 DKIM signature required by ADSP\n";
 					}
 					else
 						log_reason = "adsp=discardable policy:";
