@@ -161,11 +161,28 @@ typedef struct var_buf
 	size_t alloc;
 } var_buf;
 
-static int vb_init(var_buf *vb)
+static inline int vb_init(var_buf *vb)
+// 0 on success
 {
 	assert(vb);
+	return (vb->buf = (char*)malloc(vb->alloc = 8192)) == NULL;
+}
 
-	return (vb->buf = (char*)malloc(vb->alloc = 8192)) != NULL;
+static inline void vb_clean(var_buf *vb)
+// 0 on success
+{
+	assert(vb);
+	if (vb->buf)
+	{
+		free(vb->buf);
+		vb->buf = NULL;
+	}
+}
+
+static inline char const *vb_what(var_buf const* vb)
+{
+	assert(vb);
+	return vb->buf? vb->buf: "malloc failed";
 }
 
 #if !defined SSIZE_MAX
@@ -599,13 +616,15 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 {
 	assert(parm && dkim);
 
+	size_t keep = 0;
+	var_buf *vb = &parm->dyn.vb;
 	FILE* fp = fl_get_file(parm->fl);
 	assert(fp);
-	char buf[8192], *p = &buf[0], *const start = &buf[0];
 	DKIM_STAT status;
 	
-	while (fgets(p, sizeof buf - 1 - (p - start), fp))
+	for (;;)
 	{
+		char *p = vb_fgets(vb, keep, fp);
 		char *eol = strchr(p, '\n');
 
 		if (eol == NULL)
@@ -613,33 +632,34 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 			if (parm->verbose)
 				fl_report(LOG_ALERT,
 					"id=%s: header too long (%.20s...)",
-					parm->dyn.info.id, start);
+					parm->dyn.info.id, vb_what(vb));
 			return parm->dyn.rtc = -1;
 		}
 
-		int const next = fgetc(fp);
+		int const next = eol > p? fgetc(fp): '\n';
 		int const cont = next != EOF && next != '\n';
+		char *const start = vb->buf;
+		keep = eol - start;
 		if (cont && isspace(next)) // wrapped
 		{
 			*eol++ = '\r';
 			*eol++ = '\n';
 			*eol = next;
-			p = eol + 1;
+			keep += 3;
 			continue;
 		}
 
 		/*
-		* full header is in buffer, dkim_header does not want the trailing \n
+		* full header is in buffer (dkim_header does not want the trailing \n)
 		*/
-		size_t const len = eol - start;
-		if ((status = dkim_header(dkim, start, len)) != DKIM_STAT_OK)
+		if (keep && (status = dkim_header(dkim, start, keep)) != DKIM_STAT_OK)
 		{
 			if (parm->verbose)
 			{
 				char const *err = dkim_getresultstr(status);
 				fl_report(LOG_CRIT,
 					"id=%s: signing dkim_header failed on %zu bytes: %s (%d)",
-					parm->dyn.info.id, len,
+					parm->dyn.info.id, keep,
 					err? err: "unknown", (int)status);
 			}
 			return parm->dyn.rtc = -1;
@@ -648,8 +668,8 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 		if (!cont)
 			break;
 
-		p = start;
-		*p++ = next;
+		start[0] = next;
+		keep = 1;
 	}
 	
 	/*
@@ -872,7 +892,7 @@ static int read_key_choice(dkimfl_parm *parm)
 		dkim_sigkey_t key;
 		char *selector;
 		char *domain;
-		char *header;  // alias, not malloced
+		char const* header;  // alias, not malloced
 	} *choice;
 	
 	while (parm->key_choice_header[choice_max] != NULL)
@@ -890,7 +910,7 @@ static int read_key_choice(dkimfl_parm *parm)
 	keep = 0;
 	for (i = 0; i < choice_max; ++i)
 	{
-		char *h = parm->key_choice_header[i];
+		char const* const h = parm->key_choice_header[i];
 		if (h[0] == '-' && h[1] == 0)
 			++keep;
 		choice[i].header = h;
@@ -900,7 +920,7 @@ static int read_key_choice(dkimfl_parm *parm)
 	{
 		for (i = 0; i < choice_max; ++i)
 		{
-			char *const  h = parm->key_choice_header[i];
+			char const *const  h = parm->key_choice_header[i];
 			if (h[0] == '-' && h[1] == 0)
 			{
 				rtc = default_key_choice(parm);
@@ -922,7 +942,7 @@ static int read_key_choice(dkimfl_parm *parm)
 		if (keep)
 			for (i = 0; i < choice_max; ++i)
 			{
-				char *h = parm->key_choice_header[i];
+				char const *const h = parm->key_choice_header[i];
 				if (h[0] == '-' && h[1] == 0)
 				{
 					choice[i].header = NULL;
@@ -945,7 +965,7 @@ static int read_key_choice(dkimfl_parm *parm)
 			if (parm->verbose)
 				fl_report(LOG_ALERT,
 					"id=%s: header too long (%.20s...)",
-					parm->dyn.info.id, vb->buf? vb->buf: "malloc failed");
+					parm->dyn.info.id, vb_what(vb));
 			rtc = parm->dyn.rtc = -1;
 			break;
 		}
@@ -966,7 +986,7 @@ static int read_key_choice(dkimfl_parm *parm)
 		*/
 		for (i = 0; i < choice_max; ++i)
 		{
-			char *const h = choice[i].header;
+			char const *const h = choice[i].header;
 			if (h)
 			{
 				char *const val = hdrval(start, h);
@@ -1007,7 +1027,8 @@ static int read_key_choice(dkimfl_parm *parm)
 		if (!cont)
 			break;
 
-		start[keep=1] = next;
+		start[0] = next;
+		keep = 1;
 	}
 	
 	/*
@@ -1058,9 +1079,13 @@ static void sign_message(dkimfl_parm *parm)
 	assert(parm->dyn.key == NULL);
 	assert(parm->dyn.selector == NULL);
 	assert(parm->dyn.domain == NULL);
-
-	if (read_key_choice(parm))
+	
+	if (vb_init(&parm->dyn.vb) ||
+		read_key_choice(parm))
+	{
+		parm->dyn.rtc = -1;
 		return;
+	}
 
 	if (parm->dyn.key == NULL)
 	{
@@ -1121,6 +1146,7 @@ static void sign_message(dkimfl_parm *parm)
 		if (sign_headers(parm, dkim) == 0 &&
 			copy_body(parm, dkim) == 0)
 		{
+			vb_clean(&parm->dyn.vb);
 			status = dkim_eom(dkim, NULL);
 			if (status != DKIM_STAT_OK)
 			{
@@ -1315,16 +1341,18 @@ static int verify_headers(verify_parms *vh)
 	assert(vh && vh->parm);
 
 	dkimfl_parm *const parm = vh->parm;
+	size_t keep = 0;
+	var_buf *vb = &parm->dyn.vb;
 	FILE* fp = fl_get_file(parm->fl);
 	assert(fp);
-	char buf[8192], *p = &buf[0], *const start = &buf[0];
 	DKIM *const dkim = vh->step? NULL: (DKIM*)vh->dkim_or_file;
 	FILE *const out = vh->step? (FILE*)vh->dkim_or_file: NULL;
 	
 	int seen_received = 0;
 	
-	while (fgets(p, sizeof buf - 1 - (p - start), fp))
+	for (;;)
 	{
+		char *p = vb_fgets(vb, keep, fp);
 		char *eol = strchr(p, '\n');
 
 		if (eol == NULL)
@@ -1332,12 +1360,13 @@ static int verify_headers(verify_parms *vh)
 			if (parm->verbose)
 				fl_report(LOG_ALERT,
 					"id=%s: header too long (%.20s...)",
-					parm->dyn.info.id, start);
+					parm->dyn.info.id, vb_what(vb));
 			return parm->dyn.rtc = -1;
 		}
 
-		int const next = fgetc(fp);
+		int const next = eol > p? fgetc(fp): '\n';
 		int const cont = next != EOF && next != '\n';
+		char *const start = vb->buf;
 		if (cont && isspace(next)) // wrapped
 		{
 			if (dkim)
@@ -1346,7 +1375,7 @@ static int verify_headers(verify_parms *vh)
 				*eol = '\n';
 			}
 			*++eol = next;
-			p = eol + 1;
+			keep = eol + 1 - start;
 			continue;
 		}
 
@@ -1520,8 +1549,8 @@ static int verify_headers(verify_parms *vh)
 		if (!cont)
 			break;
 
-		p = start;
-		*p++ = next;
+		start[0] = next;
+		keep = 1;
 	}
 	
 	/*
@@ -1915,8 +1944,12 @@ static void dkimfilter(fl_parm *fl)
 	}
 	else
 	{
-		verify_message(parm);
+		if (vb_init(&parm->dyn.vb))
+			parm->dyn.rtc = -1;
+		else
+			verify_message(parm);
 	}
+	vb_clean(&parm->dyn.vb);
 
 	static char const resp_tempfail[] =
 		"432 Mail filter temporarily unavailable.\n";
