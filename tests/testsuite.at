@@ -502,7 +502,7 @@ ctl
 AT_CHECK(
 ZF_RUN,
 0,
-[550 Invalid author domain
+[554 Invalid author domain
 ],
 [INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, NOT whitelisted (spf_:sender.example, dkim_:--no)
 ])
@@ -775,7 +775,7 @@ ctl
 AT_CHECK(
 ZF_RUN,
 0,
-[550 DKIM signature required by policy
+[554 DKIM signature required by ADSP
 ],
 [])
 AT_CLEANUP

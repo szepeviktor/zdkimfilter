@@ -130,6 +130,12 @@ all_mode = @zdkimfilter_mode@
 # the result as dkim-adsp=nxdomain (for Nxdomain), dkim-adsp=fail (for All), or
 # dkim-adsp=discard (for Discardable).
 #
+# If any user may subscribe to a mailing list, enabling ADSP will result in
+# malfunctions when someone publishes a non-default ADSP policy.  Conversely,
+# unless you can prevent your users from subscribing to mailing lists, don't
+# publish an ADSP policy different from "unknown".  (Publishing "unknown"
+# results in better caching, though.)
+#
 # In order to enable ADSP, comment out the following line
 no_author_domain
 

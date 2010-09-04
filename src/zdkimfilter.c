@@ -154,13 +154,59 @@ static int filecopy(FILE *in, FILE *out)
 			return -1;
 	return ferror(in)? -1: 0;
 }
+
+typedef struct var_buf
+{
+	char *buf;
+	size_t alloc;
+} var_buf;
+
+static int vb_init(var_buf *vb)
+{
+	assert(vb);
+
+	return (vb->buf = (char*)malloc(vb->alloc = 8192)) != NULL;
+}
+
+#if !defined SSIZE_MAX
+#define SSIZE_MAX ((~((size_t) 0)) / 2)
+#endif
+
+static char* vb_fgets(var_buf *vb, size_t keep, FILE *fp)
+// return buf + keep if OK, NULL on error
+{
+	assert(vb && vb->buf && vb->alloc);
+	assert(keep < vb->alloc);
+	assert(fp);
+
+	size_t avail = vb->alloc - keep;
+
+	if (avail < 5000)
+	{
+		char *new_buf;
+		if (vb->alloc > SSIZE_MAX ||
+			(new_buf = realloc(vb->buf, vb->alloc *= 2)) == NULL)
+		{
+			free(vb->buf);
+			return vb->buf = NULL;
+		}
+
+		vb->buf = new_buf;
+		avail = vb->alloc - keep;
+	}
+	
+	return fgets(vb->buf + keep, avail - 1, fp);
+}
+
 // ----- end utilities
 
 typedef struct per_message_parm
 {
 	dkim_sigkey_t key;
 	char *selector;
+	char *domain;
 	char *authserv_id;
+	var_buf vb;
 	fl_msg_info info;
 	int rtc;
 	char nu[4];
@@ -178,6 +224,7 @@ typedef struct dkimfl_parm
 	const u_char **skip_hfields;
 	const u_char **spf_whitelist;
 	const u_char **dkim_whitelist;
+	const u_char **key_choice_header;
 
 	// end of pointers (some malloc'd but never free'd)
 	per_message_parm dyn;
@@ -379,6 +426,7 @@ static config_conf const conf[] =
 	CONFIG(skip_hfields, "space-separated, no colon", assign_array),
 	CONFIG(spf_whitelist, "space-separated domains", assign_array),
 	CONFIG(dkim_whitelist, "space-separated domains", assign_array),
+	CONFIG(key_choice_header, "key choice header", assign_array),
 	CONFIG(verbose, "int", assign_int),
 	CONFIG(dns_timeout, "secs", assign_int),
 	CONFIG(reputation_fail, "high int", assign_int),
@@ -545,109 +593,6 @@ static int parm_config(dkimfl_parm *parm, char const *fname)
 	}
 }
 
-static int read_key(dkimfl_parm *parm, char *fname)
-// read private key and selector from disk, return 0 or parm->dyn.rtc = -1
-{
-	char buf[PATH_MAX], buf2[PATH_MAX], *key = NULL, *selector = NULL;
-	FILE *fp = NULL;
-	struct stat st;
-	size_t dkl, fl;
-	
-	if ((dkl = strlen(parm->domain_keys)) +
-		(fl = strlen(fname)) + 2 >= PATH_MAX)
-	{
-		errno = ENAMETOOLONG;
-		goto error_exit;
-	}
-	
-	memcpy(buf, parm->domain_keys, dkl);
-	buf[dkl] = '/';
-	strcpy(&buf[dkl+1], fname);
-	if (stat(buf, &st))
-	{
-		if (errno == ENOENT)
-		{
-			if (parm->verbose >= 7)
-				fl_report(LOG_INFO,
-					"id=%s: not signing for %s: no key",
-					parm->dyn.info.id,
-					fname);
-			return 0;
-		}
-		goto error_exit;
-	}
-	
-	if ((key = malloc(st.st_size + 1)) == NULL ||
-		(fp = fopen(buf, "r")) == NULL ||
-		fread(key, st.st_size, 1, fp) != 1)
-			goto error_exit;
-	
-	fclose(fp);
-	fp = NULL;
-	key[st.st_size] = 0;
-
-	ssize_t lsz = readlink(buf, buf2, sizeof buf2);
-	if (lsz < 0 || (size_t)lsz >= sizeof buf2)
-	{
-		if (errno != EINVAL && parm->verbose || parm->verbose >= 8)
-			fl_report(errno == EINVAL? LOG_INFO: LOG_ALERT,
-				"id=%s: cannot readlink for %s: no selector in %zd: %s",
-				parm->dyn.info.id,
-				fname,
-				lsz,
-				strerror(errno));
-		if (errno != EINVAL && parm->tempfail_on_error)
-			goto error_exit_no_msg;
-	}
-	else
-	/*
-	* get selector from symbolic link base name, e.g.
-	*
-	*    example.com -> ../somewhere/my-selector
-	* or
-	*    example.com -> example.com.my-selector.private
-	*/
-	{
-		buf2[lsz] = 0;
-		char *name = strrchr(buf2, '/');
-		if (name)
-			++name;
-		else
-			name = buf2;
-		if (strincmp(name, fname, fl) == 0)
-		{
-			name += fl;
-			if (*name == '.')
-				++name;
-		}
-		
-		char *ext = strrchr(name, '.');
-		if (ext && (strcmp(ext, ".private") == 0 || strcmp(ext, ".pem") == 0))
-			*ext = 0;
-
-		if ((selector = strdup(name)) == NULL)
-			goto error_exit_no_msg;
-	}
-	parm->dyn.key = (dkim_sigkey_t) key;
-	parm->dyn.selector = selector;
-	return 0;
-
-	error_exit:
-		if (parm->verbose)
-			fl_report(LOG_ERR,
-				"id=%s: error reading key %s: %s",
-				parm->dyn.info.id,
-				fname,
-				strerror(errno));
-
-	error_exit_no_msg:
-		if (fp)
-			fclose(fp);
-		free(key);
-		free(selector);
-		return parm->dyn.rtc = -1;
-}
-
 static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 // return parm->dyn.rtc = -1 for unrecoverable error,
 // parm->dyn.rtc (0) otherwise
@@ -684,7 +629,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 		}
 
 		/*
-		* full header, including trailing \n, is in buffer
+		* full header is in buffer, dkim_header does not want the trailing \n
 		*/
 		size_t const len = eol - start;
 		if ((status = dkim_header(dkim, start, len)) != DKIM_STAT_OK)
@@ -773,36 +718,367 @@ static int copy_body(dkimfl_parm *parm, DKIM *dkim)
 	return parm->dyn.rtc;
 }
 
-static void sign_message(dkimfl_parm *parm)
-/*
-* possibly sign the message, set rtc 1 if signed, -1 if failed,
-* leave rtc as-is (0) if there is no need to rewrite.
-*/
+static int read_key(dkimfl_parm *parm, char *fname)
+// read private key and selector from disk, return 0 or parm->dyn.rtc = -1;
+// when returning 0, parm->dyn.key and parm->dyn.selector are set so as to
+// reflect results, they are assumed to be NULL on entry.
 {
-	assert(parm && parm->dyn.key == NULL);
+	assert(parm);
+	assert(parm->dyn.key == NULL);
+	assert(parm->dyn.selector == NULL);
 
+	char buf[PATH_MAX], buf2[PATH_MAX], *key = NULL, *selector = NULL;
+	FILE *fp = NULL;
+	struct stat st;
+	size_t dkl, fl;
+	
+	if ((dkl = strlen(parm->domain_keys)) +
+		(fl = strlen(fname)) + 2 >= PATH_MAX)
+	{
+		errno = ENAMETOOLONG;
+		goto error_exit;
+	}
+	
+	memcpy(buf, parm->domain_keys, dkl);
+	buf[dkl] = '/';
+	strcpy(&buf[dkl+1], fname);
+	if (stat(buf, &st))
+	{
+		if (errno == ENOENT)
+			return 0;  // OK, domain not configured
+
+		goto error_exit;
+	}
+	
+	if ((key = malloc(st.st_size + 1)) == NULL ||
+		(fp = fopen(buf, "r")) == NULL ||
+		fread(key, st.st_size, 1, fp) != 1)
+			goto error_exit;
+	
+	fclose(fp);
+	fp = NULL;
+	key[st.st_size] = 0;
+
+	/*
+	* readlink fails with EINVAL if the domain is not a symbolic link.
+	* It is not an error to omit selector specification.
+	*/
+	ssize_t lsz = readlink(buf, buf2, sizeof buf2);
+	if (lsz < 0 || (size_t)lsz >= sizeof buf2)
+	{
+		if (errno != EINVAL && parm->verbose || parm->verbose >= 8)
+			fl_report(errno == EINVAL? LOG_INFO: LOG_ALERT,
+				"id=%s: cannot readlink for %s: no selector in %zd: %s",
+				parm->dyn.info.id,
+				fname,
+				lsz,
+				strerror(errno));
+		if (errno != EINVAL)
+			goto error_exit_no_msg;
+	}
+	else
+	/*
+	* get selector from symbolic link base name, e.g.
+	*
+	*    example.com -> ../somewhere/my-selector
+	* or
+	*    example.com -> example.com.my-selector.private
+	*/
+	{
+		buf2[lsz] = 0;
+		char *name = strrchr(buf2, '/');
+		if (name)
+			++name;
+		else
+			name = buf2;
+		if (strincmp(name, fname, fl) == 0)
+		{
+			name += fl;
+			if (*name == '.')
+				++name;
+		}
+		
+		char *ext = strrchr(name, '.');
+		if (ext && (strcmp(ext, ".private") == 0 || strcmp(ext, ".pem") == 0))
+			*ext = 0;
+
+		if ((selector = strdup(name)) == NULL)
+			goto error_exit_no_msg;
+	}
+	parm->dyn.key = (dkim_sigkey_t) key;
+	parm->dyn.selector = selector;
+	return 0;
+
+	error_exit:
+		if (parm->verbose)
+			fl_report(LOG_ERR,
+				"id=%s: error reading key %s: %s",
+				parm->dyn.info.id,
+				fname,
+				strerror(errno));
+
+	error_exit_no_msg:
+		if (fp)
+			fclose(fp);
+		free(key);
+		free(selector);
+		return parm->dyn.rtc = -1;
+}
+
+static int default_key_choice(dkimfl_parm *parm)
+{
+	assert(parm);
+	assert(parm->dyn.key == NULL);
+	assert(parm->dyn.selector == NULL);
+	assert(parm->dyn.domain == NULL);
+
+	int rc = 0;
 	char *domain = strchr(parm->dyn.info.authsender, '@');
 	if (domain)
 		++domain;
 	else
 		domain = parm->default_domain; // is that how local domains work?
 
-	if (domain == NULL)
+	if (domain &&
+		(rc = read_key(parm, domain)) == 0)
+			parm->dyn.domain = domain;
+
+	return rc;
+}
+
+static int read_key_choice(dkimfl_parm *parm)
+{
+	assert(parm);
+	assert(parm->dyn.key == NULL);
+	assert(parm->dyn.selector == NULL);
+	assert(parm->dyn.domain == NULL);
+
+	if (parm->key_choice_header == NULL)
+		return default_key_choice(parm);
+
+	/*
+	* have to read headers to determine signing domain
+	*/
+
+	FILE* fp = fl_get_file(parm->fl);
+	assert(fp);
+	size_t keep;
+	var_buf *vb = &parm->dyn.vb;
+	
+	int rtc = 0;
+	size_t i, choice_max = 0;
+	struct choice_element
+	{
+		dkim_sigkey_t key;
+		char *selector;
+		char *domain;
+		char *header;  // alias, not malloced
+	} *choice;
+	
+	while (parm->key_choice_header[choice_max] != NULL)
+		++choice_max;
+	
+	if ((choice =
+		(struct choice_element*)calloc(choice_max, sizeof *choice)) == NULL)
+			return parm->dyn.rtc = -1;
+
+	/*
+	* key_choice_header may have duplicates which become active in case
+	* the relevant field appears multiple times.  However, the default
+	* domain ("-") cannot be duplicated.
+	*/
+	keep = 0;
+	for (i = 0; i < choice_max; ++i)
+	{
+		char *const  h = parm->key_choice_header[i];
+		if (h[0] == '-' && h[1] == 0)
+			++keep;
+		choice[i].header = h;
+	}
+	
+	if (keep)
+	{
+		for (i = 0; i < choice_max; ++i)
+		{
+			char *const  h = parm->key_choice_header[i];
+			if (h[0] == '-' && h[1] == 0)
+			{
+				rtc = default_key_choice(parm);
+				if (rtc)
+					break;
+				
+				choice[i].key = parm->dyn.key;
+				choice[i].selector = parm->dyn.selector;
+				choice[i].domain = parm->dyn.domain;
+				choice[i].header = NULL;
+				parm->dyn.domain = NULL;
+				parm->dyn.selector = NULL;
+				parm->dyn.key = NULL;
+				--keep;
+				break;
+			}
+		}
+		
+		if (keep)
+			for (i = 0; i < choice_max; ++i)
+			{
+				char *const  h = parm->key_choice_header[i];
+				if (h[0] == '-' && h[1] == 0)
+				{
+					choice[i].header = NULL;
+					if (--keep <= 0)
+						break;
+				}
+			}
+		
+	}
+
+	assert(keep == 0);
+
+	while (rtc == 0)
+	{
+		char *p = vb_fgets(vb, keep, fp);
+		char *eol = p? strchr(p, '\n'): NULL;
+
+		if (eol == NULL)
+		{
+			if (parm->verbose)
+				fl_report(LOG_ALERT,
+					"id=%s: header too long (%.20s...)",
+					parm->dyn.info.id, vb->buf? vb->buf: "malloc failed");
+			rtc = parm->dyn.rtc = -1;
+			break;
+		}
+
+		int const next = eol > p? fgetc(fp): '\n';
+		int const cont = next != EOF && next != '\n';
+		char *const start = vb->buf;
+		if (cont && isspace(next)) // wrapped
+		{
+			*++eol = next;
+			keep = eol + 1 - start;
+			continue;
+		}
+
+		/*
+		* full 0-terminated header field, including trailing \n, is in buffer;
+		* if it is a choice header, check if it leads to a signing key.
+		*/
+		for (i = 0; i < choice_max; ++i)
+		{
+			char *const h = choice[i].header;
+			if (h)
+			{
+				char *const val = hdrval(start, h);
+				if (val)
+				{
+					char *domain, *user;
+					if ((dkim_mail_parse(val, &user, &domain)) == 0)
+					{
+						rtc = read_key(parm, domain);
+						if (rtc)
+							break;
+						if ((choice[i].domain = strdup(domain)) == NULL)
+						{
+							rtc = parm->dyn.rtc = -1;
+							break;
+						}
+
+						choice[i].key = parm->dyn.key;
+						parm->dyn.key = NULL;
+						choice[i].selector = parm->dyn.selector;
+						parm->dyn.selector = NULL;
+					}
+
+					choice[i].header = NULL; // don't reuse it
+					if (parm->verbose >= 8)
+						fl_report(LOG_DEBUG,
+							"id=%s: matched header %s at choice %zd: "
+							"domain=%s, key=%s, selector=%s",
+							parm->dyn.info.id, h, i,
+							choice[i].domain? choice[i].domain: "NONE",
+							choice[i].key? "yes": "no",
+							choice[i].selector? choice[i].selector: "NONE");
+					break;
+				}
+			}
+		}
+
+		if (!cont)
+			break;
+
+		start[keep=1] = next;
+	}
+	
+	/*
+	* all header fields processed;
+	* keep 1st choice key and free the rest.
+	*/
+	keep = 1;
+
+	if (rtc == 0)
+		for (i = 0; i < choice_max; ++i)
+		{
+			if (keep)
+			{
+				char *const k = choice[i].key;
+				if (k)
+				{
+					parm->dyn.key = k;
+					parm->dyn.selector = choice[i].selector;
+					parm->dyn.domain = choice[i].domain;
+					keep = 0;
+				}
+				else
+				{
+					free(choice[i].selector);
+					free(choice[i].domain);
+				}
+			}
+			else
+			{
+				free(choice[i].key);
+				free(choice[i].selector);
+				free(choice[i].domain);
+			}
+		}
+	
+	rewind(fp);
+
+	return parm->dyn.rtc;
+}
+
+static void sign_message(dkimfl_parm *parm)
+/*
+* possibly sign the message, set rtc 1 if signed, -1 if failed,
+* leave rtc as-is (0) if there is no need to rewrite.
+*/
+{
+	assert(parm);
+	assert(parm->dyn.key == NULL);
+	assert(parm->dyn.selector == NULL);
+	assert(parm->dyn.domain == NULL);
+
+	if (read_key_choice(parm))
+		return;
+
+	if (parm->dyn.key == NULL)
 	{
 		if (parm->verbose >= 2)
 			fl_report(LOG_INFO,
-				"id=%s: not signing for %s: no domain",
+				"id=%s: not signing for %s: no %s",
 				parm->dyn.info.id,
-				parm->dyn.info.authsender);
+				parm->dyn.info.authsender,
+				parm->dyn.domain? "key": "domain");
 	}
-	else if (read_key(parm, domain) == 0 && parm->dyn.key)
+	else
 	{
 		char *selector = parm->dyn.selector? parm->dyn.selector:
 			parm->selector? parm->selector: "s";
 
 		DKIM_STAT status;
 		DKIM *dkim = dkim_sign(parm->dklib, parm->dyn.info.id, NULL,
-			parm->dyn.key, selector, domain,
+			parm->dyn.key, selector, parm->dyn.domain,
 			parm->header_canon_relaxed? DKIM_CANON_RELAXED: DKIM_CANON_SIMPLE,
 			parm->body_canon_relaxed? DKIM_CANON_RELAXED: DKIM_CANON_SIMPLE,
 			parm->sign_rsa_sha1? DKIM_SIGN_RSASHA1: DKIM_SIGN_RSASHA256,
@@ -813,7 +1089,7 @@ static void sign_message(dkimfl_parm *parm)
 				"id=%s: signing for %s with domain %s, selector %s",
 				parm->dyn.info.id,
 				parm->dyn.info.authsender,
-				domain,
+				parm->dyn.domain,
 				selector);
 		memset(parm->dyn.key, 0, strlen(parm->dyn.key));
 		free(parm->dyn.key);
