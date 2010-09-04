@@ -890,7 +890,7 @@ static int read_key_choice(dkimfl_parm *parm)
 	keep = 0;
 	for (i = 0; i < choice_max; ++i)
 	{
-		char *const  h = parm->key_choice_header[i];
+		char *h = parm->key_choice_header[i];
 		if (h[0] == '-' && h[1] == 0)
 			++keep;
 		choice[i].header = h;
@@ -922,7 +922,7 @@ static int read_key_choice(dkimfl_parm *parm)
 		if (keep)
 			for (i = 0; i < choice_max; ++i)
 			{
-				char *const  h = parm->key_choice_header[i];
+				char *h = parm->key_choice_header[i];
 				if (h[0] == '-' && h[1] == 0)
 				{
 					choice[i].header = NULL;
