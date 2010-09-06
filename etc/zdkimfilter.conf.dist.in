@@ -1,7 +1,7 @@
 # Config file for zdkimfilter
 # Syntax of each line: [ "#" comment ] | name [ "=" ] [ value ]
 # Backslashes ("\") can be used to wrap multiple physical lines into a single
-# logical one, up to 8K.
+# logical one, also comments.
 # Valid names are shown below.
 # Value types can be strings, array of strings, integers, or boolean,
 # according to the name. Types and default values are shown commented; all
@@ -44,7 +44,33 @@ all_mode = @zdkimfilter_mode@
 # sign_algo can be rsa-sha1 or rsa-sha256
 # sign_rsa_sha1 = N
 
-# Global selector
+# key_choice_header
+# Header fields from where to determine the signing domain.  This is an array
+# of strings, empty by default.  The elements of this array can be header
+# fields names or one the special symbols dash ("-") and star ("*"), in order
+# of decreasing preference.
+# Field names are searched in the message's header, and the domain name is
+# derived from any mailbox specification in their value.  For star ("*"), the
+# domain name is derived from the authenticated user id, if it contains a "@",
+# otherwise the default_domain is used.  For dash ("-"), the default_domain is
+# used.  A list of domain names and corresponding keys is obtained that way,
+# the first key, if any, is used for signing.  For example, with
+#
+# key_choice_header = from -
+#
+# then if a key and possibly a selector are defined for the domain in the From
+# header field, then they are used for signing, otherwise the default domain
+# (defined below) is used, irrespectively of the authenticated user id.
+#
+# The default value of this parameter is
+#
+# key_choice_header *
+
+# default_domain
+# used if no domain can be derived from authenticated user id or dash ("-").
+# String.  Empty by default.
+
+# selector
 # Each key should be a softlink; the basename of the linked to file
 # contains the selector. If the basename starts with the same string as the
 # link, i.e. the domain name, then that initial part and an optional dot
@@ -95,10 +121,6 @@ all_mode = @zdkimfilter_mode@
 
 # on some errors, return 432; otherwise, just let the msg through
 # tempfail_on_error
-
-
-# default_domain
-# used if no domain can be inferred from authenticated user id
 
 # no_spf
 # if Courier set Received-SPF: pass for sender or helo, report that in A-R

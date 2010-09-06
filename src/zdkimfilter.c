@@ -161,11 +161,18 @@ typedef struct var_buf
 	size_t alloc;
 } var_buf;
 
+#define VB_LINE_MAX 5000
+#if defined NDEBUG
+#define VB_INIT_ALLOC 8192
+#else
+#define VB_INIT_ALLOC (VB_LINE_MAX/2)
+#endif
+
 static inline int vb_init(var_buf *vb)
 // 0 on success
 {
 	assert(vb);
-	return (vb->buf = (char*)malloc(vb->alloc = 8192)) == NULL;
+	return (vb->buf = (char*)malloc(vb->alloc = VB_INIT_ALLOC)) == NULL;
 }
 
 static inline void vb_clean(var_buf *vb)
@@ -179,9 +186,10 @@ static inline void vb_clean(var_buf *vb)
 	}
 }
 
-static inline char const *vb_what(var_buf const* vb)
+static inline char const *vb_what(var_buf const* vb, FILE *fp)
 {
-	assert(vb);
+	assert(vb && fp);
+	if (feof(fp)) return "EOF reached";
 	return vb->buf? vb->buf: "malloc failed";
 }
 
@@ -198,7 +206,7 @@ static char* vb_fgets(var_buf *vb, size_t keep, FILE *fp)
 
 	size_t avail = vb->alloc - keep;
 
-	if (avail < 5000)
+	if (avail < VB_LINE_MAX)
 	{
 		char *new_buf;
 		if (vb->alloc > SSIZE_MAX ||
@@ -452,7 +460,7 @@ static config_conf const conf[] =
 	CONFIG(no_spf, "Y/N", assign_char),
 	CONFIG(no_signlen, "Y/N", assign_char),
 	CONFIG(tempfail_on_error, "Y/N", assign_char),
-	CONFIG(no_author_domain, "Y=skip \"From:\" check", assign_char),
+	CONFIG(no_author_domain, "Y=disable ADSP", assign_char),
 	CONFIG(no_reputation, "Y=skip reputation lookup", assign_char),
 	CONFIG(all_mode, "Y/N", assign_char),
 	CONFIG(sign_rsa_sha1, "Y/N, N for rsa-sha256", assign_char),
@@ -524,6 +532,7 @@ static int parm_config(dkimfl_parm *parm, char const *fname)
 
 	config_default(parm);
 	errno = 0;
+
 	FILE *fp = fopen(fname, "r");
 	if (fp == NULL)
 	{
@@ -534,80 +543,79 @@ static int parm_config(dkimfl_parm *parm, char const *fname)
 			"Cannot read %s: %s", fname, strerror(errno));
 		return -1;
 	}
-	else
+	
+	var_buf vb;
+	if (vb_init(&vb))
 	{
-		char buf[8192], *p = &buf[0], *const start = &buf[0],
-			*const ebuf = &buf[sizeof buf - 1];
-		int errs = 0;
-
-		while (fgets(p, ebuf - p, fp))
-		{
-			int ch = 0;
-			++line_no;
-			char *eol = strchr(p, '\n');
-			if (eol == NULL)
-				goto error_exit;
-
-			while (eol >= p && isspace(ch = *(unsigned char*)eol))
-				*eol-- = 0;
-
-			if (ch == '\\')
-			{
-				*eol = ' '; // this replaces the backslash
-				p = eol + 1;
-				if (p >= ebuf)
-					goto error_exit;
-				continue;
-			}
-
-			char *s = p = start;
-			while (isspace(ch = *(unsigned char*)s))
-				++s;
-			if (ch == '#' || ch == 0)
-				continue;
-
-			char *const name = s;
-			while (isalnum(ch = *(unsigned char*)s) || ch == '_')
-				++s;
-			*s = 0;
-			config_conf const *c = conf_name(name);
-			if (c == NULL)
-			{
-				fl_report(LOG_ERR,
-					"Invalid name %s at line %d in %s", name, line_no, fname);
-				++errs;
-				continue;
-			}
-			
-			*s = ch;
-			while (isspace(ch = *(unsigned char*)s) || ch == '=')
-				++s;
-			
-			char *const value = s;
-			
-			if ((*c->assign_fn)(parm, c, value) != 0)
-			{
-				fl_report(LOG_ERR,
-					"Invalid value %s for %s at line %d in %s",
-						value, c->name, line_no, fname);
-				++errs;
-			}
-		}
-		
-		fclose(fp);
-		if (errs == 0)
-			config_wrapup(parm);
-
-		return errs;
-	}
-
-	error_exit:
-	{
-		fl_report(LOG_ERR,
-			"Line too long at line %d in %s", line_no, fname);
 		fclose(fp);
 		return -1;
 	}
+
+	int errs = 0;
+	size_t keep = 0;
+	char *p;
+
+	while ((p = vb_fgets(&vb, keep, fp)) != NULL)
+	{
+		char *eol = p + strlen(p) - 1;
+		int ch = 0;
+		++line_no;
+
+		while (eol >= p && isspace(ch = *(unsigned char*)eol))
+			*eol-- = 0;
+
+		if (ch == '\\')
+		{
+			*eol = ' '; // this replaces the backslash
+			keep += eol + 1 - p;
+			continue;
+		}
+
+		/*
+		* full logic line
+		*/
+		keep = 0;
+
+		char *s = p = vb.buf;
+		while (isspace(ch = *(unsigned char*)s))
+			++s;
+		if (ch == '#' || ch == 0)
+			continue;
+
+		char *const name = s;
+		while (isalnum(ch = *(unsigned char*)s) || ch == '_')
+			++s;
+		*s = 0;
+		config_conf const *c = conf_name(name);
+		if (c == NULL)
+		{
+			fl_report(LOG_ERR,
+				"Invalid name %s at line %d in %s", name, line_no, fname);
+			++errs;
+			continue;
+		}
+	
+		*s = ch;
+		while (isspace(ch = *(unsigned char*)s) || ch == '=')
+			++s;
+	
+		char *const value = s;
+	
+		if ((*c->assign_fn)(parm, c, value) != 0)
+		{
+			fl_report(LOG_ERR,
+				"Invalid value %s for %s at line %d in %s",
+					value, c->name, line_no, fname);
+			++errs;
+		}
+	}
+
+	vb_clean(&vb);
+	fclose(fp);
+	if (errs == 0)
+		config_wrapup(parm);
+
+	return errs;
 }
 
 static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
@@ -625,14 +633,14 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 	for (;;)
 	{
 		char *p = vb_fgets(vb, keep, fp);
-		char *eol = strchr(p, '\n');
+		char *eol = p? strchr(p, '\n'): NULL;
 
 		if (eol == NULL)
 		{
 			if (parm->verbose)
 				fl_report(LOG_ALERT,
 					"id=%s: header too long (%.20s...)",
-					parm->dyn.info.id, vb_what(vb));
+					parm->dyn.info.id, vb_what(vb, fp));
 			return parm->dyn.rtc = -1;
 		}
 
@@ -845,7 +853,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 		return parm->dyn.rtc = -1;
 }
 
-static int default_key_choice(dkimfl_parm *parm)
+static int default_key_choice(dkimfl_parm *parm, int type)
 {
 	assert(parm);
 	assert(parm->dyn.key == NULL);
@@ -853,9 +861,10 @@ static int default_key_choice(dkimfl_parm *parm)
 	assert(parm->dyn.domain == NULL);
 
 	int rc = 0;
-	char *domain = strchr(parm->dyn.info.authsender, '@');
-	if (domain)
-		++domain;
+	char *domain;
+	if (type == '*' &&
+		(domain = strchr(parm->dyn.info.authsender, '@')) != NULL)
+			++domain;
 	else
 		domain = parm->default_domain; // is that how local domains work?
 
@@ -874,19 +883,14 @@ static int read_key_choice(dkimfl_parm *parm)
 	assert(parm->dyn.domain == NULL);
 
 	if (parm->key_choice_header == NULL)
-		return default_key_choice(parm);
+		return default_key_choice(parm, '*');
 
 	/*
 	* have to read headers to determine signing domain
 	*/
-
-	FILE* fp = fl_get_file(parm->fl);
-	assert(fp);
-	size_t keep;
-	var_buf *vb = &parm->dyn.vb;
 	
 	int rtc = 0;
-	size_t i, choice_max = 0;
+	size_t i, keep, count, choice_max = 0;
 	struct choice_element
 	{
 		dkim_sigkey_t key;
@@ -905,167 +909,182 @@ static int read_key_choice(dkimfl_parm *parm)
 	/*
 	* key_choice_header may have duplicates which become active in case
 	* the relevant field appears multiple times.  However, the default
-	* domain ("-") cannot be duplicated.
+	* domain ("-", or "*") cannot be duplicated.
+	*
+	* count "-", or "*" tokens
 	*/
 	keep = 0;
+	count = choice_max;
 	for (i = 0; i < choice_max; ++i)
 	{
 		char const* const h = parm->key_choice_header[i];
-		if (h[0] == '-' && h[1] == 0)
+		if (h[1] == 0 && strchr("-*", h[0]))
 			++keep;
 		choice[i].header = h;
 	}
 	
+	assert(count >= keep);
+
+	/*
+	* process each "-", or "*" tokens
+	*/
 	if (keep)
 	{
+		char seen[3] = {0, 0, 0};
+		count -= keep;
 		for (i = 0; i < choice_max; ++i)
 		{
 			char const *const  h = parm->key_choice_header[i];
-			if (h[0] == '-' && h[1] == 0)
+			if (h[1] == 0 && strchr("-*", h[0]))
 			{
-				rtc = default_key_choice(parm);
-				if (rtc)
-					break;
+				if (strchr(seen, h[0]) == NULL)
+				{
+					seen[strlen(seen)] = h[0];
+					assert(strlen(seen) < sizeof seen);
+
+					rtc = default_key_choice(parm, h[0]);
+					if (rtc)
+						break;
 				
-				choice[i].key = parm->dyn.key;
-				choice[i].selector = parm->dyn.selector;
-				choice[i].domain = parm->dyn.domain;
-				choice[i].header = NULL;
-				parm->dyn.domain = NULL;
-				parm->dyn.selector = NULL;
-				parm->dyn.key = NULL;
-				--keep;
+					choice[i].key = parm->dyn.key;
+					choice[i].selector = parm->dyn.selector;
+					if ((choice[i].domain = strdup(parm->dyn.domain)) == NULL)
+						rtc = parm->dyn.rtc = -1;
+
+					parm->dyn.key = NULL;
+					parm->dyn.selector = NULL;
+					parm->dyn.domain = NULL;
+				}
+				choice[i].header = NULL;				
+				if (--keep <= 0)
+					break;
+			}
+		}
+	}
+
+	assert(keep == 0 || rtc != 0);
+
+	/*
+	* Have to read header to find all values
+	*/
+	if (count > 0 && rtc == 0)
+	{
+		FILE* fp = fl_get_file(parm->fl);
+		assert(fp);
+		var_buf *vb = &parm->dyn.vb;
+
+		while (rtc == 0)
+		{
+			char *p = vb_fgets(vb, keep, fp);
+			char *eol = p? strchr(p, '\n'): NULL;
+
+			if (eol == NULL)
+			{
+				if (parm->verbose)
+					fl_report(LOG_ALERT,
+						"id=%s: header too long (%.20s...)",
+						parm->dyn.info.id, vb_what(vb, fp));
+				rtc = parm->dyn.rtc = -1;
 				break;
 			}
-		}
-		
-		if (keep)
+
+			int const next = eol > p? fgetc(fp): '\n';
+			int const cont = next != EOF && next != '\n';
+			char *const start = vb->buf;
+			if (cont && isspace(next)) // wrapped
+			{
+				*++eol = next;
+				keep = eol + 1 - start;
+				continue;
+			}
+
+			/*
+			* full 0-terminated header field, including trailing \n, is in buffer;
+			* if it is a choice header, check if it leads to a signing key.
+			*/
 			for (i = 0; i < choice_max; ++i)
 			{
-				char const *const h = parm->key_choice_header[i];
-				if (h[0] == '-' && h[1] == 0)
+				char const *const h = choice[i].header;
+				if (h)
 				{
-					choice[i].header = NULL;
-					if (--keep <= 0)
-						break;
-				}
-			}
-		
-	}
-
-	assert(keep == 0);
-
-	while (rtc == 0)
-	{
-		char *p = vb_fgets(vb, keep, fp);
-		char *eol = p? strchr(p, '\n'): NULL;
-
-		if (eol == NULL)
-		{
-			if (parm->verbose)
-				fl_report(LOG_ALERT,
-					"id=%s: header too long (%.20s...)",
-					parm->dyn.info.id, vb_what(vb));
-			rtc = parm->dyn.rtc = -1;
-			break;
-		}
-
-		int const next = eol > p? fgetc(fp): '\n';
-		int const cont = next != EOF && next != '\n';
-		char *const start = vb->buf;
-		if (cont && isspace(next)) // wrapped
-		{
-			*++eol = next;
-			keep = eol + 1 - start;
-			continue;
-		}
-
-		/*
-		* full 0-terminated header field, including trailing \n, is in buffer;
-		* if it is a choice header, check if it leads to a signing key.
-		*/
-		for (i = 0; i < choice_max; ++i)
-		{
-			char const *const h = choice[i].header;
-			if (h)
-			{
-				char *const val = hdrval(start, h);
-				if (val)
-				{
-					char *domain, *user;
-					if ((dkim_mail_parse(val, &user, &domain)) == 0)
+					char *const val = hdrval(start, h);
+					if (val)
 					{
-						rtc = read_key(parm, domain);
-						if (rtc)
-							break;
-						if ((choice[i].domain = strdup(domain)) == NULL)
+						char *domain, *user;
+						if ((dkim_mail_parse(val, &user, &domain)) == 0)
 						{
-							rtc = parm->dyn.rtc = -1;
-							break;
+							rtc = read_key(parm, domain);
+							if (rtc)
+								break;
+							if ((choice[i].domain = strdup(domain)) == NULL)
+							{
+								rtc = parm->dyn.rtc = -1;
+								break;
+							}
+
+							choice[i].key = parm->dyn.key;
+							parm->dyn.key = NULL;
+							choice[i].selector = parm->dyn.selector;
+							parm->dyn.selector = NULL;
 						}
 
-						choice[i].key = parm->dyn.key;
-						parm->dyn.key = NULL;
-						choice[i].selector = parm->dyn.selector;
-						parm->dyn.selector = NULL;
+						choice[i].header = NULL; // don't reuse it
+						count -= 1;
+						if (parm->verbose >= 8)
+							fl_report(LOG_DEBUG,
+								"id=%s: matched header \"%s\" at choice %zd: "
+								"domain=%s, key=%s, selector=%s",
+								parm->dyn.info.id, h, i,
+								choice[i].domain? choice[i].domain: "NONE",
+								choice[i].key? "yes": "no",
+								choice[i].selector? choice[i].selector: "NONE");
+						break;
 					}
-
-					choice[i].header = NULL; // don't reuse it
-					if (parm->verbose >= 8)
-						fl_report(LOG_DEBUG,
-							"id=%s: matched header %s at choice %zd: "
-							"domain=%s, key=%s, selector=%s",
-							parm->dyn.info.id, h, i,
-							choice[i].domain? choice[i].domain: "NONE",
-							choice[i].key? "yes": "no",
-							choice[i].selector? choice[i].selector: "NONE");
-					break;
 				}
 			}
+
+			if (!cont || count <= 0) // end of header or found all
+				break;
+
+			start[0] = next;
+			keep = 1;
 		}
-
-		if (!cont)
-			break;
-
-		start[0] = next;
-		keep = 1;
+		rewind(fp);
 	}
-	
+
 	/*
 	* all header fields processed;
-	* keep 1st choice key and free the rest.
+	* keep 1st choice key or 1st choice domain, and free the rest.
 	*/
-	keep = 1;
-
 	if (rtc == 0)
+	{
 		for (i = 0; i < choice_max; ++i)
-		{
-			if (keep)
+			if (choice[i].key)
 			{
-				char *const k = choice[i].key;
-				if (k)
-				{
-					parm->dyn.key = k;
-					parm->dyn.selector = choice[i].selector;
-					parm->dyn.domain = choice[i].domain;
-					keep = 0;
-				}
-				else
-				{
-					free(choice[i].selector);
-					free(choice[i].domain);
-				}
+				parm->dyn.key = choice[i].key;
+				parm->dyn.selector = choice[i].selector;
+				parm->dyn.domain = choice[i].domain;
+				memset(&choice[i], 0, sizeof choice[0]);
+				break;
 			}
-			else
-			{
-				free(choice[i].key);
-				free(choice[i].selector);
-				free(choice[i].domain);
-			}
-		}
-	
-	rewind(fp);
 
+		if (parm->dyn.key == NULL)
+			for (i = 0; i < choice_max; ++i)
+				if (choice[i].domain)
+				{
+					parm->dyn.domain = choice[i].domain;
+					memset(&choice[i], 0, sizeof choice[0]);
+					break;
+				}
+	}
+
+	for (i = 0; i < choice_max; ++i)
+	{
+		free(choice[i].key);
+		free(choice[i].selector);
+		free(choice[i].domain);
+	}
+	free(choice);	
 	return parm->dyn.rtc;
 }
 
@@ -1353,14 +1372,14 @@ static int verify_headers(verify_parms *vh)
 	for (;;)
 	{
 		char *p = vb_fgets(vb, keep, fp);
-		char *eol = strchr(p, '\n');
+		char *eol = p? strchr(p, '\n'): NULL;
 
 		if (eol == NULL)
 		{
 			if (parm->verbose)
 				fl_report(LOG_ALERT,
 					"id=%s: header too long (%.20s...)",
-					parm->dyn.info.id, vb_what(vb));
+					parm->dyn.info.id, vb_what(vb, fp));
 			return parm->dyn.rtc = -1;
 		}
 
@@ -1398,27 +1417,29 @@ static int verify_headers(verify_parms *vh)
 		else if ((s = hdrval(start, "Authentication-Results")) != NULL)
 		{
 			if ((s = skip_cfws(s)) == NULL)
-				zap = 1;
+				zap = 1; // bogus
 			else
 			{
 				char *const authserv_id = s, ch;
 				while (isalnum(ch = *(unsigned char*)s) || ch == '.')
 					++s;
 				if (s == authserv_id)
-					zap = 1;
+					zap = 1; // bogus
 				else
 				{
-					int my_zap = 0;
+					int maybe_attack = 0;
 					*s = 0;
 					/*
-					* An A-R field before any received must have been set by us
+					* An A-R field before any "Received" must have been set by us.
+					* After first "Received", if the authserv_id matches it may
+					* be an attack (or our mail coming back from a mailing list).
 					*/
 					if (parm->dyn.authserv_id &&
 						stricmp(authserv_id, parm->dyn.authserv_id) == 0)
-							my_zap = zap = 1;
+							maybe_attack = zap = 1;
 					if (dkim == NULL && parm->verbose >= 2) // log on 2nd pass only
 					{
-						if (my_zap)
+						if (maybe_attack)
 							fl_report(LOG_NOTICE,
 								"id=%s: removing Authentication-Results from %s",
 								parm->dyn.info.id, authserv_id);
@@ -1890,9 +1911,9 @@ static void verify_message(dkimfl_parm *parm)
 			if (vh.dkim_reputation_flag && vh.sig_domain)
 			{
 				fprintf(fp, ";\n  x-dkim-rep=%s (%d from %s) header.d=%s",
-				vh.dkim_reputation >= parm->reputation_fail? "fail":
-				vh.dkim_reputation <= parm->reputation_pass? "pass": "neutral",
-				vh.dkim_reputation, DKIM_REP_ROOT, vh.sig_domain);
+					vh.dkim_reputation >= parm->reputation_fail? "fail":
+					vh.dkim_reputation <= parm->reputation_pass? "pass": "neutral",
+						vh.dkim_reputation, DKIM_REP_ROOT, vh.sig_domain);
 				++auth_given;
 			}
 			

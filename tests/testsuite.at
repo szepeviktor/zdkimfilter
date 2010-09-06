@@ -104,6 +104,8 @@ SPF record. We relay on Courier's SPF checking for that.
 m4_define([ZF_MESSAGE],
 [$1Received: from server.example by test.example with ESMTP
 Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
+Received-SPF: pass SPF=HELO sender=server.sender.example;
+Authentication-Results: (with a (nested) comment) mail.example.com; none
 $2Received: from mail.example.com by server.example with ESMTPA
 $3][ZF_MESSAGE_BODY])
 
@@ -114,8 +116,8 @@ Received-SPF: none SPF=MAILFROM sender=someone@sender.example;
 $2Received: from mail.example.com by server.example with ESMTPA
 $3][ZF_MESSAGE_BODY])
 
-# private author key ( domain, selector)
-m4_define([ZF_PRIVATEKEY], [AT_DATA(m4_if([$#], [2], [$2], [$1]),
+# private author key ( file, link-list)
+m4_define([ZF_PRIVATEKEY], [AT_DATA([$1],
 [-----BEGIN RSA PRIVATE KEY-----
 MIICXAIBAAKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk
 5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9
@@ -132,10 +134,35 @@ FRT0C7YFFGIxGsHo2OsCQF2PGJ3yKn2l9VX+M6qj4hE+POdgnJLqNMp5kRIBj9De
 rlKqG0nWxNFVhVzXsgeNUTDCmVm3cdODa94wXn9WNvY=
 -----END RSA PRIVATE KEY-----
 ])
-m4_if([$#], [2],
-[$LN_S $2 $1
+m4_if([$#], [1],, m4_foreach([link], [$2],
+[$LN_S $1 link
+]))
 ])
+
+# default parm from tmp onward
+m4_define([ZF_DEFAULT_PARM_TMP],
+[tmp                  = NULL (temp directory)
+sign_hfields         = NULL (space-separated, no colon)
+skip_hfields         = NULL (space-separated, no colon)
+spf_whitelist        = NULL (space-separated domains)
+dkim_whitelist       = NULL (space-separated domains)
+key_choice_header    = NULL (key choice header)
+verbose              = 0 (int)
+dns_timeout          = 0 (secs)
+reputation_fail      = 32767 (high int)
+reputation_pass      = -32768 (low int)
+add_a_r_anyway       = N (Y/N)
+no_spf               = N (Y/N)
+no_signlen           = N (Y/N)
+tempfail_on_error    = N (Y/N)
+no_author_domain     = N (Y=disable ADSP)
+no_reputation        = N (Y=skip reputation lookup)
+all_mode             = N (Y/N)
+sign_rsa_sha1        = N (Y/N, N for rsa-sha256)
+header_canon_relaxed = N (Y/N, N for simple)
+body_canon_relaxed   = N (Y/N, N for simple)
 ])
+
 
 #
 AT_INIT
@@ -152,28 +179,7 @@ ZF_RUN,
 [domain_keys          = . (key's directory)
 selector             = NULL (global)
 default_domain       = NULL (dns)
-tmp                  = NULL (temp directory)
-sign_hfields         = NULL (space-separated, no colon)
-skip_hfields         = NULL (space-separated, no colon)
-spf_whitelist        = NULL (space-separated domains)
-dkim_whitelist       = NULL (space-separated domains)
-key_choice_header    = NULL (key choice header)
-verbose              = 0 (int)
-dns_timeout          = 0 (secs)
-reputation_fail      = 32767 (high int)
-reputation_pass      = -32768 (low int)
-add_a_r_anyway       = N (Y/N)
-no_spf               = N (Y/N)
-no_signlen           = N (Y/N)
-tempfail_on_error    = N (Y/N)
-no_author_domain     = N (Y=skip "From:" check)
-no_reputation        = N (Y=skip reputation lookup)
-all_mode             = N (Y/N)
-sign_rsa_sha1        = N (Y/N, N for rsa-sha256)
-header_canon_relaxed = N (Y/N, N for simple)
-body_canon_relaxed   = N (Y/N, N for simple)
-],
-[])
+ZF_DEFAULT_PARM_TMP], [])
 AT_CLEANUP
 
 #
@@ -197,38 +203,16 @@ AT_CLEANUP
 AT_SETUP([test backslash for parameter line continuation])
 ZF_CONFIG(0,
 [default_domain should be a domain name, but here we use it to test that\
-a rather legthy string can be put into that variable. In facts, it is\
-just a string variable...
-])
+a rather lengthy string can be put into that variable. In facts, it is\
+just a string variable...])
 ZF_BATCH([test1])
 AT_CHECK(
 ZF_RUN,
 0,
 [domain_keys          = . (key's directory)
 selector             = NULL (global)
-default_domain       = should be a domain name, but here we use it to test that a rather legthy string can be put into that variable. In facts, it is just a string variable... (dns)
-tmp                  = NULL (temp directory)
-sign_hfields         = NULL (space-separated, no colon)
-skip_hfields         = NULL (space-separated, no colon)
-spf_whitelist        = NULL (space-separated domains)
-dkim_whitelist       = NULL (space-separated domains)
-key_choice_header    = NULL (key choice header)
-verbose              = 0 (int)
-dns_timeout          = 0 (secs)
-reputation_fail      = 32767 (high int)
-reputation_pass      = -32768 (low int)
-add_a_r_anyway       = N (Y/N)
-no_spf               = N (Y/N)
-no_signlen           = N (Y/N)
-tempfail_on_error    = N (Y/N)
-no_author_domain     = N (Y=skip "From:" check)
-no_reputation        = N (Y=skip reputation lookup)
-all_mode             = N (Y/N)
-sign_rsa_sha1        = N (Y/N, N for rsa-sha256)
-header_canon_relaxed = N (Y/N, N for simple)
-body_canon_relaxed   = N (Y/N, N for simple)
-],
-[])
+default_domain       = should be a domain name, but here we use it to test that a rather lengthy string can be put into that variable. In facts, it is just a string variable... (dns)
+ZF_DEFAULT_PARM_TMP], [])
 AT_CLEANUP
 
 #
@@ -273,6 +257,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@example.com, stat=0) rep=0
+INFO:zdkimfilter[[0]]:id=verifymsg: found Authentication-Results by mail.example.com
 INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
 ])
 AT_CLEANUP
@@ -337,7 +322,7 @@ no_reputation
 default_domain example.com
 selector given
 ])
-ZF_PRIVATEKEY([example.com], [linked])
+ZF_PRIVATEKEY([linked], [example.com])
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctl], [Msignmsg
 uauthsmtp
@@ -1074,4 +1059,158 @@ head -n 1 mail, 0,
 ], [])
 AT_CLEANUP
 
+# common setup for dynamic signing domain determination
+
+# ZF_MESSAGE_DYN(fromdomain, lines-before, lines-after)
+m4_define([ZF_MESSAGE_DYN],
+[$2Message-ID: <123456@author.example>
+Received: from test.example
+ by another.example
+Date: Sun, 05 Sep 2010 15:42:58 +0200
+From: Author <user@$1>
+MIME-Version: 1.0
+To: (undisclosed recipients)
+Subject: Test multiple signatures
+$3Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+This is going to be signed by the domain determined from the header:
+the relevant field names have to be configured.
+
+The header of the message has to be read an additional time in order
+to check what field, if any, leads to the signing domain.
+])
+
+# ZF_DATA_DYN(message)
+m4_define([ZF_DATA_DYN],
+[AT_DATA([mail], [$1])
+AT_DATA([ctl], [Mdyndom
+uauthsmtp
+iuser@example.com
+])
+ZF_BATCH([mail
+ctl
+
+])])
+
+# ZF_EXPECT(domain_expected), or ZF_EXPECT(NO, domain-or-key)
+m4_define([ZF_EXPECT],
+[AT_CHECK(
+ZF_RUN,
+0,
+m4_if([$1], [NO], [250 not filtered.
+], [250 Ok.
+]),
+m4_if([$1], [NO],
+[[[INFO:zdkimfilter[0]:id=dyndom: not signing for user@example.com: no $2
+INFO:zdkimfilter[0]:id=dyndom: response: 250 not filtered.
+]]],
+[[[INFO:zdkimfilter[0]:id=dyndom: signing for user@example.com with domain $1, selector linked
+INFO:zdkimfilter[0]:id=dyndom: response: 250 Ok.
+]]]))])
+
+# one field, given
+AT_SETUP([Signing after the From field])
+ZF_CONFIG(6, [no_author_domain
+no_reputation
+default_domain example.com
+key_choice_header from
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([example.org])
+AT_CLEANUP
+
+# one field, not given
+AT_SETUP([Not signing for missing choice field])
+ZF_CONFIG(6, [no_author_domain
+no_reputation
+default_domain example.com
+key_choice_header no-such-header-field
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([NO], [domain])
+AT_CLEANUP
+
+# one field, given, but the key is missing
+AT_SETUP([Not signing for missing key])
+ZF_CONFIG(6, [no_author_domain
+no_reputation
+default_domain example.com
+selector given
+key_choice_header from
+])
+ZF_PRIVATEKEY([linked], [[example.com]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([NO], [key])
+AT_CLEANUP
+
+# default default_domain
+AT_SETUP([Default domain even if login domain])
+ZF_CONFIG(6, [no_author_domain
+no_reputation
+default_domain example.org
+key_choice_header - *
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([example.org])
+AT_CLEANUP
+
+# default login domain
+AT_SETUP([Login domain preferred])
+ZF_CONFIG(6, [no_author_domain
+no_reputation
+default_domain example.org
+key_choice_header * -
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([example.com])
+AT_CLEANUP
+
+# from overrides default
+AT_SETUP([Login domain not preferred])
+ZF_CONFIG(6, [no_author_domain
+no_reputation
+default_domain example.org
+key_choice_header from *
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([example.org])
+AT_CLEANUP
+
+# repeated field overrides default
+AT_SETUP([Custom field, second instance overrides])
+ZF_CONFIG(6, [no_author_domain
+no_reputation
+default_domain example.com
+key_choice_header from x-repeated x-repeated *
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([another.example],
+[X-Repeated: me@yet.another.example (format like mailbox)
+],
+[X-Repeated: (this works) <x@example.org>
+])])
+ZF_EXPECT([example.org])
+AT_CLEANUP
+
+# repeated field does not overrides default
+AT_SETUP([Custom field, second instance does not override])
+ZF_CONFIG(6, [no_author_domain
+no_reputation
+default_domain example.com
+key_choice_header from x-repeated * x-repeated
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([another.example],
+[X-Repeated: me@yet.another.example (format like mailbox)
+],
+[X-Repeated: (this worked before) <x@example.org>
+])])
+ZF_EXPECT([example.com])
+AT_CLEANUP
 
