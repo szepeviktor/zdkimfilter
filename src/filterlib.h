@@ -51,7 +51,7 @@ typedef struct fl_init_parm
 
 typedef struct fl_msg_info
 {
-	char *id, *authsender; //freed by caller
+	char *id, *authsender, *frommta; //freed by caller
 	int is_relayclient;
 	int count;
 } fl_msg_info;
@@ -86,6 +86,7 @@ int fl_get_msg_info(fl_parm *, fl_msg_info *);
 __attribute__ ((format(printf, 2, 3)))
 #endif
 void fl_report(int, char const*, ...);
+fl_callback fl_set_after_filter(fl_parm *, fl_callback);
 
 #define FILTERLIB_H_INCLUDED 1
 #endif

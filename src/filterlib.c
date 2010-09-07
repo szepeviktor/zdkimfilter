@@ -97,6 +97,7 @@ struct filter_lib_struct
 	char *argv0;
 
 	fl_callback filter_fn;
+	fl_callback after_filter;
 
 	int ctl_count;
 	unsigned int verbose:4;
@@ -246,13 +247,21 @@ int fl_keep_running(void)
 	return signal_timed_out == 0 && signal_break == 0;
 }
 
+fl_callback fl_set_after_filter(fl_parm *fl, fl_callback after_filter)
+{
+	fl_callback old = fl->after_filter;
+	fl->after_filter = after_filter;
+	return old;
+}
+
+
 void fl_pass_message(fl_parm*fl, char const *resp)
 /*
 * see courier/cdfilters.C for meaning of responses:
 * each line should start with three digits; if the first digit is
 * '0', '4', or '5', execution of filters is stopped and the response
-* is given to the remote client --replacing the first '0' with '2',
-* or rejecting the message.
+* is given to the remote client --replacing the first '0' in the first
+* line with '2', or rejecting the message.
 * 2xx responses are not parsed. However, we log them.
 */
 {
@@ -444,6 +453,10 @@ static int msg_info_cb(char *s, void *arg)
 
 		case 'i':
 			info->authsender = strdup(s);
+			break;
+
+		case 'f':
+			info->frommta = strdup(s);
 			break;
 
 		default:
@@ -916,7 +929,8 @@ static void fl_runchild(fl_parm* fl)
 		}
 		
 		/* 
-		** give response
+		** give response --Courier (cdfilters.C) closes the connection when it
+		** gets the last line of the response, and proceeds accordingly.
 		*/
 		if (rtc == 0 && resp == NULL)
 		{
@@ -946,6 +960,13 @@ static void fl_runchild(fl_parm* fl)
 				break;
 			}
 			w += p;
+		}
+		
+		if (fl->after_filter)
+		{
+			close(fd_out);
+			fl->in = fl->out = -1;
+			(*fl->after_filter)(fl);
 		}
 		exit(rtc);
 	}
@@ -1467,7 +1488,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			fl.in = fl.out = fd;
 			fl_runchild(&fl);
 			close(fd);
-		}		
+		}
 	}
 
 	if ((fl.testing == 0 && fl.verbose >= 3 || fl.verbose >= 8) &&

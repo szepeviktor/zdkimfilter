@@ -41,6 +41,7 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include <errno.h>
 #include <syslog.h> // for LOG_DEBUG,... constants
 #include <unistd.h>
+#include <fcntl.h>
 #include <opendkim/dkim.h>
 #include <config.h>
 #include <stddef.h>
@@ -225,12 +226,39 @@ static char* vb_fgets(var_buf *vb, size_t keep, FILE *fp)
 
 // ----- end utilities
 
+typedef struct stats_info
+{
+	DKIM *dkim;
+	char *ct, *cte;
+	char *client_ip;
+	char *jobid;
+	unsigned rhcnt;
+} stats_info;
+
+static void clean_stats_info_content(stats_info *stats)
+// only called by clean_stats
+{
+	if (stats)
+	{
+		if (stats->dkim)
+		{
+			dkim_free(stats->dkim);
+			stats->dkim = NULL;
+		}
+		free(stats->ct);
+		free(stats->cte);
+		free(stats->client_ip);
+		// don't free(stats->id); it is in dyn.info
+	}
+}
+
 typedef struct per_message_parm
 {
 	dkim_sigkey_t key;
 	char *selector;
 	char *domain;
 	char *authserv_id;
+	stats_info *stats;
 	var_buf vb;
 	fl_msg_info info;
 	int rtc;
@@ -245,6 +273,7 @@ typedef struct dkimfl_parm
 	char *selector;
 	char *default_domain;
 	char *tmp;
+	char *stats_file;
 	const u_char **sign_hfields;
 	const u_char **skip_hfields;
 	const u_char **spf_whitelist;
@@ -255,6 +284,7 @@ typedef struct dkimfl_parm
 	per_message_parm dyn;
 	int verbose;
 	int dns_timeout;
+	int stats_wait;
 	int reputation_fail, reputation_pass;
 	char add_a_r_anyway;
 	char no_spf;
@@ -269,6 +299,7 @@ typedef struct dkimfl_parm
 	
 } dkimfl_parm;
 
+#define DEFAULT_STATS_WAIT 1200 /* 20 minutes */
 static void config_default(dkimfl_parm *parm) // only non-zero...
 {
 	static char const keys[] = COURIER_SYSCONF_INSTALL "/filters/keys";
@@ -276,6 +307,7 @@ static void config_default(dkimfl_parm *parm) // only non-zero...
 	parm->reputation_fail = 32767;
 	parm->reputation_pass = -32768;
 	parm->verbose = 3;
+	parm->stats_wait = DEFAULT_STATS_WAIT;
 }
 
 static void no_trailing_slash(char *s)
@@ -297,14 +329,22 @@ static void config_wrapup(dkimfl_parm *parm)
 				parm->reputation_fail, parm->reputation_pass);
 		parm->reputation_fail = INT_MAX;
 	}
-	
+
 	if (parm->dns_timeout < 0)
 	{
 		fl_report(LOG_WARNING,
 			"dns_timeout cannot be negative (%d)", parm->dns_timeout);
 		parm->dns_timeout = 0;
 	}
-	
+
+	if (parm->stats_wait <= 0)
+	{
+		if (parm->stats_wait <= 0)
+			fl_report(LOG_WARNING,
+				"stats_wait must be positive (was %d)", parm->stats_wait);
+		parm->stats_wait = DEFAULT_STATS_WAIT;
+	}
+
 	if (parm->verbose < 0)
 		parm->verbose = 0;
 
@@ -447,6 +487,7 @@ static config_conf const conf[] =
 	CONFIG(selector, "global", assign_ptr),
 	CONFIG(default_domain, "dns", assign_ptr),
 	CONFIG(tmp, "temp directory", assign_ptr),
+	CONFIG(stats_file, "stats file path", assign_ptr),
 	CONFIG(sign_hfields, "space-separated, no colon", assign_array),
 	CONFIG(skip_hfields, "space-separated, no colon", assign_array),
 	CONFIG(spf_whitelist, "space-separated domains", assign_array),
@@ -454,6 +495,7 @@ static config_conf const conf[] =
 	CONFIG(key_choice_header, "key choice header", assign_array),
 	CONFIG(verbose, "int", assign_int),
 	CONFIG(dns_timeout, "secs", assign_int),
+	CONFIG(stats_wait, "secs", assign_int),	
 	CONFIG(reputation_fail, "high int", assign_int),
 	CONFIG(reputation_pass, "low int", assign_int),
 	CONFIG(add_a_r_anyway, "Y/N", assign_char),
@@ -1353,6 +1395,16 @@ static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	return DKIM_CBSTAT_CONTINUE;
 }
 
+static void clean_stats(dkimfl_parm *parm)
+{
+	assert(parm);
+	assert(parm->dyn.stats);
+	
+	clean_stats_info_content(parm->dyn.stats);
+	free(parm->dyn.stats);
+	parm->dyn.stats = NULL;
+}
+	
 static int verify_headers(verify_parms *vh)
 // return parm->dyn.rtc = -1 for unrecoverable error,
 // parm->dyn.rtc (0) otherwise
@@ -1380,6 +1432,8 @@ static int verify_headers(verify_parms *vh)
 				fl_report(LOG_ALERT,
 					"id=%s: header too long (%.20s...)",
 					parm->dyn.info.id, vb_what(vb, fp));
+			if (vb->buf == NULL)
+				clean_stats(parm);
 			return parm->dyn.rtc = -1;
 		}
 
@@ -1420,7 +1474,8 @@ static int verify_headers(verify_parms *vh)
 				zap = 1; // bogus
 			else
 			{
-				char *const authserv_id = s, ch;
+				char *const authserv_id = s;
+				int ch;
 				while (isalnum(ch = *(unsigned char*)s) || ch == '.')
 					++s;
 				if (s == authserv_id)
@@ -1455,10 +1510,48 @@ static int verify_headers(verify_parms *vh)
 			vh->a_r_count += zap;
 		}
 		
-		// (only on first pass) cache courier's SPF results, get authserv_id
+		// (only on first pass and Received*)
+		// cache courier's SPF results, get authserv_id, count Received
 		else if (dkim && strincmp(start, "Received", 8) == 0)
 		{
-			if (!parm->no_spf && vh->received_spf < 2 &&
+			if ((s = hdrval(start, "Received")) != NULL)
+			{
+				if (parm->dyn.stats)
+					parm->dyn.stats->rhcnt += 1;
+
+				if (parm->dyn.authserv_id == NULL && seen_received == 0)
+				{
+					seen_received = 1;
+					while (s && parm->dyn.authserv_id == NULL)
+					{
+						s = strstr(s, " by ");
+						if (s)
+						{
+							s += 4;
+							while (isspace(*(unsigned char*)s))
+								++s;
+							char *const authserv_id = s;
+							int ch;
+							while (isalnum(ch = *(unsigned char*)s) || ch == '.')
+								++s;
+							char *ea = s;
+							while (isspace(*(unsigned char*)s))
+								++s;
+							*ea = 0;
+							if (strincmp(s, "with ", 5) == 0 && s > ea &&
+								(parm->dyn.authserv_id = strdup(authserv_id)) == NULL)
+							{
+								clean_stats(parm);
+								return parm->dyn.rtc = -1;
+							}
+
+							*ea = ch;
+						}
+					}
+				}
+			}
+
+			else if (!parm->no_spf && vh->received_spf < 2 &&
 				(s = hdrval(start, "Received-SPF")) != NULL)
 			{
 				++vh->received_spf;
@@ -1497,33 +1590,39 @@ static int verify_headers(verify_parms *vh)
 					}
 				}
 			}
-			
-			if (parm->dyn.authserv_id == NULL && seen_received == 0 &&
-				(s = hdrval(start, "Received")) != NULL)
+		}
+
+		// (only on first pass and stats enabled) save stats' ct and cte
+		else if (dkim && parm->dyn.stats)
+		{
+			char **target = NULL;
+			if ((s = hdrval(start, "Content-Type")) != NULL)
+				target = &parm->dyn.stats->ct;
+			else if ((s = hdrval(start, "Content-Transfer-Encoding")) != NULL)
+				target = &parm->dyn.stats->cte;
+
+			if (target)
 			{
-				seen_received = 1;
-				while (s && parm->dyn.authserv_id == NULL)
+				while (isspace(*(unsigned char*)s))
+					++s;
+				char *const tok = s;
+				int ch;
+				while ((ch = *(unsigned char*)s) != 0 && ch != ';')
+					++s;
+				*s = 0;
+				*target = strdup(tok);
+				*s = ch;
+				if ((s = *target) != NULL)
 				{
-					s = strstr(s, " by ");
-					if (s)
+					while ((ch = *(unsigned char*)s) != 0)
 					{
-						s += 4;
-						while (isspace(*(unsigned char*)s))
-							++s;
-						char *const authserv_id = s, ch;
-						while (isalnum(ch = *(unsigned char*)s) || ch == '.')
-							++s;
-						char *ea = s;
-						while (isspace(*(unsigned char*)s))
-							++s;
-						*ea = 0;
-						if (strincmp(s, "with ", 5) == 0 && s > ea &&
-							(parm->dyn.authserv_id = strdup(authserv_id)) == NULL)
-								return parm->dyn.rtc = -1;
-						
-						*ea = ch;						
+						if (isspace(ch))
+							*s = ' ';
+						++s;
 					}
 				}
+				else
+					clean_stats(parm);
 			}
 		}
 
@@ -1632,6 +1731,7 @@ static void verify_message(dkimfl_parm *parm)
 	if (dkim == NULL || status != DKIM_STAT_OK)
 	{
 		parm->dyn.rtc = -1;
+		clean_stats(parm);
 		return;
 	}
 
@@ -1811,7 +1911,10 @@ static void verify_message(dkimfl_parm *parm)
 			if (fp == NULL)
 			{
 				parm->dyn.rtc = -1;
-				dkim_free(dkim);
+				if (parm->dyn.stats)
+					parm->dyn.stats->dkim = dkim;
+				else
+					dkim_free(dkim);
 				return;
 			}
 
@@ -1920,7 +2023,10 @@ static void verify_message(dkimfl_parm *parm)
 			if (auth_given <= 0)
 				fputs("; none", fp);
 			fputc('\n', fp);
-			dkim_free(dkim);
+			if (parm->dyn.stats)
+				parm->dyn.stats->dkim = dkim;
+			else
+				dkim_free(dkim);
 			dkim = NULL;
 
 			if (log_written == 0 && parm->verbose >= 7)
@@ -1945,18 +2051,93 @@ static void verify_message(dkimfl_parm *parm)
 				parm->dyn.rtc = -1;
 		}
 	}
+
 	if (dkim)
-		dkim_free(dkim);
+		if (parm->dyn.stats)
+			parm->dyn.stats->dkim = dkim;
+		else
+			dkim_free(dkim);
+}
+
+static void set_client_ip(dkimfl_parm *parm)
+{
+	char *s;
+	if (parm->dyn.stats && (s = parm->dyn.info.frommta) != NULL)
+	{
+		if (strincmp(s, "dsn;", 4) == 0)
+		{
+			size_t len = strlen(s);
+			if (len > 5 && s[len-1] == ')' && s[len-2] == ']')
+			{
+				char *a = strrchr(s, '[');
+				if (a && a < &s[len-3])
+				{
+					s[len-2] = 0;
+					if ((parm->dyn.stats->client_ip = strdup(a+1)) == NULL)
+						clean_stats(parm);
+					s[len-2] = ']';
+				}
+			}
+		}
+	}
+}
+
+static void write_stats(dkimfl_parm *parm, FILE *fp)
+{
+}
+
+static void after_filter_stats(fl_parm *fl)
+{
+	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	
+	set_client_ip(parm);
+	if (parm->dyn.stats)
+	{
+		FILE *fp = fopen(parm->stats_file, "a");
+		if (fp)
+		{
+			int fd = fileno(fp), rc, save_errno;
+			struct flock lock;
+		
+			memset(&lock, 0, sizeof lock);
+			lock.l_type = F_WRLCK;
+			lock.l_whence = SEEK_SET;
+			lock.l_len = 1;
+
+			fl_alarm(parm->stats_wait);
+			rc = fcntl(fd, F_SETLKW, &lock);
+			save_errno = errno;
+			fl_alarm(0);
+			if (rc == 0)
+				write_stats(parm, fp);
+			else
+				fl_report(LOG_ALERT,
+					"id=%s: cannot lock %s: %s (%skilled)",
+					parm->dyn.info.id,
+					parm->stats_file,
+					strerror(errno),
+					fl_keep_running()? "not ": "");
+
+			fclose(fp); // this releases the lock as well
+		}
+		else
+			fl_report(LOG_ALERT,
+				"id=%s: cannot open %s: %s",
+				parm->dyn.info.id,
+				parm->stats_file,
+				strerror(errno));
+	}
 }
 
 static void dkimfilter(fl_parm *fl)
 {
+	static char default_jobid[] = "NULL";
 	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
 	parm->fl = fl;
 
 	fl_get_msg_info(fl, &parm->dyn.info);
 	if (parm->dyn.info.id == NULL)
-		parm->dyn.info.id = "NULL";
+		parm->dyn.info.id = default_jobid;
 
 	if (parm->dyn.info.is_relayclient)
 	{
@@ -1968,7 +2149,24 @@ static void dkimfilter(fl_parm *fl)
 		if (vb_init(&parm->dyn.vb))
 			parm->dyn.rtc = -1;
 		else
+		{
+			/*
+			* if a stats file is configured, prepare stats info and
+			* in case no error occurs, request after_filter processing.
+			*
+			* functions may call clean_stats to stop it
+			*/
+			if (parm->dyn.info.id != default_jobid &&
+				parm->stats_file &&
+				(parm->dyn.stats = malloc(sizeof *parm->dyn.stats)) != NULL)
+			{
+				memset(parm->dyn.stats, 0, sizeof *parm->dyn.stats);
+				parm->dyn.stats->jobid = parm->dyn.info.id;
+			}
 			verify_message(parm);
+			if (parm->dyn.stats)
+				fl_set_after_filter(parm->fl, after_filter_stats);
+		}
 	}
 	vb_clean(&parm->dyn.vb);
 
@@ -2012,7 +2210,7 @@ static void dkimfilter(fl_parm *fl)
 			"id=%s: response: %.*s", parm->dyn.info.id, l, msg);
 	}
 
-	// TODO: free dyn allocated stuff
+	// TODO: free dyn allocated stuff (almost useless at this point)
 }
 
 static void set_keyfile(fl_parm *fl)
