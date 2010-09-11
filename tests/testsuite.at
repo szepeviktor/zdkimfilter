@@ -359,6 +359,7 @@ stats_file ./test-stats
 m4_define([ZF_CTLBATCH],
 [AT_DATA([ctl], [Mverifymsg
 usmtp
+[fdns; [192.0.2.123] (server.example [192.0.2.158])]
 ])
 ZF_POLICYFILE
 ZF_BATCH([test2

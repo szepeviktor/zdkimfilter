@@ -464,14 +464,14 @@ static int msg_info_cb(char *s, void *arg)
 			break;
 	}
 	
-	return ++info->count == 3;
+	return ++info->count == 4;
 }
 
 int fl_get_msg_info(fl_parm *fl, fl_msg_info *info)
 {
 	memset(info, 0, sizeof *info);
-	read_ctlfile(fl, "uMi", &msg_info_cb, info);
-	return info->count != 3;
+	read_ctlfile(fl, "uMif", &msg_info_cb, info);
+	return info->count != 4;
 }
 
 /* enumerate recipients */
