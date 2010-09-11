@@ -25,9 +25,7 @@ If you modify zdkimfilter, or any covered work, by linking or combining it
 with OpenDKIM, containing parts covered by the applicable licence, the licensor
 or zdkimfilter grants you additional permission to convey the resulting work.
 */
-#if defined(HAVE_CONFIG_H)
 #include <config.h>
-#endif
 #if !ZDKIMFILTER_DEBUG
 #define NDEBUG
 #endif
@@ -43,8 +41,13 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include <unistd.h>
 #include <fcntl.h>
 #include <opendkim/dkim.h>
-#include <config.h>
+#if !defined DKIM_PRESULT_AUTHOR
+#define DKIM_PRESULT_AUTHOR DKIM_PRESULT_FOUND
+#define HAVE_LIBOPENDKIM_22 22
+#endif
 #include <stddef.h>
+#include <time.h>
+#include <stdbool.h>
 #include "filterlib.h"
 #include "filedefs.h"
 
@@ -233,6 +236,12 @@ typedef struct stats_info
 	char *client_ip;
 	char *jobid;
 	unsigned rhcnt;
+	unsigned adsp_found:2;
+	unsigned adsp_unknown:2;
+	unsigned adsp_all:2;
+	unsigned adsp_discardable:2;
+	unsigned adsp_fail:2;
+	unsigned fromlist:2;
 } stats_info;
 
 static void clean_stats_info_content(stats_info *stats)
@@ -297,6 +306,8 @@ typedef struct dkimfl_parm
 	char header_canon_relaxed;
 	char body_canon_relaxed;
 	
+	// other
+	char pid_created;
 } dkimfl_parm;
 
 #define DEFAULT_STATS_WAIT 1200 /* 20 minutes */
@@ -1592,7 +1603,8 @@ static int verify_headers(verify_parms *vh)
 			}
 		}
 
-		// (only on first pass and stats enabled) save stats' ct and cte
+		// (only on first pass and stats enabled)
+		// save stats' ct and cte, check fromlist
 		else if (dkim && parm->dyn.stats)
 		{
 			char **target = NULL;
@@ -1603,15 +1615,23 @@ static int verify_headers(verify_parms *vh)
 
 			if (target)
 			{
+				// trim left
 				while (isspace(*(unsigned char*)s))
 					++s;
+				// find terminator
 				char *const tok = s;
 				int ch;
 				while ((ch = *(unsigned char*)s) != 0 && ch != ';')
 					++s;
+				// trim right
+				while (s > tok && isspace(*(unsigned char*)(s - 1)))
+					--s;
+				// duplicate possibly signed value
+				ch = *s;
 				*s = 0;
 				*target = strdup(tok);
 				*s = ch;
+				// avoid newlines and tabs inside the field
 				if ((s = *target) != NULL)
 				{
 					while ((ch = *(unsigned char*)s) != 0)
@@ -1624,6 +1644,29 @@ static int verify_headers(verify_parms *vh)
 				else
 					clean_stats(parm);
 			}
+			
+			else if ((s = hdrval(start, "Precedence")) != NULL)
+			{
+				while (isspace(*(unsigned char*)s))
+					++s;
+				size_t len;
+				int ch;
+				if (strincmp(s, "list", 4) == 0 &&
+					((len = strlen(s)) <= 4 ||
+						(ch = ((unsigned char*)s)[5]) == ';' || isspace(ch)))
+							parm->dyn.stats->fromlist = 1;
+			}
+			
+			else if (strincmp(start, "List-", 5) == 0)
+			{
+				if (hdrval(start, "List-Id") ||
+					hdrval(start, "List-Post") ||
+					hdrval(start, "List-Unsubscribe"))
+						parm->dyn.stats->fromlist = 1;
+			}
+			
+			else if (hdrval(start, "Mailing-List"))
+				parm->dyn.stats->fromlist = 1;
 		}
 
 
@@ -1737,7 +1780,10 @@ static void verify_message(dkimfl_parm *parm)
 
 	vh.dkim_or_file = dkim;
 	vh.parm = parm;
-	if (verify_headers(&vh) == 0 && parm->dyn.authserv_id)
+	verify_headers(&vh);
+	if (parm->dyn.authserv_id == NULL)
+		clean_stats(parm);
+	else if (parm->dyn.rtc == 0)
 	/* not testing:
 		(vh.a_r_count || vh.d_s_count ||
 			parm->add_a_r_anyway || ))
@@ -1790,6 +1836,20 @@ static void verify_message(dkimfl_parm *parm)
 					vh.dkim_domain = dkim_getdomain(dkim);
 
 				vh.presult = dkim_getpresult(dkim);
+				bool const adsp_fail =
+					(vh.policy == DKIM_POLICY_DISCARDABLE ||
+						vh.policy == DKIM_POLICY_ALL) &&
+					/* redundant: vh.presult == DKIM_PRESULT_AUTHOR && */
+					(!vh.sig_is_author || status != DKIM_STAT_OK);
+				if (parm->dyn.stats)
+				{
+					parm->dyn.stats->adsp_found = vh.presult == DKIM_PRESULT_AUTHOR;
+					parm->dyn.stats->adsp_unknown = vh.policy == DKIM_POLICY_UNKNOWN;
+					parm->dyn.stats->adsp_all = vh.policy == DKIM_POLICY_ALL;
+					parm->dyn.stats->adsp_discardable =
+						vh.policy == DKIM_POLICY_DISCARDABLE;
+					parm->dyn.stats->adsp_fail = adsp_fail;
+				}
 
 				/*
 				* unless disabled by parameter or whitelisted, do action:
@@ -1797,11 +1857,12 @@ static void verify_message(dkimfl_parm *parm)
 				* discard if ADSP == discardable;
 				*/
 				if (!parm->no_author_domain &&
-						(vh.presult == DKIM_PRESULT_NXDOMAIN ||
-							((vh.policy == DKIM_POLICY_DISCARDABLE ||
+						(vh.presult == DKIM_PRESULT_NXDOMAIN || adsp_fail))
+/*							((vh.policy == DKIM_POLICY_DISCARDABLE ||
 								vh.policy == DKIM_POLICY_ALL) &&
 							vh.presult == DKIM_PRESULT_AUTHOR &&
 							(!vh.sig_is_author || status != DKIM_STAT_OK))))
+*/
 				{
 					char const *log_reason, *smtp_reason = NULL;
 					int spf_whitelisted = sender_is_whitelisted(&vh);
@@ -2062,9 +2123,13 @@ static void verify_message(dkimfl_parm *parm)
 static void set_client_ip(dkimfl_parm *parm)
 {
 	char *s;
+	
+	if (parm->dyn.stats && parm->dyn.stats->dkim == NULL)
+		clean_stats(parm);
+	
 	if (parm->dyn.stats && (s = parm->dyn.info.frommta) != NULL)
 	{
-		if (strincmp(s, "dsn;", 4) == 0)
+		if (strincmp(s, "dns;", 4) == 0)
 		{
 			size_t len = strlen(s);
 			if (len > 5 && s[len-1] == ')' && s[len-2] == ']')
@@ -2082,8 +2147,172 @@ static void set_client_ip(dkimfl_parm *parm)
 	}
 }
 
+static char *lcdomain(char*domain)
+{
+	if (domain)
+	{
+		char *d = strdup(domain);
+		if (d)
+		{
+			char *s = d;
+			int ch;
+			while ((ch = *s) != 0)
+			{
+				if (isascii(ch) && isupper(ch))
+					*s = tolower(ch);
+				++s;
+			}
+			return d;
+		}
+	}
+	return NULL;
+}
+
 static void write_stats(dkimfl_parm *parm, FILE *fp)
 {
+	DKIM *dkim = parm->dyn.stats->dkim;
+	DKIM_SIGINFO **sigs;
+	int nsigs = 0;
+	int status = dkim_getsiglist(dkim, &sigs, &nsigs);
+	if (status != DKIM_STAT_OK)
+	{
+		if (parm->verbose)
+			fl_report(LOG_ALERT,
+				"id=%s: dkim_getsiglist() failed",
+				parm->dyn.info.id);
+		return;
+	}
+
+	char *fromdomain = lcdomain(dkim_getdomain(dkim));
+	if (fromdomain == NULL)
+	{
+		if (parm->verbose)
+			fl_report(LOG_ALERT,
+				"id=%s: dkim_getdomain() or strdup() failed",
+				parm->dyn.info.id);
+		return;
+	}
+	
+	stats_info const*const stats = parm->dyn.stats;
+	fprintf(fp, "M%s\t%s\t%s\t%s\t0\t%ld",
+		stats->jobid,
+		parm->dyn.authserv_id,
+		fromdomain,
+		stats->client_ip? stats->client_ip: "unknown",
+		/* 0 = not anon, */
+		(long)time(NULL));
+
+	off_t canonlen = 0;
+	off_t signlen = 0;
+	off_t msglen = 0;
+	if (nsigs > 0)
+		dkim_sig_getcanonlen(dkim, sigs[0], &msglen, &canonlen, &signlen);
+
+#if !defined NDEBUG
+	if (parm->verbose)
+	{
+		bool validauthorsig = false;
+		for (int c = 0; c < nsigs; ++c)
+		{
+			if (stricmp(dkim_sig_getdomain(sigs[c]), fromdomain) == 0 &&
+				 dkim_sig_geterror(sigs[c]) == DKIM_SIGERROR_OK)
+			{
+				validauthorsig = true;
+				break;
+			}
+		}
+	
+		bool const my_adsp_fail = !validauthorsig &&
+			(stats->adsp_all || stats->adsp_discardable);
+		if (stats->adsp_fail != my_adsp_fail)
+			fl_report(LOG_ERR,
+				"id=%s: ADSP wrong: my=%d, passed=%d",
+				parm->dyn.info.id,
+				my_adsp_fail, stats->adsp_fail);
+	}
+#endif
+
+	fprintf(fp, "\t%lu\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%u\t%s\t%s\n",
+		msglen,
+		nsigs,
+		stats->adsp_found,
+		stats->adsp_unknown,
+		stats->adsp_all,
+		stats->adsp_discardable,
+		stats->adsp_fail,
+		stats->fromlist,
+		stats->rhcnt,
+		stats->ct? stats->ct: "text/plain",
+		stats->cte? stats->cte: "7bit");
+	free(fromdomain);
+
+	for (int c = 0; c < nsigs; ++c)
+	{
+		dkim_alg_t alg = 0;
+		dkim_sig_getsignalg(sigs[c], &alg);
+		dkim_canon_t bc = 0;
+		dkim_canon_t hc = 0;
+		dkim_sig_getcanons(sigs[c], &hc, &bc);
+
+		char *sigdomain = lcdomain(dkim_sig_getdomain(sigs[c]));
+		fprintf(fp, "S%s\t%d\t%d\t%d",
+			sigdomain? sigdomain: "-", alg, hc, bc);
+		free(sigdomain);
+
+		unsigned int const flags = dkim_sig_getflags(sigs[c]);
+		dkim_sig_getcanonlen(dkim, sigs[c], &msglen, &canonlen, &signlen);
+		fprintf(fp, "\t%d\t%d\t%d\t%ld",
+			(flags & DKIM_SIGFLAG_IGNORE) != 0,
+			(flags & DKIM_SIGFLAG_PASSED) != 0,
+			dkim_sig_getbh(sigs[c]) == DKIM_SIGBH_MISMATCH,
+			(long)signlen);
+
+#if HAVE_LIBOPENDKIM_22
+		char *p = dkim_sig_gettagvalue(sigs[c], true, "t");
+		fprintf(fp, "\t%d", p != NULL);
+		
+		p = dkim_sig_gettagvalue(sigs[c], true, "g");
+		fprintf(fp, "\t%d\t%d",
+			p != NULL,
+			p != NULL && *p != '\0' && *p != '*');
+
+
+		/* DK-compatible keys */
+		fprintf(fp, "\t%d",
+			dkim_sig_gettagvalue(sigs[c], true, "v") == NULL &&
+				p && *p == '\0');
+		
+		/* syntax error codes */
+		fprintf(fp, "\t%d", dkim_sig_geterror(sigs[c]));
+
+		fprintf(fp, "\t%d\t%d\t%d\t%d",
+			dkim_sig_gettagvalue(sigs[c], false, "t") != NULL,
+			dkim_sig_gettagvalue(sigs[c], false, "x") != NULL,
+			dkim_sig_gettagvalue(sigs[c], false, "z") != NULL,
+			dkim_sig_getdnssec(sigs[c]));
+
+		p = dkim_sig_gettagvalue(sigs[c], false, "h");
+		fputc('\t', fp);
+		if (p == NULL)
+			fputc('-', fp);
+		else
+		{
+			int ch;
+			while ((ch = *(unsigned char*)p) != 0)
+			{
+				if (isascii(ch) && isupper(ch))
+					ch = tolower(ch);
+				putc(ch, fp);
+				++p;
+			}
+		}
+#else /* HAVE_LIBOPENDKIM_22 */
+		fprintf(fp, "\t-\t-\t-\t-\t%d\t-\t-\t-\t%d\t-",
+			dkim_sig_geterror(sigs[c]),
+			dkim_sig_getdnssec(sigs[c]));
+#endif
+		fputs("\t-\n", fp); /* DIFFHEADERS  not supported */
+	}
 }
 
 static void after_filter_stats(fl_parm *fl)
@@ -2091,7 +2320,7 @@ static void after_filter_stats(fl_parm *fl)
 	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
 	
 	set_client_ip(parm);
-	if (parm->dyn.stats)
+	while (parm->dyn.stats)
 	{
 		FILE *fp = fopen(parm->stats_file, "a");
 		if (fp)
@@ -2104,28 +2333,49 @@ static void after_filter_stats(fl_parm *fl)
 			lock.l_whence = SEEK_SET;
 			lock.l_len = 1;
 
+			fl_init_signal(init_signal_lock); // catch USR1 and ALRM
 			fl_alarm(parm->stats_wait);
 			rc = fcntl(fd, F_SETLKW, &lock);
 			save_errno = errno;
 			fl_alarm(0);
+			fl_reset_signal(); // ignore USR1, ALRM terminates
 			if (rc == 0)
+			{
 				write_stats(parm, fp);
-			else
+			}
+			else if (save_errno == EINTR)
+			{
+				/*
+				* if file has been moved, reopen old name;
+				* if alarm fired, slip through.
+				*/
+				if (fl_keep_running())
+				{
+					fclose(fp);
+					continue;
+				}
+			}
+			else if (parm->verbose)
+			{
 				fl_report(LOG_ALERT,
-					"id=%s: cannot lock %s: %s (%skilled)",
+					"id=%s: cannot lock %s: %s",
 					parm->dyn.info.id,
 					parm->stats_file,
-					strerror(errno),
-					fl_keep_running()? "not ": "");
+					strerror(errno));
+			}
 
 			fclose(fp); // this releases the lock as well
 		}
-		else
+		else if (parm->verbose)
+		{
 			fl_report(LOG_ALERT,
 				"id=%s: cannot open %s: %s",
 				parm->dyn.info.id,
 				parm->stats_file,
 				strerror(errno));
+		}
+
+		clean_stats(parm);
 	}
 }
 
@@ -2134,7 +2384,7 @@ static void dkimfilter(fl_parm *fl)
 	static char default_jobid[] = "NULL";
 	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
 	parm->fl = fl;
-
+	
 	fl_get_msg_info(fl, &parm->dyn.info);
 	if (parm->dyn.info.id == NULL)
 		parm->dyn.info.id = default_jobid;
@@ -2294,10 +2544,43 @@ static void set_policyfile(fl_parm *fl)
 			status != DKIM_STAT_OK? " not": "", policyfile);
 }
 
+static const char pid_file[] = ZDKIMFILTER_PID_FILE;
+static void write_pid_file(fl_parm *fl)
+{
+	assert(fl);
+	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	assert(parm);
+
+	FILE *fp = fopen(pid_file, "w");
+	char const *failed_action = NULL;
+	if (fp)
+	{
+		fprintf(fp, "%lu\n", (unsigned long) getpid());
+		if ((ferror(fp) | fclose(fp)) != 0)
+			failed_action = "write";
+		parm->pid_created = 1;
+	}
+	else
+		failed_action = "open";
+	if (failed_action)
+		fprintf(stderr,
+			"ALERT: zdkimfilter: cannot %s %s: %s\n",
+			failed_action, pid_file, strerror(errno));
+}
+
+static void delete_pid_file(dkimfl_parm *parm)
+{
+	if (parm->pid_created &&
+		unlink(pid_file) != 0)
+			fprintf(stderr, "ERR: avfilter: cannot delete %s: %s\n",
+				pid_file, strerror(errno));
+}
+
+
 static fl_init_parm functions =
 {
 	dkimfilter,
-	NULL,
+	write_pid_file,
 	NULL, NULL, NULL,
 	report_config, set_keyfile, set_policyfile, NULL	
 };
@@ -2324,8 +2607,17 @@ int main(int argc, char *argv[])
 #endif
 				" debugging support\n"
 				"Compiled with OpenDKIM library version: %#lX\n"
+#if defined HAVE_LIBOPENDKIM_22
+				"Linked with OpenDKIM library version: %#lX (%smatch)\n"
+#endif
 				"Reported OpenSSL version: %#lX\n",
-				(long)(OPENDKIM_LIB_VERSION), dkim_ssl_version());
+				(long)(OPENDKIM_LIB_VERSION),
+#if defined HAVE_LIBOPENDKIM_22
+				dkim_libversion(),
+				dkim_libversion() ==	(unsigned long)(OPENDKIM_LIB_VERSION)? "":
+					"DO NOT ",
+#endif
+				dkim_ssl_version());
 			return 0;
 		}
 		else if (strcmp(arg, "--help") == 0)
@@ -2351,6 +2643,15 @@ int main(int argc, char *argv[])
 		rtc = 2;
 		fl_report(LOG_ERR, "Unable to read config file");
 	}
+
+#if defined HAVE_LIBOPENDKIM_22
+	if (parm.verbose >= 2 &&
+		dkim_libversion() !=	(unsigned long)(OPENDKIM_LIB_VERSION))
+			fl_report(LOG_WARNING,
+				"Mismatched library versions: compile=%#lX link=%#lX",
+				(unsigned long)(OPENDKIM_LIB_VERSION),
+				dkim_libversion());
+#endif
 
 	parm.dklib = dkim_init(NULL, NULL);
 	if (parm.dklib == NULL)
@@ -2400,8 +2701,11 @@ int main(int argc, char *argv[])
 	}
 
 	if (rtc == 0)
+	{
 		rtc =
 			fl_main(&functions, &parm, argc, argv, parm.all_mode, parm.verbose);
+		delete_pid_file(&parm);
+	}
 
 	// TODO: free memory allocated by parm_config (almost useless)
 	if (parm.dklib)

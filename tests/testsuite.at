@@ -142,6 +142,7 @@ m4_if([$#], [1],, m4_foreach([link], [$2],
 # default parm from tmp onward
 m4_define([ZF_DEFAULT_PARM_TMP],
 [tmp                  = NULL (temp directory)
+stats_file           = NULL (stats file path)
 sign_hfields         = NULL (space-separated, no colon)
 skip_hfields         = NULL (space-separated, no colon)
 spf_whitelist        = NULL (space-separated domains)
@@ -149,6 +150,7 @@ dkim_whitelist       = NULL (space-separated domains)
 key_choice_header    = NULL (key choice header)
 verbose              = 0 (int)
 dns_timeout          = 0 (secs)
+stats_wait           = 1200 (secs)
 reputation_fail      = 32767 (high int)
 reputation_pass      = -32768 (low int)
 add_a_r_anyway       = N (Y/N)
@@ -351,6 +353,7 @@ m4_define([ZF_KEYCONFIG],
 [ZF_KEYFILE
 ZF_CONFIG(3, [no_author_domain
 no_reputation
+stats_file ./test-stats
 ])])
 
 m4_define([ZF_CTLBATCH],
@@ -371,6 +374,8 @@ ZF_RUN,
 ],
 [INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=$1 rep=0
 ])
+AT_CHECK([zdkimstats-anon < ./test-stats > ./test-stats-out], 0, [], [])
+AT_CHECK([cmp ./test-stats ./test-stats-out], 0, [], [])
 ])
 
 #

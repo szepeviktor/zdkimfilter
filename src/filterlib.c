@@ -195,6 +195,11 @@ void fl_alarm(unsigned seconds)
 	alarm(seconds);
 }
 
+int fl_keep_running(void)
+{
+	return signal_timed_out == 0 && signal_break == 0;
+}
+
 /* ----- ctl_fname_chain handling ----- */
 
 static ctl_fname_chain* cfc_shift(ctl_fname_chain **cfc)
@@ -240,11 +245,6 @@ void fl_set_verbose(fl_parm*fl, int verbose)
 int fl_get_verbose(fl_parm*fl)
 {
 	return fl->verbose;
-}
-
-int fl_keep_running(void)
-{
-	return signal_timed_out == 0 && signal_break == 0;
 }
 
 fl_callback fl_set_after_filter(fl_parm *fl, fl_callback after_filter)
@@ -788,7 +788,7 @@ static int read_fname(fl_parm* fl)
 	return rtc;
 }
 
-static void fl_reset_signal(void)
+void fl_reset_signal(void)
 {
 	struct sigaction act;
 	memset(&act, 0, sizeof act);
@@ -800,9 +800,42 @@ static void fl_reset_signal(void)
 	sigaction(SIGPIPE, &act, NULL);
 	sigaction(SIGINT, &act, NULL);
 	sigaction(SIGTERM, &act, NULL);
+
+	act.sa_handler = SIG_IGN;
+	sigaction(SIGCHLD, &act, NULL);
 	sigaction(SIGHUP, &act, NULL);
 	sigaction(SIGUSR1, &act, NULL);
 	sigaction(SIGUSR2, &act, NULL);
+}
+
+void fl_init_signal(init_signal_arg arg)
+{
+	struct sigaction act;
+	memset(&act, 0, sizeof act);
+	sigemptyset(&act.sa_mask);
+	
+	signal_timed_out = signal_break = signal_hangup = 0;
+	
+	if (!arg)
+	{
+		act.sa_flags = SA_NOCLDSTOP;
+		act.sa_handler = child_reaper;
+		sigaction(SIGCHLD, &act, NULL);
+		act.sa_flags = 0;
+	}
+	
+	act.sa_handler = sig_catcher;
+	sigaction(SIGALRM, &act, NULL);
+	if (!arg)
+	{
+		sigaction(SIGPIPE, &act, NULL);
+		sigaction(SIGINT, &act, NULL);
+		sigaction(SIGTERM, &act, NULL);
+		sigaction(SIGHUP, &act, NULL);
+		sigaction(SIGUSR2, &act, NULL);
+		act.sa_handler = SIG_IGN;
+	}
+	sigaction(SIGUSR1, &act, NULL);
 }
 
 #if !defined(NDEBUG)
@@ -864,10 +897,10 @@ static void fl_runchild(fl_parm* fl)
 		{
 			if ((fl->data_fp = fopen(fl->data_fname, "r")) != NULL)
 			{
-				/* kill me after 15 minutes, no matter what */
+				/* alarm will kill after resetting */
 				fl_reset_signal();
 				if (fl_get_test_mode(fl) != fl_testing)
-					alarm(900);
+					alarm(900); // 15 minutes (ways too much)
 
 				fl->resp = NULL;
 				if (fl->filter_fn)
@@ -1023,28 +1056,7 @@ static int my_lf_accept(int listensock)
 	return fd;
 }
 
-/* ----- init, test, main functions ----- */
-
-static void fl_init(void)
-{
-	struct sigaction act;
-	memset(&act, 0, sizeof act);
-	sigemptyset(&act.sa_mask);
-		
-	act.sa_flags = SA_NOCLDSTOP;
-	act.sa_handler = child_reaper;
-	sigaction(SIGCHLD, &act, NULL);
-		
-	act.sa_flags = 0;
-	act.sa_handler = sig_catcher;
-	sigaction(SIGALRM, &act, NULL);
-	sigaction(SIGPIPE, &act, NULL);
-	sigaction(SIGINT, &act, NULL);
-	sigaction(SIGTERM, &act, NULL);
-	sigaction(SIGHUP, &act, NULL);
-	sigaction(SIGUSR1, &act, NULL);
-	sigaction(SIGUSR2, &act, NULL);
-}
+/* ----- test, main functions ----- */
 
 static int fl_runtest(fl_parm* fl, int ctlfiles, int argc, char *argv[])
 {
@@ -1396,7 +1408,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			}
 			else
 			{
-				fl_init();
+				fl_init_signal(init_signal_all);
 				if (fl.verbose >= 2)
 					fprintf(stderr,
 						THE_FILTER ": running test on 1 ctl +%d mail files\n",
@@ -1409,7 +1421,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		if (strcmp(arg, "--batch-test") == 0)
 		{
 			fl.batch_test = fl.testing = 1;
-			fl_init();
+			fl_init_signal(init_signal_all);
 			if (isatty(fileno(stdout)))
 				fprintf(stdout,
 					THE_FILTER ": batch test. Type `?' for help.\n");
@@ -1444,7 +1456,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			fprintf(stderr, THE_FILTER ": cannot set process group\n");
 		*/
 
-		fl_init();
+		fl_init_signal(init_signal_all);
 		listensock = fl_init_socket(all_mode);
 
 		if (listensock < 0)

@@ -87,6 +87,10 @@ __attribute__ ((format(printf, 2, 3)))
 #endif
 void fl_report(int, char const*, ...);
 fl_callback fl_set_after_filter(fl_parm *, fl_callback);
+typedef enum init_signal_arg
+	{init_signal_all, init_signal_lock} init_signal_arg;
+void fl_init_signal(init_signal_arg);
+void fl_reset_signal(void);
 
 #define FILTERLIB_H_INCLUDED 1
 #endif

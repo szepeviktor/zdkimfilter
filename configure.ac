@@ -16,6 +16,8 @@ AC_PROG_CC
 AC_PROG_CC_C99
 AM_PROG_CC_C_O()
 
+AC_PROG_CXX
+
 AC_PROG_AWK
 AC_PROG_EGREP
 AC_PATH_PROG([PKG_CONFIG], [pkg-config])
@@ -316,7 +318,13 @@ AC_MSG_RESULT([$OPENDKIM_LIB_PATH $OPENDKIM_LIB])
 AC_SUBST([OPENDKIM_LIB_PATH])
 AC_SUBST([OPENDKIM_LIB])
 
-
+# ssl
+AC_MSG_CHECKING([flags for ssl library])
+LIBSSL_CFLAGS="`$PKG_CONFIG --cflags libssl`"
+LIBSSL_LDADD="`$PKG_CONFIG --libs libssl`"
+AC_MSG_RESULT([$LIBSSL_CFLAGS $LIBSSL_LDADD])
+AC_SUBST([LIBSSL_CFLAGS])
+AC_SUBST([LIBSSL_LDADD])
 
 # Checks for other header files.
 AC_HEADER_STDC
@@ -360,6 +368,7 @@ AC_SUBST([MAILGID], ["$courier_mailgid"])
 AC_SUBST([MAILUSER], ["$courier_mailuser"])
 AC_SUBST([FILTERSOCKETDIR], ["${courier_localstatedir}/filters"])
 AC_SUBST([ALLFILTERSOCKETDIR], ["${courier_localstatedir}/allfilters"])
+AC_SUBST([ZDKIMFILTER_PID_DIR], ["${courier_localstatedir}/tmp"])
 
 # LN_S used in tests/aclocal.in
 AC_PROG_LN_S
