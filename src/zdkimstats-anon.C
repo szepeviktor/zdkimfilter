@@ -1,4 +1,6 @@
 /*
+TODO: * keep "helo-name (reverse-lookup-if-any [IP])" in -a report
+      * add total signed messages in -c report
 ** zdkimstats-anon.C - written in milano by vesely on 10sep2010
 ** filter stats from stdin to stdout
 
@@ -109,16 +111,29 @@ class count_t
 {
 public:
 	time_t last;
-	size_t msgs, sigs, oksigs, bad_bh,
+	size_t msgs, sigmsgs, oksigmsgs, ok_a_msgs,
+		sigs, a_sigs, oksigs, ok_a_sigs, bad_bh,
 		disca_tot, disca_fail, all_tot, all_fail;
 	~count_t() {}
-	count_t(): last(0), msgs(0), sigs(0), oksigs(0), bad_bh(0),
+	count_t(): last(0),
+		msgs(0), sigmsgs(0), oksigmsgs(0), ok_a_msgs(0),
+		sigs(0), a_sigs(0), oksigs(0), ok_a_sigs(0), bad_bh(0),
 		disca_tot(0), disca_fail(0), all_tot(0), all_fail(0) {}
 	void add(count_t const& c)
 		{ if (c.last > last) last = c.last;
-		msgs += c.msgs, sigs += c.sigs, oksigs += c.oksigs, bad_bh += c.bad_bh,
-		disca_tot += c.disca_tot, disca_fail += c.disca_fail,
-		all_tot += c.all_tot, all_fail += c.all_fail; }
+		msgs       += c.msgs,
+		sigmsgs    += c.sigmsgs,
+		oksigmsgs  += c.oksigmsgs,
+		ok_a_msgs  += c.ok_a_msgs,
+		sigs       += c.sigs,
+		a_sigs     += c.a_sigs,
+		oksigs     += c.oksigs,
+		ok_a_sigs  += c.ok_a_sigs,
+		bad_bh     += c.bad_bh,
+		disca_tot  += c.disca_tot,
+		disca_fail += c.disca_fail,
+		all_tot    += c.all_tot,
+		all_fail   += c.all_fail; }
 };
 
 static ostream& operator<<(ostream& out, count_t const& count)
@@ -128,8 +143,13 @@ static ostream& operator<<(ostream& out, count_t const& count)
 		out << "# one line per log, tab-separated fields are\n"
 			"# last date seen in log, followed by the total number of\n"
 			"# messages,\n"
+			"# signed messages,\n"
+			"# signed messages with at least one valid signature,\n"
+			"# signed messages with at least one valid author signature,\n"
 			"# signatures,\n"
+			"# author signatures (i.e. \"d=\" is the domain in \"From:\"),\n"
 			"# good signatures,\n"
+			"# good author signatures,\n"
 			"# signatures failed because of body changes,\n"
 			"# ADSP \"discardable\" messages,\n"
 			"# ADSP \"discardable\" failures,\n"
@@ -139,8 +159,13 @@ static ostream& operator<<(ostream& out, count_t const& count)
 	}
 	out << date_string(count.last) << '\t' <<
 		count.msgs << '\t' <<
+		count.sigmsgs << '\t' <<
+		count.oksigmsgs << '\t' <<
+		count.ok_a_msgs << '\t' <<
 		count.sigs << '\t' <<
+		count.a_sigs << '\t' <<
 		count.oksigs << '\t' <<
+		count.ok_a_sigs << '\t' <<
 		count.bad_bh << '\t' <<
 		count.disca_tot << '\t' <<
 		count.disca_fail << '\t' <<
@@ -190,6 +215,7 @@ static ostream& operator<<(ostream& out, adsp_map const& adsp)
 			"# number of messages with failed author domain signature\n"
 			"# number of messages with good author domain signature\n"
 			"# \"From:\" domain name,\n"
+			"# helo-name (rev-lookup [IP]),\n"
 			"#\n";
 	}
 	string last = date_string(adsp.last);
@@ -281,18 +307,8 @@ public:
 	}
 };
 
-// helper class and functions for searching signatures
+// helper functions for searching signatures
 //
-class domain_string // find author signatures
-{
-	domain_string();
-public:
-	string const &domain;
-	domain_string(string const &d): domain(d) {}
-	bool operator()(stats_line const& s) const
-		{return s.size() > ODsS_domain && s[ODsS_domain] == domain;}
-};
-
 static bool stats_good(stats_line const& s) {return s.good();}
 static bool s_pass(stats_line& s) {return s.bool_at(ODsS_pass);}
 static bool s_fail_body(stats_line& s) {return s.bool_at(ODsS_fail_body);}
@@ -302,10 +318,6 @@ static bool s_fail_body(stats_line& s) {return s.bool_at(ODsS_fail_body);}
 class stats_signatures: public vector<stats_line>
 {
 public:
-	iterator find_domain(string& d)
-		{return find_if(begin(), end(), domain_string(d));}
-	bool check()
-		{return find_if(begin(), end(), domain_string("-")) == end();}
 	bool good() const
 		{unsigned const g = count_if(begin(), end(), stats_good);
 		return g == size();}
@@ -337,7 +349,9 @@ public:
 			count_t c;
 			c.msgs = 1;
 			c.sigs = s.size();
+			c.sigmsgs = c.sigs != 0;
 			c.oksigs = s.pass();
+			c.oksigmsgs = c.oksigs != 0;
 			c.bad_bh = s.fail_body();
 
 			bool const adsp_found = m.bool_at(ODsM_adsp_found);
@@ -351,30 +365,39 @@ public:
 			else if (adsp_discardable)
 				c.disca_tot = 1;
 
-			if (!s.check()) set_bad();
-
+			// check author domain signature(s) irrespective of adsp
 			string fromdomain = m.at(ODsM_fromdomain);
-			stats_signatures::iterator f = s.find_domain(fromdomain);
+			for (stats_signatures::iterator f = s.begin(); f != s.end(); ++f)
+			{
+				string const & s = (*f).at(ODsS_domain);
+				if (s == fromdomain)
+				{
+					c.a_sigs += 1;
+					if ((*f).bool_at(ODsS_pass))
+						c.ok_a_sigs += 1;
+				}
+				if (strcmp(s.c_str(), "-") == 0) // failure writing log
+					set_bad();
+			}
+
 			if (adsp_fail)
 			{
 				// if there is a signature it must have failed
 				if (!adsp_found || !(adsp_all || adsp_discardable) ||
-					(adsp_all && adsp_discardable) ||
-					(f != s.end() && (*f).bool_at(ODsS_pass)))
+					(adsp_all && adsp_discardable) || c.ok_a_sigs > 0)
 						set_bad();
 				else if (adsp_all)
 					c.all_fail = 1;
 				else
 					c.disca_fail = 1;
 				
-				if (f == s.end()) a.no_sig = 1; else a.fail = 1;
+				if (c.a_sigs == 0) a.no_sig = 1; else a.fail = 1;
 			}
 			// there must be a signature if it passed
 			else if (adsp_all || adsp_discardable)
 			{
 				if (adsp_unknown || !adsp_found ||
-					(adsp_all && adsp_discardable) || 
-					f == s.end() || !(*f).bool_at(ODsS_pass) || !(*f).good())
+					(adsp_all && adsp_discardable) || c.ok_a_sigs == 0)
 						set_bad();
 				a.good = 1;
 			}
@@ -400,8 +423,9 @@ public:
 			if (good())
 			{
 				count.add(c);
-				if (do_adsp)
-					adsp.add(fromdomain, adsp_discardable, a);
+				if (do_adsp && !a.empty())					
+					adsp.add(fromdomain + "\t" + m[ODsM_ipaddr],
+						adsp_discardable, a);
 			}
 		}
 		return good();
@@ -414,6 +438,21 @@ public:
 			return true;
 		ds.ndx = ODsS_domain;
 		return s.signed_by(ds);
+	}
+	void convert()
+	{
+		if (m.size() > ODsM_ipaddr)
+		{
+			string const &s = m[ODsM_ipaddr];
+			if (s.size() > 5 &&
+				s[s.size() - 1] == ')' &&
+				s[s.size() - 2] == ']')
+			{
+				size_t const open = s.find_last_of('[');
+				if (open < s.size() - 3)
+					m[ODsM_ipaddr] = s.substr(open + 1, s.size() - open - 3);
+			}
+		}
 	}
 	void anon(char const *prefix)
 	{
@@ -592,6 +631,7 @@ int main(int argc, char* argv[])
 		cin >> stats;
 		if (stats.good() && stats.verify(count, adsp, adsp_fname))
 		{
+			stats.convert();
 			if (prefix && !stats.is_anon() && !stats.has_domain(xd))
 				stats.anon(prefix);
 			cout << stats;

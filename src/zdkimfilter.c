@@ -256,7 +256,7 @@ static void clean_stats_info_content(stats_info *stats)
 		}
 		free(stats->ct);
 		free(stats->cte);
-		free(stats->client_ip);
+		// don't free(stats->client_ip); it is in dyn.info
 		// don't free(stats->id); it is in dyn.info
 	}
 }
@@ -2127,23 +2127,14 @@ static void set_client_ip(dkimfl_parm *parm)
 	if (parm->dyn.stats && parm->dyn.stats->dkim == NULL)
 		clean_stats(parm);
 	
-	if (parm->dyn.stats && (s = parm->dyn.info.frommta) != NULL)
+	if (parm->dyn.stats && (s = parm->dyn.info.frommta) != NULL &&
+		strincmp(s, "dns;", 4) == 0)
 	{
-		if (strincmp(s, "dns;", 4) == 0)
-		{
-			size_t len = strlen(s);
-			if (len > 5 && s[len-1] == ')' && s[len-2] == ']')
-			{
-				char *a = strrchr(s, '[');
-				if (a && a < &s[len-3])
-				{
-					s[len-2] = 0;
-					if ((parm->dyn.stats->client_ip = strdup(a+1)) == NULL)
-						clean_stats(parm);
-					s[len-2] = ']';
-				}
-			}
-		}
+		s += 4;
+		int ch;
+		while ((ch = *(unsigned char*)s) != 0 && isspace(ch))
+			++s;
+		parm->dyn.stats->client_ip = s;
 	}
 }
 
@@ -2183,16 +2174,26 @@ static void write_stats(dkimfl_parm *parm, FILE *fp)
 		return;
 	}
 
-	char *fromdomain = lcdomain(dkim_getdomain(dkim));
+	char *fromdomain = dkim_getdomain(dkim);
+	if (fromdomain == NULL)
+	{
+		if (parm->verbose >= 8)
+			fl_report(LOG_DEBUG,
+				"id=%s: dkim_getdomain() failed",
+				parm->dyn.info.id);
+		return;
+	}
+
+	fromdomain = lcdomain(fromdomain);
 	if (fromdomain == NULL)
 	{
 		if (parm->verbose)
 			fl_report(LOG_ALERT,
-				"id=%s: dkim_getdomain() or strdup() failed",
+				"id=%s: strdup() failed",
 				parm->dyn.info.id);
 		return;
 	}
-	
+
 	stats_info const*const stats = parm->dyn.stats;
 	fprintf(fp, "M%s\t%s\t%s\t%s\t0\t%ld",
 		stats->jobid,

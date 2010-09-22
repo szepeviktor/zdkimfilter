@@ -376,7 +376,7 @@ ZF_RUN,
 [INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=$1 rep=0
 ])
 AT_CHECK([zdkimstats-anon < ./test-stats > ./test-stats-out], 0, [], [])
-AT_CHECK([cmp ./test-stats ./test-stats-out], 0, [], [])
+#no, ipaddr differ: AT_CHECK([cmp ./test-stats ./test-stats-out], 0, [], [])
 ])
 
 #
