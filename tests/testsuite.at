@@ -524,7 +524,7 @@ AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
-  dkim-adsp=nxdomain
+  dkim-adsp=nxdomain header.from=user@author.example
 ], [])
 AT_CLEANUP
 
@@ -552,7 +552,7 @@ AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
-  dkim-adsp=nxdomain
+  dkim-adsp=nxdomain header.from=user@author.example
 ], [])
 AT_CLEANUP
 
@@ -583,7 +583,7 @@ AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;
   dkim=pass header.i=@sender.example;
-  dkim-adsp=nxdomain
+  dkim-adsp=nxdomain header.from=user@author.example
 ], [])
 AT_CLEANUP
 
@@ -616,7 +616,7 @@ head -n 4 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
   dkim=pass header.i=@sender.example;
-  dkim-adsp=nxdomain  
+  dkim-adsp=nxdomain header.from=user@author.example
 ], [])
 AT_CLEANUP
 
@@ -648,7 +648,7 @@ head -n 4 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
   dkim=pass header.i=@other.example;
-  dkim-adsp=nxdomain  
+  dkim-adsp=nxdomain header.from=user@author.example
 ], [])
 AT_CLEANUP
 
@@ -680,7 +680,7 @@ head -n 5 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
   dkim=pass header.i=@author.example;
-  dkim-adsp=pass
+  dkim-adsp=pass header.from=user@author.example
 DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
 ], [])
 AT_CLEANUP
@@ -712,7 +712,7 @@ head -n 5 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
   dkim=pass header.i=@author.example;
-  dkim-adsp=pass
+  dkim-adsp=pass header.from=user@author.example
 DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
 ], [])
 AT_CLEANUP
@@ -745,7 +745,7 @@ head -n 5 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
   dkim=fail (signature verification failed) header.i=@author.example;
-  dkim-adsp=fail
+  dkim-adsp=fail header.from=user@author.example
 DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
 ], [])
 AT_CLEANUP
@@ -828,7 +828,7 @@ head -n 5 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
   dkim=fail (signature verification failed) header.i=@author.example;
-  dkim-adsp=discard
+  dkim-adsp=discard header.from=user@author.example
 DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
 ], [])
 AT_CLEANUP
@@ -861,7 +861,7 @@ head -n 5 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
   dkim=pass header.i=@sender.example;
-  dkim-adsp=fail
+  dkim-adsp=fail header.from=user@author.example
 DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
 ], [])
 AT_CLEANUP
@@ -893,7 +893,7 @@ head -n 5 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
   dkim=pass header.i=@sender.example;
-  dkim-adsp=discard
+  dkim-adsp=discard header.from=user@author.example
 DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
 ], [])
 AT_CLEANUP
@@ -927,7 +927,7 @@ AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
-  dkim-adsp=fail
+  dkim-adsp=fail header.from=user@author.example
 Received: from server.example by test.example with ESMTP
 ], [])
 AT_CLEANUP
@@ -961,7 +961,7 @@ AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
-  dkim-adsp=discard
+  dkim-adsp=discard header.from=user@author.example
 Received: from server.example by test.example with ESMTP
 ], [])
 AT_CLEANUP
@@ -994,7 +994,7 @@ ZF_RUN,
 AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;
-  dkim-adsp=discard
+  dkim-adsp=discard header.from=user@author.example
 Received: from server.example by test.example with ESMTP
 ], [])
 AT_CLEANUP

@@ -1270,6 +1270,8 @@ static void sign_message(dkimfl_parm *parm)
 	}
 }
 
+// verify
+
 typedef struct verify_parms
 {
 	char *sender_domain, *helo_domain; // imply SPF "pass"
@@ -2066,9 +2068,16 @@ static void verify_message(dkimfl_parm *parm)
 				}
 			}
 
-			if (*policy_result) // TODO: add the "header.from" field
+			if (*policy_result)
 			{
-				fprintf(fp, ";\n  dkim-adsp=%s", policy_result);
+#if HAVE_LIBOPENDKIM_22
+				char const *const user = dkim_getuser(dkim);
+				if (user && vh.dkim_domain)
+					fprintf(fp, ";\n  dkim-adsp=%s header.from=%s@%s",
+						policy_result, user, vh.dkim_domain);
+				else
+#endif			
+					fprintf(fp, ";\n  dkim-adsp=%s", policy_result);
 				++auth_given;
 			}
 			
