@@ -177,9 +177,10 @@ no_author_domain
 #
 # This is a space-separated list of domain names. By default it's empty.
 
-# check_reputation
-# make a query to get the reputation of the signer. The result is reported in
+# no_reputation
+# skip a query to dkim-reputation.org for the signer. The result is reported in
 # A-R for method "x-dkim-rep" according to the two values specified next
+# no_reputation = N
 
 # reputation_fail
 # any values greater or equal than this are reported as "fail"
@@ -193,4 +194,22 @@ no_author_domain
 # negative values for whitelisting. Their range is thus -1000 <= rep <= 1000.
 # reputation_pass = -32768
 
-# 
+# no_dwl
+# skip a query to dwl.spamhaus.org for the signer. The result is reported in
+# A-R for method "x-dwl" in case of positive results.
+# no_dwl = N
+
+# stats_file
+# full path for a stats file about signatures verifications, including a line
+# for each non-signed message. Setting this parameter enables writing stats.
+# The default is an empty string, which disables writing stats.
+
+# stats_wait
+# max number of seconds to wait before obtaining a lock on the stats file, in
+# order to write one or more line for the verified message. Waiting is done
+# after the response has been given, so as not to block the server. The default
+# is 20 minutes
+# stats_wait = 1200
+
+# stats_wait
+

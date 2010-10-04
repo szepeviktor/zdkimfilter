@@ -5,6 +5,7 @@ m4_define([ZF_CONFIG],
 [cat >zftest.conf <<'_ZEOF'
 verbose = $1
 domain_keys = .
+no_dwl
 $2
 _ZEOF
 ])
@@ -159,6 +160,7 @@ no_signlen           = N (Y/N)
 tempfail_on_error    = N (Y/N)
 no_author_domain     = N (Y=disable ADSP)
 no_reputation        = N (Y=skip reputation lookup)
+no_dwl               = Y (Y=skip dwl.spamhaus.org lookup)
 all_mode             = N (Y/N)
 sign_rsa_sha1        = N (Y/N, N for rsa-sha256)
 header_canon_relaxed = N (Y/N, N for simple)
@@ -170,6 +172,9 @@ body_canon_relaxed   = N (Y/N, N for simple)
 AT_INIT
 AT_TESTED([zdkimfilter])
 
+# test only valid with libopendkim v. 2.2.0 or better
+# (need autoconf 2.64 for AT_SKIP_IF?)
+m4_define([ZF_REQUIRE_22], [AT_CHECK([$HAVE_LIBOPENDKIM_220 || exit 77])])
 
 #
 AT_SETUP([test default parameters])
@@ -195,7 +200,7 @@ AT_CHECK(
 ZF_RUN,
 2,
 [],
-[ERR:zdkimfilter[[0]]:Invalid value 0x100000000 for dns_timeout at line 4 in zftest.conf
+[ERR:zdkimfilter[[0]]:Invalid value 0x100000000 for dns_timeout at line 5 in zftest.conf
 ERR:zdkimfilter[[0]]:Unable to read config file
 ])
 AT_CLEANUP
@@ -520,6 +525,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;
@@ -548,6 +554,7 @@ ZF_RUN,
 ],
 [INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (have spf_:sender.example, dkim_:--no)
 ])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;
@@ -579,6 +586,7 @@ ZF_RUN,
 [INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (spf_:--no, have dkim_:sender.example)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
 ])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;
@@ -611,6 +619,7 @@ ZF_RUN,
 [INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (have spf_:sender.example, have dkim_:sender.example)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
 ])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
@@ -643,6 +652,7 @@ ZF_RUN,
 [INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (spf_:sender.example, have dkim_:other.example)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@other.example, stat=0) adsp=nxdomain rep=0
 ])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
@@ -675,6 +685,7 @@ ZF_RUN,
 ],
 [INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) adsp:all=pass rep=0
 ])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 5 mail, 0,
 [Authentication-Results: test.example;
@@ -707,6 +718,7 @@ ZF_RUN,
 ],
 [INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) adsp:discardable=pass rep=0
 ])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 5 mail, 0,
 [Authentication-Results: test.example;
@@ -740,6 +752,7 @@ ZF_RUN,
 ],
 [INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=fail (id=@author.example, signature verification failed, stat=1) adsp:all=fail rep=0
 ])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 5 mail, 0,
 [Authentication-Results: test.example;
@@ -823,6 +836,7 @@ ZF_RUN,
 [INFO:zdkimfilter[[0]]:id=policymsg: adsp=discardable policy: author.example, whitelisted (have spf_:sender.example, dkim_:--no)
 INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=fail (id=@author.example, signature verification failed, stat=1) adsp:discardable=discard rep=0
 ])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 5 mail, 0,
 [Authentication-Results: test.example;
@@ -856,6 +870,7 @@ ZF_RUN,
 ],
 [INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp:all=fail rep=0
 ])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 5 mail, 0,
 [Authentication-Results: test.example;
@@ -888,6 +903,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 5 mail, 0,
 [Authentication-Results: test.example;
@@ -923,6 +939,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
@@ -957,6 +974,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
@@ -991,6 +1009,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [])
+ZF_REQUIRE_22
 AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;

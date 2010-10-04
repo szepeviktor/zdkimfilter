@@ -20,7 +20,7 @@ AC_PROG_CXX
 
 AC_PROG_AWK
 AC_PROG_EGREP
-AC_PATH_PROG([PKG_CONFIG], [pkg-config])
+PKG_PROG_PKG_CONFIG
 
 # check debugging
 ZDKIMFILTER_DEBUG="0"
@@ -188,6 +188,13 @@ if test "$av_cv_opendkim_version_ok" = "no"; then
 	AC_MSG_ERROR([unsupported old opendkim library])
 fi
 
+AC_CACHE_CHECK([if that was 2.2.0 or better],
+	av_cv_opendkim_version_220,
+	[
+	av_cv_opendkim_version_220="false"
+	$PKG_CONFIG --atleast-version=2.2.0 opendkim && av_cv_opendkim_version_220="true"
+	])
+
 AC_CACHE_CHECK([cflags for opendkim],
 	av_cv_cflags_opendkim,
 	[
@@ -220,6 +227,42 @@ else
 	OPENDKIM_CFLAGS=" $av_cv_cflags_opendkim"
 fi
 AC_SUBST([OPENDKIM_CFLAGS])
+
+AC_HEADER_RESOLV
+RESOLVER_LIB=
+av_cv_flags_library_resolver="none"
+# res_query has been seen in libc, libbind and libresolv (jabber's AC)
+if test "x-$ac_cv_header_resolv_h" = "x-yes" ; then
+	AC_MSG_CHECKING([flags for resolver library])
+	SAVE_LIBS="$LIBS"
+	LIBS="$SAVE_LIBS $RESOLVER_LIB"
+	AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <resolv.h>]], [[res_query(0,0,0,0,0)]])],
+		[av_cv_flags_library_resolver="none needed"])
+	if test "$av_cv_flags_library_resolver" = "none"; then
+		RESOLVER_LIB="-lresolv"
+		LIBS="$SAVE_LIBS $RESOLVER_LIB"
+		AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <resolv.h>]], [[res_query(0,0,0,0,0)]])],
+			[av_cv_flags_library_resolver="$RESOLVER_LIB"])
+	fi
+	if test "$av_cv_flags_library_resolver" = "none"; then
+		RESOLVER_LIB="-lbind"
+		LIBS="$SAVE_LIBS $RESOLVER_LIB"
+		AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <resolv.h>]], [[res_query(0,0,0,0,0)]])],
+			[av_cv_flags_library_resolver="$RESOLVER_LIB"])
+	fi
+	if test "$av_cv_flags_library_resolver" = "none"; then
+		RESOLVER_LIB="-lresolv -lsocket -lnsl"
+		LIBS="$SAVE_LIBS $RESOLVER_LIB"
+		AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <resolv.h>]], [[res_query(0,0,0,0,0)]])],
+			[av_cv_flags_library_resolver="$RESOLVER_LIB"])
+	fi
+	LIBS="$SAVE_LIBS"
+fi
+if test "$av_cv_flags_library_resolver" = "none"; then
+	AC_MSG_ERROR([unable to use resolver library])
+fi
+AC_MSG_RESULT([$RESOLVER_LIB])
+AC_SUBST([RESOLVER_LIB])
 
 
 OPENDKIM_LIB=" -lopendkim"
@@ -369,6 +412,9 @@ AC_SUBST([MAILUSER], ["$courier_mailuser"])
 AC_SUBST([FILTERSOCKETDIR], ["${courier_localstatedir}/filters"])
 AC_SUBST([ALLFILTERSOCKETDIR], ["${courier_localstatedir}/allfilters"])
 AC_SUBST([ZDKIMFILTER_PID_DIR], ["${courier_localstatedir}/tmp"])
+
+# limit test suite entries
+AC_SUBST([HAVE_LIBOPENDKIM_220], ["${av_cv_opendkim_version_220}"])
 
 # LN_S used in tests/aclocal.in
 AC_PROG_LN_S

@@ -1,3 +1,4 @@
 # @configure_input@
 LN_S='@LN_S@'
+HAVE_LIBOPENDKIM_220='@HAVE_LIBOPENDKIM_220@'
 

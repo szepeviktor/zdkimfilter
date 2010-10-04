@@ -50,6 +50,7 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include <stdbool.h>
 #include "filterlib.h"
 #include "filedefs.h"
+#include "myvbr.h"
 
 #include <assert.h>
 
@@ -235,6 +236,11 @@ typedef struct stats_info
 	char *ct, *cte;
 	char *client_ip;
 	char *jobid;
+	
+	// TODO: complete vbr processing
+	char *vbr_spamhaus;
+	unsigned vbr_info;
+
 	unsigned rhcnt;
 	unsigned adsp_found:2;
 	unsigned adsp_unknown:2;
@@ -256,6 +262,7 @@ static void clean_stats_info_content(stats_info *stats)
 		}
 		free(stats->ct);
 		free(stats->cte);
+		free(stats->vbr_spamhaus);
 		// don't free(stats->client_ip); it is in dyn.info
 		// don't free(stats->id); it is in dyn.info
 	}
@@ -301,6 +308,7 @@ typedef struct dkimfl_parm
 	char tempfail_on_error;
 	char no_author_domain;
 	char no_reputation;
+	char no_dwl;
 	char all_mode;
 	char sign_rsa_sha1;
 	char header_canon_relaxed;
@@ -515,6 +523,7 @@ static config_conf const conf[] =
 	CONFIG(tempfail_on_error, "Y/N", assign_char),
 	CONFIG(no_author_domain, "Y=disable ADSP", assign_char),
 	CONFIG(no_reputation, "Y=skip reputation lookup", assign_char),
+	CONFIG(no_dwl, "Y=skip dwl.spamhaus.org lookup", assign_char),
 	CONFIG(all_mode, "Y/N", assign_char),
 	CONFIG(sign_rsa_sha1, "Y/N, N for rsa-sha256", assign_char),
 	CONFIG(header_canon_relaxed, "Y/N, N for simple", assign_char),
@@ -1288,11 +1297,11 @@ typedef struct verify_parms
 
 	int presult;
 	int dkim_reputation;
-	size_t a_r_count, d_s_count, auth_sigs;
+	size_t auth_sigs;
 	size_t received_spf;
 	char sig_is_author;
 	char dkim_reputation_flag;
-	
+
 } verify_parms;
 
 static int
@@ -1475,10 +1484,6 @@ static int verify_headers(verify_parms *vh)
 		// malformed headers can go away...
 		if (!isalpha(*(unsigned char*)start))
 			zap = 1;
-		
-		// count signatures
-		else if (hdrval(start, DKIM_SIGNHEADER))
-			++vh->d_s_count;
 
 		// count A-R fields that have to be removed
 		else if ((s = hdrval(start, "Authentication-Results")) != NULL)
@@ -1520,7 +1525,6 @@ static int verify_headers(verify_parms *vh)
 					*s = ch;
 				}
 			}
-			vh->a_r_count += zap;
 		}
 		
 		// (only on first pass and Received*)
@@ -1606,7 +1610,7 @@ static int verify_headers(verify_parms *vh)
 		}
 
 		// (only on first pass and stats enabled)
-		// save stats' ct and cte, check fromlist
+		// save stats' ct and cte, check fromlist, count VBR-Info
 		else if (dkim && parm->dyn.stats)
 		{
 			char **target = NULL;
@@ -1669,6 +1673,9 @@ static int verify_headers(verify_parms *vh)
 			
 			else if (hdrval(start, "Mailing-List"))
 				parm->dyn.stats->fromlist = 1;
+
+			else if (hdrval(start, "VBR-Info"))
+				parm->dyn.stats->vbr_info += 1;
 		}
 
 
@@ -1786,11 +1793,9 @@ static void verify_message(dkimfl_parm *parm)
 	if (parm->dyn.authserv_id == NULL)
 		clean_stats(parm);
 	else if (parm->dyn.rtc == 0)
-	/* not testing:
-		(vh.a_r_count || vh.d_s_count ||
-			parm->add_a_r_anyway || ))
-	*/
 	{
+		char *vbr_spamhaus = NULL;
+
 		if (dkim_minbody(dkim) > 0)
 			copy_body(parm, dkim);
 
@@ -1804,6 +1809,8 @@ static void verify_message(dkimfl_parm *parm)
 		{
 			case DKIM_STAT_OK:
 				vh.dkim_result = "pass";
+				if (!parm->no_dwl)
+					spamhaus_vbr_query(vh.sig_domain, &vbr_spamhaus);
 				break;
 
 			case DKIM_STAT_NOSIG:
@@ -1899,7 +1906,7 @@ static void verify_message(dkimfl_parm *parm)
 							status == DKIM_STAT_OK && vh.sig_domain?
 								vh.sig_domain: "--no");
 
-					if (!spf_whitelisted && !dkim_whitelisted)
+					if (!spf_whitelisted && !dkim_whitelisted && !vbr_spamhaus)
 					{
 						if (smtp_reason) //reject
 							fl_pass_message(parm->fl, smtp_reason);
@@ -2089,7 +2096,20 @@ static void verify_message(dkimfl_parm *parm)
 						vh.dkim_reputation, DKIM_REP_ROOT, vh.sig_domain);
 				++auth_given;
 			}
-			
+
+			if (vbr_spamhaus)
+			{
+				fprintf(fp,
+					";\n  x-vbr=pass (%s from dwl.spamhaus.org) header.d=%s",
+					vbr_spamhaus, vh.sig_domain);
+				if (parm->dyn.stats)
+					parm->dyn.stats->vbr_spamhaus = vbr_spamhaus;
+				else
+					free(vbr_spamhaus);
+				vbr_spamhaus = NULL;					
+				++auth_given;
+			}
+
 			if (auth_given <= 0)
 				fputs("; none", fp);
 			fputc('\n', fp);

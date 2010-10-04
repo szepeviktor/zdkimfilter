@@ -3,14 +3,14 @@
 @SET_MAKE@
 
 AM_CFLAGS = -I$(top_srcdir) -fno-strict-aliasing
-noinst_HEADERS = filterlib.h filedefs.h OpenDKIMstats.h
+noinst_HEADERS = filterlib.h filedefs.h OpenDKIMstats.h myvbr.h
 
 filterexecdir = @COURIER_FILTER_INSTALL@
 filterexec_PROGRAMS = zdkimfilter
 filterexecPROGRAMS_INSTALL = $(INSTALL_PROGRAM)@PROGRAM_OWNER@
 
-zdkimfilter_SOURCES = zdkimfilter.c filterlib.c
-zdkimfilter_LDADD = @OPENDKIM_LIB@
+zdkimfilter_SOURCES = zdkimfilter.c filterlib.c myvbr.c
+zdkimfilter_LDADD = @OPENDKIM_LIB@ @RESOLVER_LIB@
 zdkimfilter_LDFLAGS = @OPENDKIM_LIB_PATH@
 zdkimfilter_CFLAGS = -DFILTER_NAME=zdkimfilter $(AM_CFLAGS)@OPENDKIM_CFLAGS@
 

@@ -30,7 +30,7 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 */
 
 #if !defined(FILTERLIB_H_INCLUDED)
-// set pid==0 in messages and temp filenames
+// set pid==0 in messages and temp filenames, skip lookups (myvbr)
 extern int is_batch_test;
 
 struct filter_lib_struct;
