@@ -1,0 +1,76 @@
+Change this as appropriate, also eliminating these top 26 lines
+
+Whether or not you use logrotate, you may want to adapt parts of this file to
+your needs.  The postrotate script is executed by the shell after renaming (mv)
+the log file.
+
+This is not a portable piece of code, check out contrib/opendkim-reportstats
+for such kind of script.  However, the first part of the script exemplifies
+how to use zdkimstats-wait and zdkimstats-anon.  It assumes you have configured
+zdkimfilter.conf with
+
+  # stats_file
+  # full path for a stats file about signatures verifications, including a line
+  # for each non-signed message. Setting this parameter enables writing stats.
+  # The default is an empty string, which disables writing stats.
+  stats_file /var/log/zdkimstats/stats
+
+Before you start submitting your data to OpenDKIM, you should create a gpg key
+and send its public part to OpenDKIM.
+
+Change "/var/log/zdkimstats" or create it.  Remember "courier" user needs to write it.
+Change "YOUR POSTMASTER ADDRESS"
+Change 'your secret hash prefix' _ONCE_: Never change it after you've started submitting your data.
+Change "WHEREVER_YOU_HAVE" to some directory (e.g. the home directory of the "courier" user)
+Change "YOUR.MTA.FQDN"
+
+/var/log/zdkimstats/stats {
+	daily
+	missingok
+	rotate 10
+	maxage 10
+	size 1
+	dateext
+	nocompress
+	notifempty
+	nocreate
+	nocopy
+	postrotate
+		rotatedlog="stats-$(date '+%Y%m%d')"
+		if cd /var/log/zdkimstats && zdkimstats-wait $rotatedlog
+		then
+			exec >logrotate.stdout 2>logrotate.stderr
+			zdkimstats-anon -a adsp -c total \
+				-p 'your secret hash prefix' \
+				-x opendkim.org mipassoc.org \
+				< $rotatedlog > stats.out
+			zdkimstats-anon < $rotatedlog | \
+				opendkim-importstats -p password
+
+			# change these variables, if needed
+			export OPENDKIM_OUTPUT=/var/www/opendkim/opendkim-report.html
+			export OPENDKIM_PASSWORD=password
+			opendkim-genstats
+
+			printf 'uauthsmtp\nipostmaster@YOUR.MTA.FQDN\nMsign\n' > ctlfile &&
+			printf '%s: %s\n%s: %s\n%s: %s at %s\n%s: %s\n%s: <%s.%x.%x@%s>\n\n' \
+				"From" "YOUR POSTMASTER ADDRESS" \
+				"To" "stats-report@opendkim.org" \
+				"Subject" "opendkim-stats report from YOUR.MTA.FQDN" \
+					"$(date +%s)" \
+				"Date" "$(date --rfc-2822)" \
+				"Message-ID" "dkimeodlog" \
+					"$(date +%s)" \
+					"$(date +%N)" \
+					"YOUR.MTA.FQDN" > header &&
+			gpg --home=WHEREVER_YOU_HAVE/.gnupg --batch --no-tty \
+				--output stats.signed --clearsign stats.out &&
+			cat header stats.signed > stats.eml &&
+			printf 'stats.eml\nctlfile\n\nexit\n' > zbatch &&
+			/usr/local/libexec/filters/zdkimfilter --batch-test < zbatch &&
+			MAILSUSER=postmaster MAILSHOST=YOUR.MTA.FQDN sendmail < stats.eml &&
+			rm zbatch stats.signed
+		fi
+	endscript
+}
+

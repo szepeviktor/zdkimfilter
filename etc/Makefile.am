@@ -2,6 +2,8 @@
 
 @SET_MAKE@
 
+EXTRA_DIST = logrotate.example opendkim-genstats.patch
+
 sysfilterconfDATA_INSTALL = $(INSTALL) -m 640@PROGRAM_OWNER@
 
 sysfilterconfdir = @COURIER_SYSCONF_INSTALL@/filters
