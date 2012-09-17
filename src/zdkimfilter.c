@@ -2,7 +2,7 @@
 * zdkimfilter - written by ale in milano on Thu 11 Feb 2010 03:48:15 PM CET 
 * Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010 Alessandro Vesely
+Copyright (C) 2010-2012 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -238,7 +238,7 @@ typedef struct stats_info
 	char *jobid;
 	
 	// TODO: complete vbr processing
-	char *vbr_spamhaus;
+	char *vbr_result;
 	unsigned vbr_info;
 
 	unsigned rhcnt;
@@ -262,7 +262,7 @@ static void clean_stats_info_content(stats_info *stats)
 		}
 		free(stats->ct);
 		free(stats->cte);
-		free(stats->vbr_spamhaus);
+		free(stats->vbr_result);
 		// don't free(stats->client_ip); it is in dyn.info
 		// don't free(stats->id); it is in dyn.info
 	}
@@ -290,11 +290,11 @@ typedef struct dkimfl_parm
 	char *default_domain;
 	char *tmp;
 	char *stats_file;
-	const u_char **sign_hfields;
-	const u_char **skip_hfields;
-	const u_char **spf_whitelist;
-	const u_char **dkim_whitelist;
-	const u_char **key_choice_header;
+	const char **sign_hfields;
+	const char **skip_hfields;
+	const char **domain_whitelist;
+	const char **key_choice_header;
+	const char **trusted_vouchers;
 
 	// end of pointers (some malloc'd but never free'd)
 	per_message_parm dyn;
@@ -317,6 +317,9 @@ typedef struct dkimfl_parm
 	// other
 	char pid_created;
 } dkimfl_parm;
+
+static inline const u_char **
+cast_u_char_parm_array(const char **a) {return (const u_char **)a;}
 
 #define DEFAULT_STATS_WAIT 1200 /* 20 minutes */
 static void config_default(dkimfl_parm *parm) // only non-zero...
@@ -437,7 +440,7 @@ static int assign_int(dkimfl_parm *parm, config_conf const *c, char*s)
 	return 0;
 }
 
-static int hfields(char *h, const u_char **a)
+static int hfields(char *h, const char **a)
 {
 	assert(h);
 
@@ -470,9 +473,9 @@ static int hfields(char *h, const u_char **a)
 
 static int assign_array(dkimfl_parm *parm, config_conf const *c, char*s)
 {
-	assert(parm && c && s && c->size == sizeof(u_char**));
+	assert(parm && c && s && c->size == sizeof(char**));
 
-	const u_char **a = NULL;
+	const char **a = NULL;
 	int count = hfields(s, NULL);
 	if (count > 0)
 	{
@@ -483,7 +486,7 @@ static int assign_array(dkimfl_parm *parm, config_conf const *c, char*s)
 			fl_report(LOG_ALERT, "MEMORY FAULT");
 			return -1;
 		}
-		a = (const u_char**)all;
+		a = (const char**)all;
 		all += n;
 		strcpy(all, s);
 		a[count] = NULL;		
@@ -491,7 +494,7 @@ static int assign_array(dkimfl_parm *parm, config_conf const *c, char*s)
 	}
 	assert(count == 0);
 
-	PARM_PTR(const u_char **) = a;
+	PARM_PTR(const char **) = a;
 	return 0;
 }
 
@@ -509,9 +512,9 @@ static config_conf const conf[] =
 	CONFIG(stats_file, "stats file path", assign_ptr),
 	CONFIG(sign_hfields, "space-separated, no colon", assign_array),
 	CONFIG(skip_hfields, "space-separated, no colon", assign_array),
-	CONFIG(spf_whitelist, "space-separated domains", assign_array),
-	CONFIG(dkim_whitelist, "space-separated domains", assign_array),
+	CONFIG(domain_whitelist, "space-separated domains", assign_array),
 	CONFIG(key_choice_header, "key choice header", assign_array),
+	CONFIG(trusted_vouchers, "space-separated, no colon", assign_array),
 	CONFIG(verbose, "int", assign_int),
 	CONFIG(dns_timeout, "secs", assign_int),
 	CONFIG(stats_wait, "secs", assign_int),	
@@ -523,7 +526,7 @@ static config_conf const conf[] =
 	CONFIG(tempfail_on_error, "Y/N", assign_char),
 	CONFIG(no_author_domain, "Y=disable ADSP", assign_char),
 	CONFIG(no_reputation, "Y=skip reputation lookup", assign_char),
-	CONFIG(no_dwl, "Y=skip dwl.spamhaus.org lookup", assign_char),
+	CONFIG(no_dwl, "Y=skip VBR-Info processing", assign_char),
 	CONFIG(all_mode, "Y/N", assign_char),
 	CONFIG(sign_rsa_sha1, "Y/N, N for rsa-sha256", assign_char),
 	CONFIG(header_canon_relaxed, "Y/N, N for simple", assign_char),
@@ -549,7 +552,7 @@ static void report_config(fl_parm *fl)
 		}
 		else if (c->assign_fn == assign_array)
 		{
-			u_char const ** const a = PARM_PTR(u_char const**);
+			char const ** const a = PARM_PTR(char const**);
 			if (a == NULL)
 				fputs("NULL", stdout);
 			else
@@ -1284,12 +1287,15 @@ static void sign_message(dkimfl_parm *parm)
 typedef struct verify_parms
 {
 	char *sender_domain, *helo_domain; // imply SPF "pass"
+	vbr_info *vbr;  // store of all VBR-Info fields
+
+	vbr_check_result vbr_result;  // resp is malloc'd
 	
-	// not malloc'd
+	// not malloc'd or maintained elsewhere
 	dkimfl_parm *parm;
 	char *dkim_domain, *dkim_result;
-	DKIM_SIGINFO *sig;
-	char *sig_domain;
+	DKIM_SIGINFO *sig, *vbr_sig, *whitelisted_sig;
+	char *sig_domain, *whitelisted_domain; // vbr_domain in vbr_result.vbr->md
 	dkim_policy_t policy;
 
 	void *dkim_or_file;
@@ -1299,18 +1305,22 @@ typedef struct verify_parms
 	int dkim_reputation;
 	size_t auth_sigs;
 	size_t received_spf;
+	size_t trusted_sigs;
 	char sig_is_author;
 	char dkim_reputation_flag;
 
 } verify_parms;
 
+// odd-aligned constant may replace vbr_sig or whitelisted_sig
+static DKIM_SIGINFO *const not_sig_but_spf = (DKIM_SIGINFO*)0xb16b00b5;
+
 static int
-signer_is_whitelisted(verify_parms const *vh, char const *const domain)
+domain_is_whitelisted(verify_parms const *vh, char const *const domain)
 {
 	assert(vh);
 	assert(vh->parm);
 	
-	u_char const ** const wl = vh->parm->dkim_whitelist;
+	char const ** const wl = vh->parm->domain_whitelist;
 	if (wl == NULL || domain == NULL)
 		return 0; // no whitelist given
 
@@ -1321,21 +1331,47 @@ signer_is_whitelisted(verify_parms const *vh, char const *const domain)
 	return 0;
 }
 
-static int sender_is_whitelisted(verify_parms const *vh)
+static int is_trusted_voucher(char const **const tv, char const *const voucher)
+// return non-zero if voucher is in the trusted_voucher list
+// the returned value is 1 + the index of trust, for sorting
+{
+	if (tv && voucher)
+		for (int i = 0; tv[i] != NULL; ++i)
+			if (stricmp(voucher, tv[i]) == 0)
+				return i + 1;
+
+	return 0;
+}
+
+static int
+has_trusted_voucher(verify_parms const *vh, vbr_info const *const vbr)
+// return a non-zero number proportional to trust if any mv is a trusted voucher
 {
 	assert(vh);
 	assert(vh->parm);
-	
-	u_char const ** const wl = vh->parm->spf_whitelist;
-	char const *const s = vh->sender_domain;
-	if (wl == NULL || s == NULL)
-		return 0; // no whitelist given
 
-	for (int i = 0; wl[i] != 0; ++i)
-		if (stricmp(wl[i], s) == 0)
-			return 1;
+	if (vbr && vbr->mv)
+	{
+		char const ** const tv = vh->parm->trusted_vouchers;
+
+		for (char *const *mv = vbr->mv; *mv; ++mv)
+		{
+			int const itv = is_trusted_voucher(tv, *mv);
+			if (itv)
+				return itv;
+		}
+	}
 
 	return 0;
+}
+
+static int count_trusted_vouchers(char const **const tv)
+{
+	int i = 0;
+	if (tv)
+		for (; tv[i] != NULL; ++i)
+			continue;
+	return i;
 }
 
 static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
@@ -1347,6 +1383,9 @@ static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	int *val = (int*)malloc(nsigs * sizeof(int));
 	if (val == NULL)
 		return DKIM_CBSTAT_TRYAGAIN;
+
+	int const vbr_count = count_trusted_vouchers(vh->parm->trusted_vouchers);
+	int const vbr_factor = vbr_count < 2? 0: 1000/(vbr_count - 1);
 
 	size_t const helolen = vh->helo_domain? strlen(vh->helo_domain): 0;
 
@@ -1366,12 +1405,35 @@ static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 			{
 				if (vh->dkim_domain && stricmp(vh->dkim_domain, domain) == 0)
 				{
-					sigval += 1000; // author domain signature
+					sigval += 2000;    // author domain signature
 					++vh->auth_sigs;
 				}
 
+				if (domain_is_whitelisted(vh, domain))
+					sigval += 1000;    // trusted signer
+
+				vbr_info *const vbr = vbr_info_get(vh->vbr, domain);
+				if (vbr)
+				{
+					sigval += 5;       // sender's adverized vouching
+					if (vbr_count)
+					{
+						/*
+						* for trusted vouching, add a value ranging linearly
+						* from 1200 for trust=1 down to 200 for trust=vbr_count
+						* assuming 1 <= trust <= vbr_count
+						*/
+						int trust = has_trusted_voucher(vh, vbr);
+						if (trust)
+						{
+							sigval += vbr_factor * (vbr_count - trust) + 200;
+							++vh->trusted_sigs;
+						}
+					}
+				}
+
 				if (vh->sender_domain && stricmp(vh->sender_domain, domain) == 0)
-					sigval += 100; // sender's domain signature
+					sigval += 100;     // sender's domain signature
 
 				if (helolen)
 				{
@@ -1381,11 +1443,8 @@ static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 						helocmp += helolen - dl;
 					// should check it's not co.uk or similar...
 					if (stricmp(helocmp, domain) == 0)
-						sigval += 10; // helo domain signature
+						sigval += 10;   // helo domain signature
 				}
-				
-				if (signer_is_whitelisted(vh, domain))
-					sigval += 500; // trusted domain signature
 			}
 		}
 
@@ -1426,7 +1485,7 @@ static void clean_stats(dkimfl_parm *parm)
 	free(parm->dyn.stats);
 	parm->dyn.stats = NULL;
 }
-	
+
 static int verify_headers(verify_parms *vh)
 // return parm->dyn.rtc = -1 for unrecoverable error,
 // parm->dyn.rtc (0) otherwise
@@ -1610,7 +1669,7 @@ static int verify_headers(verify_parms *vh)
 		}
 
 		// (only on first pass and stats enabled)
-		// save stats' ct and cte, check fromlist, count VBR-Info
+		// save stats' ct and cte, check fromlist, collect VBR-Info
 		else if (dkim && parm->dyn.stats)
 		{
 			char **target = NULL;
@@ -1674,10 +1733,19 @@ static int verify_headers(verify_parms *vh)
 			else if (hdrval(start, "Mailing-List"))
 				parm->dyn.stats->fromlist = 1;
 
-			else if (hdrval(start, "VBR-Info"))
-				parm->dyn.stats->vbr_info += 1;
+			else if ((s = hdrval(start, "VBR-Info")) != NULL)
+			{
+				int const rtc = vbr_info_add(&vh->vbr, s);
+				if (rtc < 0)
+				{
+					fl_report(LOG_ALERT, "MEMORY FAULT");
+					return parm->dyn.rtc = -1;
+				}
+				else if (rtc && parm->verbose >= 3)
+					fl_report(LOG_INFO, "id=%s: bad VBR-Info: %s",
+						parm->dyn.info.id, s);
+			}
 		}
-
 
 		if (!zap)
 		{
@@ -1767,6 +1835,47 @@ static int verify_headers(verify_parms *vh)
 	return parm->dyn.rtc;
 }
 
+static inline int sig_is_good(DKIM_SIGINFO *const sig)
+{
+	unsigned int const sig_flags = dkim_sig_getflags(sig);
+	unsigned int const bh = dkim_sig_getbh(sig);
+	DKIM_SIGERROR const err = dkim_sig_geterror(sig);
+	return (sig_flags & DKIM_SIGFLAG_IGNORE) == 0 &&
+		(sig_flags & DKIM_SIGFLAG_PASSED) != 0 &&
+		bh == DKIM_SIGBH_MATCH &&
+		err == DKIM_SIGERROR_OK;
+}
+
+static int run_vbr_check(verify_parms *vh, char const *const domain)
+{
+	assert(vh);
+	assert(vh->parm);
+
+	dkimfl_parm *parm = vh->parm;
+	size_t const queries = vh->vbr_result.queries;
+
+	vh->vbr_result.vbr = NULL;
+	vh->vbr_result.mv = NULL;
+	vh->vbr_result.tv = vh->parm->trusted_vouchers;
+	int rc = vbr_check(vh->vbr, domain, &is_trusted_voucher, &vh->vbr_result);
+	if (rc != 0 && parm->verbose >= 3)
+	{
+		if (queries == vh->vbr_result.queries && vh->vbr_result.vbr != NULL)
+		// no certifiers are trusted for this domain
+		{
+			char *verifiers = vbr_info_vouchers(vh->vbr_result.vbr);
+			fl_report(LOG_INFO, "non-trusted VBR certifier(s) for %s: %s",
+				domain, verifiers? verifiers: "(null)");
+			free(verifiers);
+		}
+		else if (rc == 3 && vh->vbr_result.mv != NULL)
+			fl_report(LOG_NOTICE,
+				"%s claims VBR-Info by trusted VBR certifier %s, who says NXDOMAIN",
+					domain, vh->vbr_result.mv);
+	}
+	return rc;
+}
+
 static void verify_message(dkimfl_parm *parm)
 /*
 * add/remove A-R records, set rtc 1 if ok, 2 if rejected, -1 if failed,
@@ -1791,26 +1900,85 @@ static void verify_message(dkimfl_parm *parm)
 	vh.parm = parm;
 	verify_headers(&vh);
 	if (parm->dyn.authserv_id == NULL)
+	{
 		clean_stats(parm);
+		vbr_info_clear(vh.vbr);
+		vh.vbr = NULL;
+	}
 	else if (parm->dyn.rtc == 0)
 	{
-		char *vbr_spamhaus = NULL;
-
 		if (dkim_minbody(dkim) > 0)
 			copy_body(parm, dkim);
 
 		status = dkim_eom(dkim, NULL);
+
+		// author domain signature (if passed) is on top
 		vh.sig = dkim_getsignature(dkim);
 		vh.sig_domain = vh.sig? dkim_sig_getdomain(vh.sig): NULL;
 		vh.sig_is_author = vh.sig_domain && vh.dkim_domain &&
 			stricmp(vh.sig_domain, vh.dkim_domain) == 0;
+
+		/*
+		* VBR and whitelist
+		*/
+		if ((parm->no_dwl == 0 || parm->domain_whitelist) && status == DKIM_STAT_OK)
+		{
+			DKIM_SIGINFO **sigs;
+			int nsigs;
+			if (dkim_getsiglist(dkim, &sigs, &nsigs) == DKIM_STAT_OK)
+			{
+				int at_or_after = 0;
+				for (int c = 0; c < nsigs; ++c)
+				{
+					DKIM_SIGINFO *const sig = sigs[c];
+					if (sig == vh.sig)
+						at_or_after = 1;
+					if (at_or_after)
+					{
+						char *const domain = dkim_sig_getdomain(sig);
+						if (domain != NULL && sig_is_good(sig))
+						{
+							if (!parm->no_dwl && vh.vbr_sig == NULL &&
+								run_vbr_check(&vh, domain) == 0)
+							{
+								vh.vbr_sig = sig;
+								if (vh.whitelisted_sig != NULL ||
+									parm->domain_whitelist == NULL)
+										break;
+							}
+							
+							if (parm->domain_whitelist && vh.whitelisted_sig == NULL &&
+								domain_is_whitelisted(&vh, domain))
+							{
+								vh.whitelisted_sig = sig;
+								vh.whitelisted_domain = domain;
+								if (vh.vbr_sig != NULL || parm->no_dwl)
+									break;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// if no DKIM domain is vouched but SPF passed, try that
+		if (vh.vbr_sig == NULL && vh.sender_domain != NULL && parm->no_dwl == 0 &&
+			run_vbr_check(&vh, vh.sender_domain) == 0)
+				vh.vbr_sig = not_sig_but_spf;
+
+		// if no DKIM domain is whitelisted but SPF passed, try that
+		if (vh.whitelisted_sig == NULL && vh.sender_domain != NULL &&
+			domain_is_whitelisted(&vh, vh.sender_domain))
+		{
+			vh.whitelisted_sig = not_sig_but_spf;
+			vh.whitelisted_domain = vh.sender_domain;
+		}
+
 		
 		switch (status)
 		{
 			case DKIM_STAT_OK:
 				vh.dkim_result = "pass";
-				if (!parm->no_dwl)
-					spamhaus_vbr_query(vh.sig_domain, &vbr_spamhaus);
 				break;
 
 			case DKIM_STAT_NOSIG:
@@ -1839,11 +2007,10 @@ static void verify_message(dkimfl_parm *parm)
 
 		if (parm->dyn.rtc == 0)
 		{
-			if (dkim_policy(dkim, &vh.policy, NULL) == DKIM_STAT_OK)
+			if ((vh.dkim_domain != NULL ||
+					(vh.dkim_domain = dkim_getdomain(dkim)) != NULL) &&
+				dkim_policy(dkim, &vh.policy, NULL) == DKIM_STAT_OK)
 			{
-				if (vh.dkim_domain == NULL)
-					vh.dkim_domain = dkim_getdomain(dkim);
-
 				vh.presult = dkim_getpresult(dkim);
 				bool const adsp_fail =
 					(vh.policy == DKIM_POLICY_DISCARDABLE ||
@@ -1874,11 +2041,6 @@ static void verify_message(dkimfl_parm *parm)
 */
 				{
 					char const *log_reason, *smtp_reason = NULL;
-					int spf_whitelisted = sender_is_whitelisted(&vh);
-					int dkim_whitelisted =
-						status == DKIM_STAT_OK &&
-						vh.sig_domain != NULL &&
-						signer_is_whitelisted(&vh, vh.sig_domain);
 					
 					if (vh.presult == DKIM_PRESULT_NXDOMAIN)
 					{
@@ -1887,26 +2049,40 @@ static void verify_message(dkimfl_parm *parm)
 					}
 					else if (vh.policy != DKIM_POLICY_DISCARDABLE)
 					{
-						log_reason = "adsp=all policy:";
+						log_reason = "adsp=all policy for";
 						smtp_reason = "554 DKIM signature required by ADSP\n";
 					}
 					else
 						log_reason = "adsp=discardable policy:";
 
 					if (parm->verbose >= 3)
-						fl_report(LOG_INFO,
-							"id=%s: %s %s, %swhitelisted (%sspf_:%s, %sdkim_:%s)",
-							parm->dyn.info.id,
-							log_reason,
-							vh.dkim_domain? vh.dkim_domain: "(NULL)",
-							spf_whitelisted || dkim_whitelisted? "": "NOT ",
-							spf_whitelisted? "have ": "",
-							vh.sender_domain? vh.sender_domain: "--no",
-							dkim_whitelisted? "have ": "",
-							status == DKIM_STAT_OK && vh.sig_domain?
-								vh.sig_domain: "--no");
+					{
+						if (vh.whitelisted_domain)
+							fl_report(LOG_INFO,
+								"id=%s: %s %s, but %s is whitelisted (auth: %s)",
+								parm->dyn.info.id,
+								log_reason,
+								vh.dkim_domain,
+								vh.whitelisted_domain,
+								vh.whitelisted_sig == not_sig_but_spf? "SPF": "DKIM");
+						else if (vh.vbr_sig)
+							fl_report(LOG_INFO,
+								"id=%s: %s %, but %s is VBR vouched by %s (auth: %s)",
+								parm->dyn.info.id,
+								log_reason,
+								vh.dkim_domain,
+								vh.vbr_result.vbr->md,
+								vh.vbr_result.mv,
+								vh.vbr_sig == not_sig_but_spf? "SPF": "DKIM");
+						else
+							fl_report(LOG_INFO,
+								"id=%s: %s %s, no VBR and no whitelist",
+								parm->dyn.info.id,
+								log_reason,
+								vh.dkim_domain);
+					}
 
-					if (!spf_whitelisted && !dkim_whitelisted && !vbr_spamhaus)
+					if (vh.vbr_sig == NULL && vh.whitelisted_sig == NULL)
 					{
 						if (smtp_reason) //reject
 							fl_pass_message(parm->fl, smtp_reason);
@@ -1946,7 +2122,7 @@ static void verify_message(dkimfl_parm *parm)
 
 
 		/*
-		* check ADSP
+		* prepare ADSP results
 		*/
 		char const *policy_type = "", *policy_result = "";
 		if (parm->dyn.rtc == 0)
@@ -1975,7 +2151,9 @@ static void verify_message(dkimfl_parm *parm)
 		*/
 		if (parm->dyn.rtc == 0 &&
 			(parm->add_a_r_anyway ||
-				vh.sender_domain || vh.helo_domain || vh.sig || *policy_result))
+				vh.sender_domain || vh.helo_domain ||
+				vh.sig || vh.vbr_sig || vh.whitelisted_sig ||
+				*policy_result))
 		{
 			FILE *fp = fl_get_write_file(parm->fl);
 			if (fp == NULL)
@@ -1985,6 +2163,8 @@ static void verify_message(dkimfl_parm *parm)
 					parm->dyn.stats->dkim = dkim;
 				else
 					dkim_free(dkim);
+
+				vbr_info_clear(vh.vbr);
 				return;
 			}
 
@@ -2097,16 +2277,18 @@ static void verify_message(dkimfl_parm *parm)
 				++auth_given;
 			}
 
-			if (vbr_spamhaus)
+			if (vh.vbr_result.resp)
 			{
 				fprintf(fp,
-					";\n  x-vbr=pass (%s from dwl.spamhaus.org) header.d=%s",
-					vbr_spamhaus, vh.sig_domain);
+					";\n  vbr=pass header.mv=%s header.md=%s (%s)",
+					vh.vbr_result.mv, vh.vbr_result.vbr->md, vh.vbr_result.resp);
 				if (parm->dyn.stats)
-					parm->dyn.stats->vbr_spamhaus = vbr_spamhaus;
+					parm->dyn.stats->vbr_result = vh.vbr_result.resp;
 				else
-					free(vbr_spamhaus);
-				vbr_spamhaus = NULL;					
+				{
+					free(vh.vbr_result.resp);
+					vh.vbr_result.resp = NULL;
+				}
 				++auth_given;
 			}
 
@@ -2147,6 +2329,9 @@ static void verify_message(dkimfl_parm *parm)
 			parm->dyn.stats->dkim = dkim;
 		else
 			dkim_free(dkim);
+
+	free(vh.vbr_result.resp); // TODO: check dyn.stats above!!!!!!!
+	vbr_info_clear(vh.vbr);
 }
 
 static void set_client_ip(dkimfl_parm *parm)
@@ -2662,7 +2847,7 @@ int main(int argc, char *argv[])
 			return 0;
 		}
 		else if (strcmp(arg, "--batch-test") == 0)
-			is_batch_test = 1;
+			fl_log_no_pid = 1;
 	}
 
 	dkimfl_parm parm;
@@ -2716,12 +2901,16 @@ int main(int argc, char *argv[])
 		}
 		
 		nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_SIGNHDRS,
-			parm.sign_hfields? parm.sign_hfields: dkim_should_signhdrs,
-			sizeof parm.sign_hfields) != DKIM_STAT_OK;
+			parm.sign_hfields?
+				cast_u_char_parm_array(parm.sign_hfields):
+				dkim_should_signhdrs,
+					sizeof parm.sign_hfields) != DKIM_STAT_OK;
 
 		nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_SKIPHDRS,
-			parm.skip_hfields? parm.skip_hfields: dkim_should_not_signhdrs,
-			sizeof parm.skip_hfields) != DKIM_STAT_OK;
+			parm.skip_hfields?
+				cast_u_char_parm_array(parm.skip_hfields):
+				dkim_should_not_signhdrs,
+					sizeof parm.skip_hfields) != DKIM_STAT_OK;
 
 		if (nok)
 		{

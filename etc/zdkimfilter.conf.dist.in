@@ -161,19 +161,12 @@ all_mode = @zdkimfilter_mode@
 # In order to enable ADSP, comment out the following line
 no_author_domain
 
-# spf_whitelist
-# Exceptions for ADSP behavior, if enabled. If there is a whitelisted spf-
-# authenticated sender, an invalid <john.doe@NOSPAM.example.com> passes even if
+# domain_whitelist
+# Exceptions for ADSP behavior, if enabled. If there is an spf-authenticated
+# identity (MAIL FROM or HELO) or a good DKIM signature from a whitelisted
+# domain, an invalid From: <john.doe@NOSPAM.example.com> passes even if 
 # no_author_domain is false and ADSP behavior requires otherwise (see previous
 # option).
-#
-# This is a space-separated list of domain names. By default it's empty.
-
-# dkim_whitelist
-# Exceptions for ADSP behavior, if enabled. An invalid or discardable author
-# domain passes if there is a good DKIM signature from a whitelisted domain.
-# NOTE: no attempt is done to check that the whitelisted domain had validated
-# the author signature before possibly breaking it.
 #
 # This is a space-separated list of domain names. By default it's empty.
 
@@ -195,9 +188,18 @@ no_author_domain
 # reputation_pass = -32768
 
 # no_dwl
-# skip a query to dwl.spamhaus.org for the signer. The result is reported in
-# A-R for method "x-dwl" in case of positive results.
+# skip processing VBR-INFO.
 # no_dwl = N
+
+# trusted_vouchers
+# a space-separated list of trusted vouchers.  If a message has VBR-Info
+# header fields with trusted vouchers (mv) and domains authenticated by
+# DKIM or SPF (md), then the vouchers are queried to confirm the vouch and
+# "pass" of "fail" results are written for the "vbr" method of A-R.  See
+# RFC 5518 and RFC 6212.  The default is an empty string, which results in a
+# behavior similar to no_dwl = Y.  For Spamhaus' Domain White List see
+# http://www.spamhauswhitelist.com/en/about.html
+trusted_vouchers = dwl.spamhaus.org
 
 # stats_file
 # full path for a stats file about signatures verifications, including a line

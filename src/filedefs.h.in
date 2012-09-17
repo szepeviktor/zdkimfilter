@@ -25,4 +25,7 @@
 #if !defined(ZDKIMFILTER_PID_FILE)
 #define ZDKIMFILTER_PID_FILE "@ZDKIMFILTER_PID_DIR@/zdkimfilter.pid"
 #endif
+#if !defined(ZDKIMFILTER_EXECUTABLE)
+#define ZDKIMFILTER_EXECUTABLE "@COURIER_FILTER_INSTALL@/zdkimfilter"
+#endif
 

@@ -11,7 +11,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010 Alessandro Vesely
+Copyright (C) 2010-2011 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -136,10 +136,10 @@ static void child_reaper(int sig)
 	}
 }
 
-int is_batch_test;
+int fl_log_no_pid;
 static inline int my_getpid(void)
 {
-	return is_batch_test? 0: (int)getpid();
+	return fl_log_no_pid? 0: (int)getpid();
 }
 
 static void sig_catcher(int sig)
@@ -1398,21 +1398,22 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			char *t = NULL;
 			unsigned long l = strtoul(&arg[2], &t, 0);
 			fl.testing = 1;
-			if (l <= 0 || t == NULL || *t != 0 || l > INT_MAX ||
-				(int)l >= argc - i - 1)
+			if (*t) fl.batch_test = 1;
+			if (l <= 0 || t == NULL || l > INT_MAX || (int)l >= argc - i - 1 ||
+				(*t != 0 && *t != ','))
 			{
 				fprintf(stderr,
-					THE_FILTER ": bad parameter %s; expected 1-%d ctlfiles\n",
-						arg, argc - i - 2);
+					THE_FILTER ": bad parameter %s; t=%d, expected 1-%d ctlfiles\n",
+						arg, *t, argc - i - 2);
 				rtc = 1;
 			}
 			else
 			{
 				fl_init_signal(init_signal_all);
-				if (fl.verbose >= 2)
+				if (fl.verbose >= 4)
 					fprintf(stderr,
-						THE_FILTER ": running test on 1 ctl +%d mail files\n",
-						argc - i - 2);
+						THE_FILTER ": running for %s on %d ctl + %d mail files\n",
+						*t == 0? "test": t + 1, (int)l, argc - i - 2);
 				rtc = fl_runtest(&fl, (int)l, argc - i - 1, argv + i + 1);
 			}
 			break;
@@ -1433,7 +1434,8 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		{
 			fputs(
 			/*  12345678901234567890123456 */
-				"  -tN file...             scan rest of args as N ctl and mail file(s)\n"
+				"  -tN[,x] file...         scan rest of args as N ctl and mail file(s)\n"
+				"                          with \"x\" behave like batch test\n"
 				"  --batch-test            enter batch test mode\n",
 					stdout);
 			return 1;
@@ -1522,7 +1524,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 	i = 0;
 #endif
 
-	while (live_children > 0)
+	while (live_children > 0 && wait_child >= 0)
 	{
 		int nsec =  live_children*3;
 
@@ -1530,19 +1532,24 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			fprintf(stderr, THE_FILTER "[%d]: waiting for %d child(ren)\n",
 				my_getpid(), live_children);
 
+		// interrupted by child signal?
 		if (sleep(nsec) != 0)
 			continue;
 
-		if (fl.testing == 0)
-		{
+		// kill all processes in the group, if group leader
+#if defined ZDKIMFILTER_POSIX_GETPGRP
+		if (getpgrp() == getpid())
+#else
+		if (fl.testing == 0) // since setsid()
+#endif
 			kill(0, SIGTERM);
-			if (--wait_child < 0)
-			{
-				fprintf(stderr, "WARN:"
-					THE_FILTER
-					"[%d]: leaving %d naughty child(ren) running\n",
-					my_getpid(), live_children);
-			}
+
+		if (--wait_child < 0)
+		{
+			fprintf(stderr, "WARN:"
+				THE_FILTER
+				"[%d]: leaving %d naughty child(ren) running\n",
+				my_getpid(), live_children);
 		}
 	}
 	

@@ -146,9 +146,9 @@ m4_define([ZF_DEFAULT_PARM_TMP],
 stats_file           = NULL (stats file path)
 sign_hfields         = NULL (space-separated, no colon)
 skip_hfields         = NULL (space-separated, no colon)
-spf_whitelist        = NULL (space-separated domains)
-dkim_whitelist       = NULL (space-separated domains)
+domain_whitelist     = NULL (space-separated domains)
 key_choice_header    = NULL (key choice header)
+trusted_vouchers     = NULL (space-separated, no colon)
 verbose              = 0 (int)
 dns_timeout          = 0 (secs)
 stats_wait           = 1200 (secs)
@@ -160,7 +160,7 @@ no_signlen           = N (Y/N)
 tempfail_on_error    = N (Y/N)
 no_author_domain     = N (Y=disable ADSP)
 no_reputation        = N (Y=skip reputation lookup)
-no_dwl               = Y (Y=skip dwl.spamhaus.org lookup)
+no_dwl               = Y (Y=skip VBR-Info processing)
 all_mode             = N (Y/N)
 sign_rsa_sha1        = N (Y/N, N for rsa-sha256)
 header_canon_relaxed = N (Y/N, N for simple)
@@ -502,7 +502,7 @@ ZF_RUN,
 0,
 [554 Invalid author domain
 ],
-[INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, NOT whitelisted (spf_:sender.example, dkim_:--no)
+[INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, no VBR and no whitelist
 ])
 AT_CLEANUP
 
@@ -536,7 +536,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Whitelisted sender, non-existent From: domain])
-ZF_CONFIG(3, [spf_whitelist sender.example
+ZF_CONFIG(3, [domain_whitelist sender.example
 ])
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctl], [Musenetmsg
@@ -552,7 +552,7 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (have spf_:sender.example, dkim_:--no)
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: SPF)
 ])
 ZF_REQUIRE_22
 AT_CHECK(
@@ -565,7 +565,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Whitelisted signer, non-existent From: domain])
-ZF_CONFIG(3, [dkim_whitelist sender.example
+ZF_CONFIG(3, [domain_whitelist sender.example
 ])
 ZF_KEYFILE
 AT_DATA([mail], [ZF_MESSAGE_NOSPF(, ZF_SIGSENDER, ZF_SIGOTHER)])
@@ -583,7 +583,7 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (spf_:--no, have dkim_:sender.example)
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: DKIM)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
 ])
 ZF_REQUIRE_22
@@ -596,9 +596,8 @@ head -n 3 mail, 0,
 AT_CLEANUP
 
 #
-AT_SETUP([Whitelisted both ways, one SPF validated])
-ZF_CONFIG(3, [dkim_whitelist other.example sender.example
-spf_whitelist other.example sender.example
+AT_SETUP([Whitelisted both ways, SPF ignored])
+ZF_CONFIG(3, [domain_whitelist other.example sender.example
 ])
 ZF_KEYFILE
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
@@ -616,7 +615,7 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (have spf_:sender.example, have dkim_:sender.example)
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: DKIM)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
 ])
 ZF_REQUIRE_22
@@ -631,7 +630,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Dkim whitelisting with SPF-validated signer])
-ZF_CONFIG(3, [dkim_whitelist other.example
+ZF_CONFIG(3, [domain_whitelist other.example
 ])
 ZF_KEYFILE
 AT_DATA([mail], [ZF_MESSAGE(, ZF_SIGSENDER, ZF_SIGOTHER)])
@@ -649,7 +648,7 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, whitelisted (spf_:sender.example, have dkim_:other.example)
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but other.example is whitelisted (auth: DKIM)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@other.example, stat=0) adsp=nxdomain rep=0
 ])
 ZF_REQUIRE_22
@@ -807,7 +806,7 @@ ZF_RUN,
 0,
 [050 Message dropped.
 ],
-[INFO:zdkimfilter[[0]]:id=policymsg: adsp=discardable policy: author.example, NOT whitelisted (spf_:sender.example, dkim_:--no)
+[INFO:zdkimfilter[[0]]:id=policymsg: adsp=discardable policy: author.example, no VBR and no whitelist
 ERR:dropped,From-MTA=<TesT>: zdkimfilter[[0]]: adsp=discard
 ])
 AT_CLEANUP
@@ -817,7 +816,7 @@ AT_SETUP([Whitelisted sender, failed policy: discard])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
 author.example X
 ])
-ZF_CONFIG(3, [spf_whitelist sender.example
+ZF_CONFIG(3, [domain_whitelist sender.example
 ])
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
 AT_DATA([ctl], [Mpolicymsg
@@ -833,7 +832,7 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=policymsg: adsp=discardable policy: author.example, whitelisted (have spf_:sender.example, dkim_:--no)
+[INFO:zdkimfilter[[0]]:id=policymsg: adsp=discardable policy: author.example, but sender.example is whitelisted (auth: SPF)
 INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=fail (id=@author.example, signature verification failed, stat=1) adsp:discardable=discard rep=0
 ])
 ZF_REQUIRE_22

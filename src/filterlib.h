@@ -5,7 +5,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010 Alessandro Vesely
+Copyright (C) 2010-2011 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -30,8 +30,8 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 */
 
 #if !defined(FILTERLIB_H_INCLUDED)
-// set pid==0 in messages and temp filenames, skip lookups (myvbr)
-extern int is_batch_test;
+// set pid==0 in messages and temp filenames
+extern int fl_log_no_pid;
 
 struct filter_lib_struct;
 typedef struct filter_lib_struct fl_parm;
