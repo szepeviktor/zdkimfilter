@@ -5,7 +5,7 @@ m4_define([ZF_CONFIG],
 [cat >zftest.conf <<'_ZEOF'
 verbose = $1
 domain_keys = .
-no_dwl
+
 $2
 _ZEOF
 ])
@@ -84,6 +84,8 @@ m4_define([ZF_MESSAGE_BODY],
 [Message-ID: <123456@author.example>
 Date: Mon, 08 Feb 2010 13:12:55 +0100
 From: Author <user@author.example>
+VBR-Info: mc=all; md=author.example; mv=author-cert.example
+VBR-Info: mc=all; md=sender.example; mv=sender-cert.example
 MIME-Version: 1.0
 To: (undisclosed recipients)
 Subject: Test multiple signatures
@@ -155,12 +157,12 @@ stats_wait           = 1200 (secs)
 reputation_fail      = 32767 (high int)
 reputation_pass      = -32768 (low int)
 add_a_r_anyway       = N (Y/N)
+report_all_sigs      = N (Y/N)
 no_spf               = N (Y/N)
 no_signlen           = N (Y/N)
 tempfail_on_error    = N (Y/N)
 no_author_domain     = N (Y=disable ADSP)
 no_reputation        = N (Y=skip reputation lookup)
-no_dwl               = Y (Y=skip VBR-Info processing)
 all_mode             = N (Y/N)
 sign_rsa_sha1        = N (Y/N, N for rsa-sha256)
 header_canon_relaxed = N (Y/N, N for simple)
@@ -1222,7 +1224,7 @@ ZF_DATA_DYN([ZF_MESSAGE_DYN([another.example],
 ZF_EXPECT([example.org])
 AT_CLEANUP
 
-# repeated field does not overrides default
+# repeated field does not override default
 AT_SETUP([Custom field, second instance does not override])
 ZF_CONFIG(6, [no_author_domain
 no_reputation
@@ -1236,5 +1238,94 @@ ZF_DATA_DYN([ZF_MESSAGE_DYN([another.example],
 [X-Repeated: (this worked before) <x@example.org>
 ])])
 ZF_EXPECT([example.com])
+AT_CLEANUP
+
+# ZF_SIGREPORT(configlines)
+m4_define([ZF_SIGREPORT],
+[ZF_KEYFILE([author.example X
+])
+ZF_CONFIG(2, [no_author_domain
+no_reputation
+$1])
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_DATA([ctl], [Mverifymsg
+usmtp
+])
+AT_DATA([VBRFILE], [author.example._vouch.author-cert.example all
+sender.example._vouch.sender-cert.example all
+])
+ZF_BATCH([test2
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])])
+
+# check A-R layout with multiple signatures
+AT_SETUP([A-R layout with multiple signatures])
+ZF_SIGREPORT
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+# check A-R layout with multiple signatures: whitelisted
+AT_SETUP([Whitelisted domain reported])
+ZF_SIGREPORT([domain_whitelist sender.example
+])
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim=pass (whitelisted) header.i=@sender.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+# check A-R layout with multiple signatures: vouched
+AT_SETUP([Vouched domain reported])
+ZF_SIGREPORT([trusted_vouchers sender-cert.example
+])
+AT_CHECK(
+head -n 6 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim=pass (vbr) header.i=@sender.example;
+  vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+# check A-R layout with multiple signatures: vouched + report_all_sigs
+AT_SETUP([Report all sigs])
+ZF_SIGREPORT([trusted_vouchers sender-cert.example
+report_all_sigs
+])
+AT_CHECK(
+head -n 11 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example
+    header.b=ZmMMHnWo;
+  dkim=pass header.i=@sender.example
+    header.b=d6AyU6LW;
+  dkim=pass header.i=@other.example
+    header.b=ejTAOxjZ;
+  dkim=pass (vbr) header.i=@sender.example;
+  vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
 AT_CLEANUP
 

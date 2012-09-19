@@ -130,6 +130,11 @@ all_mode = @zdkimfilter_mode@
 # add_a_r_anyway
 # Add an A-R field also if no signature or other A-R had been found
 
+# report_all_sigs
+# If multiple signatures are found, normally only the most important ones
+# are reported in the A-R field.  By enabling this option, all the signatures
+# are reported, in order of decreasing importance.
+
 # no_author_domain
 # The filter may reject or drop messages according to ADSP.  The three
 # conditions that cause this behavior are as follows:
@@ -187,19 +192,17 @@ no_author_domain
 # negative values for whitelisting. Their range is thus -1000 <= rep <= 1000.
 # reputation_pass = -32768
 
-# no_dwl
-# skip processing VBR-INFO.
-# no_dwl = N
-
 # trusted_vouchers
-# a space-separated list of trusted vouchers.  If a message has VBR-Info
+# DWL:  a space-separated list of trusted vouchers.  If a message has VBR-Info
 # header fields with trusted vouchers (mv) and domains authenticated by
 # DKIM or SPF (md), then the vouchers are queried to confirm the vouch and
 # "pass" of "fail" results are written for the "vbr" method of A-R.  See
-# RFC 5518 and RFC 6212.  The default is an empty string, which results in a
-# behavior similar to no_dwl = Y.  For Spamhaus' Domain White List see
-# http://www.spamhauswhitelist.com/en/about.html
-trusted_vouchers = dwl.spamhaus.org
+# RFC 5518 and RFC 6212.  The default is an empty string, which skips VBR-Info
+# processing altogether (in previous version:  no_dwl = Y.)
+#
+# To enable Spamhaus' Domain White List uncomment the second line after this
+# See http://www.spamhauswhitelist.com/en/about.html for more info
+# trusted_vouchers = dwl.spamhaus.org
 
 # stats_file
 # full path for a stats file about signatures verifications, including a line

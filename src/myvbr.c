@@ -30,6 +30,7 @@ containing parts covered by the applicable licence, the licensor or
 zdkimfilter grants you additional permission to convey the resulting work.
 */
 #include <config.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -316,9 +317,6 @@ void vbr_info_clear(vbr_info *first)
 	}
 }
 
-static int
-(*my_res_query)(const char*, int, int, unsigned char*, int) = &res_query;
-
 static char dwl_query[] = "._vouch.";
 extern int h_errno; // result from res_query
 static int do_vbr_query(char const *signer, char const *vouch, char **resp)
@@ -329,7 +327,7 @@ static int do_vbr_query(char const *signer, char const *vouch, char **resp)
 //  -2  on temporary error (includes SERVFAIL)
 //  -3  on bad data or other error
 {
-	if (signer == NULL || *signer == 0)
+	if (signer == NULL || *signer == 0 || vouch == NULL || *vouch == 0)
 		return -1;
 
 	size_t const len_d = strlen(signer), len_v = strlen(vouch),
@@ -348,7 +346,7 @@ static int do_vbr_query(char const *signer, char const *vouch, char **resp)
 	} buf;
 	
 	// res_query returns -1 for NXDOMAIN
-	int rc = (*my_res_query)(query, 1 /* Internet */, 16 /* TXT */,
+	int rc = res_query(query, 1 /* Internet */, 16 /* TXT */,
 		buf.answer, sizeof buf.answer);
 
 	if (rc < 0)
@@ -434,6 +432,9 @@ static int do_vbr_query(char const *signer, char const *vouch, char **resp)
 	return 0;
 }
 
+static int
+(*my_vbr_query)(char const*, char const*, char**) = &do_vbr_query;
+
 int
 vbr_check(vbr_info *first, char const*domain, vbr_cb cb, vbr_check_result* res)
 // run do_vbr_query and return:
@@ -449,7 +450,7 @@ vbr_check(vbr_info *first, char const*domain, vbr_cb cb, vbr_check_result* res)
 		for (; *mv; ++mv)
 			if ((*cb)(res->tv, *mv))
 			{
-				int rc = do_vbr_query(domain, *mv, &res->resp);
+				int rc = (*my_vbr_query)(domain, *mv, &res->resp);
 				++res->queries;
 				if (rc >= 0)
 				{
@@ -464,8 +465,67 @@ vbr_check(vbr_info *first, char const*domain, vbr_cb cb, vbr_check_result* res)
 	return -1;
 }
 
+static int fake_vbr_query(char const *signer, char const *vouch, char **resp)
+// debug function: reads data from "VBRFILE" formatted like:
+//   <label>[<space char><data>]<newline char>
+// and return:
+//   0  and possibly allocate the resonse if found label and data
+//  -2  if found label but no data
+//   3  if label not found
+//  -1  if other error occurs
+{
+	if (signer == NULL || *signer == 0 || vouch == NULL || *vouch == 0)
+		return -1;
+
+	size_t const len_d = strlen(signer), len_v = strlen(vouch),
+		len_ = sizeof dwl_query - 1 + len_d + len_v;
+	char query[1536];
+
+	if (len_d + sizeof dwl_query + len_v > sizeof query)
+		return -1;
+
+	strcat(strcat(strcpy(query, signer), dwl_query), vouch);
+
+	FILE *fp = fopen("VBRFILE", "r");
+	if (fp == NULL)
+	{
+		perror("fake_vbr_query: cannot read VBRFILE");
+		return -1;
+	}
+
+	char buf[1024], *s;
+	while ((s = fgets(buf, sizeof buf, fp)) != NULL)
+	{
+		size_t l = strlen(s);
+		int ch;
+		if (l >= len_ &&
+			strncasecmp(query, s, len_) == 0 &&
+			((ch = *(unsigned char*)&buf[len_]) == 0 || isspace(ch)))
+		{
+			int rtc = l == len_? -2: 0;
+			if (rtc == 0 && resp)
+			{
+				for (--l; l > len_ && isspace(*(unsigned char*)&buf[l]); --l)
+					buf[l] = 0;
+				*resp = strdup(&buf[len_ + 1]);
+			}
+			fclose(fp);
+			return rtc;
+		}
+	}
+
+	fclose(fp);
+	return 3;
+}
+
+int flip_vbr_query_was_faked(void)
+{
+	int const faked = my_vbr_query != &do_vbr_query;
+	my_vbr_query = faked? &do_vbr_query: &fake_vbr_query;
+	return faked;
+}
+
 #if defined TEST_MAIN
-#include <stdio.h>
 
 // fields we can/cannot parse
 static char* vbr_test[][32] =

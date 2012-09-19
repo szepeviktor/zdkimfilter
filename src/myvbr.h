@@ -30,6 +30,7 @@ typedef struct vbr_check_result
 	char const **tv; // 1st arg of callback function (context)
 } vbr_check_result;
 int vbr_check(vbr_info *first, char const*domain, vbr_cb, vbr_check_result*);
+int flip_vbr_query_was_faked(void);
 
 #define MYVBR_H_INCLUDED
 #endif
