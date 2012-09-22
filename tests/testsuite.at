@@ -148,6 +148,7 @@ m4_define([ZF_DEFAULT_PARM_TMP],
 stats_file           = NULL (stats file path)
 sign_hfields         = NULL (space-separated, no colon)
 skip_hfields         = NULL (space-separated, no colon)
+redact_received_auth = NULL (any text)
 domain_whitelist     = NULL (space-separated domains)
 key_choice_header    = NULL (key choice header)
 trusted_vouchers     = NULL (space-separated, no colon)
@@ -1326,6 +1327,58 @@ head -n 11 mail, 0,
   dkim=pass (vbr) header.i=@sender.example;
   vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
 DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Obfuscate userid])
+ZF_CONFIG(3, [no_author_domain
+no_reputation
+default_domain example.com
+redact_received_auth using this secret text
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE([Received: from test.example
+ (whatever is going to be written here AUTH: method user, and some more)
+ by submission.server.example with ESMTPA
+])])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+AT_CHECK(
+[sed -n '9,11p' mail], 0, m4_join([],
+[Received: from test.example
+ (whatever is going to be written here AUTH: method ],
+ m4_ifval([$HAVE_NETTLE], [Xr@LC], []),
+ [, and some more)
+ by submission.server.example with ESMTPA
+]), [])
+AT_CLEANUP
+
+# test only valid with libnettle
+m4_define([ZF_REQUIRE_NETTLE], [AT_CHECK([$HAVE_NETTLE || exit 77])])
+
+#
+AT_SETUP([Retrieve obfuscated userid])
+ZF_CONFIG(3, [no_author_domain
+no_reputation
+default_domain example.com
+redact_received_auth using this secret text
+])
+ZF_REQUIRE_NETTLE
+AT_CHECK(
+[redact -f zftest.conf --decode Xr@LC], 0, [user
 ], [])
 AT_CLEANUP
 

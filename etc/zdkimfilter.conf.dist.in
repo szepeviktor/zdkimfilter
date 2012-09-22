@@ -96,23 +96,38 @@ all_mode = @zdkimfilter_mode@
 # sign_hfields
 # header fields to be signed.
 # This is a space-separated list of header field names.
-# The default value is implemented in OpenDKIM according to RFC 4871 Sect. 5.5
-# sign_hfields = From Sender Reply-To Subject Date Message-ID To Cc    \
-# MIME-Version Content-Type Content-Transfer-Encoding Content-ID       \
-# Content-Description Resent-Date Resent-From Resent-Sender Resent-To  \
-# Resent-Cc Resent-Message-ID In-Reply-To References List-Id List-Help \
-# List-Unsubscribe List-Subscribe List-Post List-Owner List-Archive
+# The default value is implemented in OpenDKIM according to RFC 6376 Sec. 5.4
+# sign_hfields = 	From Reply-To Subject Date To Cc In-Reply-To References \
+#  Resent-Date Resent-From Resent-Sender Resent-To Resent-Cc \
+#  List-Id List-Help List-Unsubscribe List-Subscribe List-Post List-Owner \
+#  List-Archive
 
 # skip_hfields
 # header fields not to be signed; they are discarded at an earlier stage.
 # This is a space-separated list of header field names.
-# The default value is implemented in OpenDKIM according to RFC 4871 Sect. 5.5
+# The default value is implemented in OpenDKIM according to RFC 6376 Sec. 5.4
 # skip_hfields = Return-Path Received Comments Keywords
-
 
 # no_signlen
 # set this to avoid specifying the l= parameter of the body length
 # no_signlen
+
+# redact_received_auth
+# Rewrite the value of AUTH: in Courier's Received: header field.  That value
+# is the login id, so it is useful to know it but it may be a privacy violation
+# and it may help password crackers.  Full-featured redaction provides for
+# replacing the given value with an obscured string obtained by scrambling
+# the original value and a secret text.  In that case, the redact utility can
+# reconstruct the value, possibly up to character case, if the secret text
+# did not change.  If the redaction is not fully functional, because it was not
+# compiled in, a warning is logged on startup and the obscured string is a
+# constant.
+# Just the first Received: field where AUTH: matches the authenticated user
+# is changed.
+# NOTE: don't configure for signing Received: or changing it will break the
+# signature.
+# To enable this option, assign some secret text (1 to 256 chars) below
+# redact_received_auth = This is the secret text (change and uncomment)
 
 # temporary directory. libopendkim uses /var/tmp by default.
 # if you specify a value of /tmp/xyz, zdkimfilter attempts mkdir of it

@@ -271,8 +271,8 @@ AC_MSG_CHECKING([flags for opendkim library])
 	av_cv_flags_library_opendkim="none"
 	SAVE_LIBS="$LIBS"
 	SAVE_LDFLAGS="$LDFLAGS"
-	# bit0=Lopendkim, 1=lssl+, 2=Lssl+, 3=lresolv; skip x100(4,12), x101 (5,13)
-	LIBS="$SAVE_LIBS $OPENDKIM_LIB"
+	# bit0=Lopendkim, 1=lssl+, 2=Lssl+, 3=NU(lresolv); skip *100(4,12), *101 (5,13)
+	LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
 	AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
 		[av_cv_flags_library_opendkim="ok_0"])
 	if test "$av_cv_flags_library_opendkim" = "none"; then
@@ -285,7 +285,7 @@ AC_MSG_CHECKING([flags for opendkim library])
 		LDFLAGS="$SAVE_LDFLAGS"
 		OPENDKIM_LIB_PATH=""
 		OPENDKIM_LIB="-lopendkim -lssl -lcrypto"
-		LIBS="$SAVE_LIBS $OPENDKIM_LIB"
+		LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
 		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
 			[av_cv_flags_library_opendkim="ok2"])
 	fi
@@ -298,7 +298,7 @@ AC_MSG_CHECKING([flags for opendkim library])
 	if test "$av_cv_flags_library_opendkim" = "none"; then
 		OPENDKIM_LIB="-lopendkim -lssl -lcrypto"
 		OPENDKIM_LIB_PATH="`$PKG_CONFIG --libs-only-L libssl libcrypto`"
-		LIBS="$SAVE_LIBS $OPENDKIM_LIB"
+		LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
 		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
 		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
 			[av_cv_flags_library_opendkim="ok6"])
@@ -310,9 +310,9 @@ AC_MSG_CHECKING([flags for opendkim library])
 			[av_cv_flags_library_opendkim="ok7"])
 	fi
 	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB="-lopendkim -lresolv"
+		OPENDKIM_LIB="-lopendkim"
 		OPENDKIM_LIB_PATH=""
-		LIBS="$SAVE_LIBS $OPENDKIM_LIB"
+		LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
 		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
 		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
 			[av_cv_flags_library_opendkim="ok8"])
@@ -326,8 +326,8 @@ AC_MSG_CHECKING([flags for opendkim library])
 	if test "$av_cv_flags_library_opendkim" = "none"; then
 		LDFLAGS="$SAVE_LDFLAGS"
 		OPENDKIM_LIB_PATH=""
-		OPENDKIM_LIB="-lopendkim -lssl -lcrypto -lresolv"
-		LIBS="$SAVE_LIBS $OPENDKIM_LIB"
+		OPENDKIM_LIB="-lopendkim -lssl -lcrypto"
+		LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
 		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
 			[av_cv_flags_library_opendkim="ok10"])
 	fi
@@ -338,9 +338,9 @@ AC_MSG_CHECKING([flags for opendkim library])
 			[av_cv_flags_library_opendkim="ok11"])
 	fi
 	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB="-lopendkim -lssl -lcrypto -lresolv"
+		OPENDKIM_LIB="-lopendkim -lssl -lcrypto"
 		OPENDKIM_LIB_PATH="`$PKG_CONFIG --libs-only-L libssl libcrypto`"
-		LIBS="$SAVE_LIBS $OPENDKIM_LIB"
+		LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
 		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
 		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
 			[av_cv_flags_library_opendkim="ok14"])
@@ -384,6 +384,31 @@ AC_FUNC_MALLOC
 AC_FUNC_STAT
 AC_FUNC_VPRINTF
 AC_CHECK_FUNCS([alarm memmove memset select strchr strdup strerror strtol strtoul])
+
+# Check if nettle exists (for redact.c)
+NETTLE_LIB=" -lnettle"
+AC_MSG_CHECKING([whether nettle is avalable])
+SAVE_LIBS="$LIBS"
+LIBS="$SAVE_LIBS $NETTLE_LIB"
+HAVE_NETTLE="no"
+AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <nettle/arcfour.h>
+#include <nettle/base64.h>
+], [struct arcfour_ctx c0;
+struct base64_encode_ctx c1;
+struct base64_decode_ctx c2;
+arcfour_set_key(&c0, 0, "");
+base64_decode_init(&c1);
+base64_decode_init(&c2);
+])], [HAVE_NETTLE="yes"])
+LIBS="$SAVE_LIBS"
+AC_MSG_RESULT([$HAVE_NETTLE])
+if test "$HAVE_NETTLE" = "yes"; then
+	AC_DEFINE(HAVE_NETTLE, 1, [Define if using nettle])
+else
+	NETTLE_LIB=""
+fi
+AC_SUBST([NETTLE_LIB])
+
 
 # get mailuser/mailgroup for the executable stuff
 AC_CACHE_CHECK([user:group for courier executables],

@@ -51,7 +51,8 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include "filterlib.h"
 #include "filedefs.h"
 #include "myvbr.h"
-
+#include "redact.h"
+#include "vb_fgets.h"
 #include <assert.h>
 
 // utilities -----
@@ -160,74 +161,6 @@ static int filecopy(FILE *in, FILE *out)
 	return ferror(in)? -1: 0;
 }
 
-typedef struct var_buf
-{
-	char *buf;
-	size_t alloc;
-} var_buf;
-
-#define VB_LINE_MAX 5000
-#if defined NDEBUG
-#define VB_INIT_ALLOC 8192
-#else
-#define VB_INIT_ALLOC (VB_LINE_MAX/2)
-#endif
-
-static inline int vb_init(var_buf *vb)
-// 0 on success
-{
-	assert(vb);
-	return (vb->buf = (char*)malloc(vb->alloc = VB_INIT_ALLOC)) == NULL;
-}
-
-static inline void vb_clean(var_buf *vb)
-// 0 on success
-{
-	assert(vb);
-	if (vb->buf)
-	{
-		free(vb->buf);
-		vb->buf = NULL;
-	}
-}
-
-static inline char const *vb_what(var_buf const* vb, FILE *fp)
-{
-	assert(vb && fp);
-	if (feof(fp)) return "EOF reached";
-	return vb->buf? vb->buf: "malloc failed";
-}
-
-#if !defined SSIZE_MAX
-#define SSIZE_MAX ((~((size_t) 0)) / 2)
-#endif
-
-static char* vb_fgets(var_buf *vb, size_t keep, FILE *fp)
-// return buf + keep if OK, NULL on error
-{
-	assert(vb && vb->buf && vb->alloc);
-	assert(keep < vb->alloc);
-	assert(fp);
-
-	size_t avail = vb->alloc - keep;
-
-	if (avail < VB_LINE_MAX)
-	{
-		char *new_buf;
-		if (vb->alloc > SSIZE_MAX ||
-			(new_buf = realloc(vb->buf, vb->alloc *= 2)) == NULL)
-		{
-			free(vb->buf);
-			return vb->buf = NULL;
-		}
-
-		vb->buf = new_buf;
-		avail = vb->alloc - keep;
-	}
-	
-	return fgets(vb->buf + keep, avail - 1, fp);
-}
-
 // ----- end utilities
 
 typedef struct stats_info
@@ -290,6 +223,7 @@ typedef struct dkimfl_parm
 	char *default_domain;
 	char *tmp;
 	char *stats_file;
+	char *redact_received_auth;
 	const char **sign_hfields;
 	const char **skip_hfields;
 	const char **domain_whitelist;
@@ -508,10 +442,11 @@ static config_conf const conf[] =
 	CONFIG(domain_keys, "key's directory", assign_ptr),
 	CONFIG(selector, "global", assign_ptr),
 	CONFIG(default_domain, "dns", assign_ptr),
-	CONFIG(tmp, "temp directory", assign_ptr),
+	CONFIG(tmp, "temp directory", assign_ptr), // to be used by dkimsign.c
 	CONFIG(stats_file, "stats file path", assign_ptr),
 	CONFIG(sign_hfields, "space-separated, no colon", assign_array),
 	CONFIG(skip_hfields, "space-separated, no colon", assign_array),
+	CONFIG(redact_received_auth, "any text", assign_ptr), // used by redact.c
 	CONFIG(domain_whitelist, "space-separated domains", assign_array),
 	CONFIG(key_choice_header, "key choice header", assign_array),
 	CONFIG(trusted_vouchers, "space-separated, no colon", assign_array),
@@ -585,8 +520,7 @@ static config_conf const* conf_name(char const *p)
 	return NULL;
 }
 
-static char const default_config_file[] =
-		COURIER_SYSCONF_INSTALL "/filters/zdkimfilter.conf";
+#include "parm.h"
 
 static int parm_config(dkimfl_parm *parm, char const *fname)
 // initialization, 0 on success
@@ -723,7 +657,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 		}
 
 		/*
-		* full header is in buffer (dkim_header does not want the trailing \n)
+		* full field is in buffer (dkim_header does not want the trailing \n)
 		*/
 		if (keep && (status = dkim_header(dkim, start, keep)) != DKIM_STAT_OK)
 		{
@@ -746,7 +680,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 	}
 	
 	/*
-	* all headers processed
+	* all header fields processed.
 	* check results thus far.
 	*/
 	
@@ -1153,6 +1087,118 @@ static int read_key_choice(dkimfl_parm *parm)
 	return parm->dyn.rtc;
 }
 
+static void copy_until_redacted(dkimfl_parm *parm, FILE *fp, FILE *fp_out)
+{
+	assert(parm);
+	assert(parm->redact_received_auth);
+	assert(fp);
+	assert(fp_out);
+
+	var_buf vb;
+	if (vb_init(&vb))
+	{
+		parm->dyn.rtc = -1;
+		return;
+	}
+
+	size_t keep = 0;
+	for (;;)
+	{
+		char *p = vb_fgets(&vb, keep, fp);
+		char *eol = p? strchr(p, '\n'): NULL;
+
+		if (eol == NULL)
+		{
+			if (parm->verbose)
+				fl_report(LOG_ALERT,
+					"id=%s: header too long (%.20s...)",
+					parm->dyn.info.id, vb_what(&vb, fp));
+			parm->dyn.rtc = -1;
+			break;
+		}
+
+		int const next = eol > p? fgetc(fp): '\n';
+		int const cont = next != EOF && next != '\n';
+		char *const start = vb.buf;
+		if (cont && isspace(next)) // wrapped
+		{
+			*++eol = next;
+			keep = eol + 1 - start;
+			continue;
+		}
+
+		/*
+		* full 0-terminated header field, including trailing \n, is in buffer;
+		* search for the identbuf argv (see courier/module.esmtp/courieresmtpd.c)
+		*/
+		char *s = hdrval(start, "Received");
+		if (s)
+		{
+			char *p2, *eol2, *authuserbuf, *addr;
+			
+			if ((p2 = strchr(s, '\n')) != NULL &&
+				(p2 = strchr(p2 + 1, '(')) != NULL &&
+				(eol2 = strchr(p2, '\n')) != NULL &&
+				(authuserbuf = strstr(p2, "AUTH: ")) != NULL &&
+				//                         123456
+				(authuserbuf += 6) < eol2 &&
+				(addr = strchr(authuserbuf, ' ')) != NULL)
+			{
+				char *eaddr = ++addr;
+				int ch;
+				size_t const len = strlen(parm->dyn.info.authsender);
+				while ((ch = *(unsigned char*)eaddr) != 0 &&
+					strchr("),", ch) == NULL)
+						++eaddr;
+				if (eaddr < eol2 &&
+					addr + len == eaddr &&
+					strincmp(addr, parm->dyn.info.authsender, len) == 0)
+				/*
+				* found: write the redacted field and break
+				*/
+				{
+					char *red =
+						redacted(parm->redact_received_auth,
+							parm->dyn.info.authsender);
+					int ok =
+						fwrite(start, addr - start, 1, fp_out) == 1 &&
+						(red == NULL || fputs(red, fp_out) >= 0) &&
+						fwrite(eaddr, eol + 1 - eaddr, 1, fp_out) == 1 &&
+						ungetc(next, fp) == next;
+						// fputc(next, fp_out) == next;
+
+					if (!ok)
+						parm->dyn.rtc = -1;
+
+					free(red);
+					break;
+				}
+			}
+		}
+
+		/*
+		* copy the field as is and continue header processing
+		*/
+		if (fwrite(start, eol + 1 - start, 1, fp_out) != 1)
+		{
+			parm->dyn.rtc = -1;
+			break;
+		}
+
+		if (!cont)
+		{
+			if (fputc(next, fp_out) != next)
+				parm->dyn.rtc = -1;
+			break;
+		}
+
+		start[0] = next;
+		keep = 1;
+	}
+
+	vb_clean(&vb);
+}
+
 static void sign_message(dkimfl_parm *parm)
 /*
 * possibly sign the message, set rtc 1 if signed, -1 if failed,
@@ -1274,10 +1320,17 @@ static void sign_message(dkimfl_parm *parm)
 			FILE *in = fl_get_file(parm->fl);
 			assert(in);
 			rewind(in);
-			if (filecopy(in, fp) == 0)
-				parm->dyn.rtc = 1;
-			else
-				parm->dyn.rtc = -1;
+
+			if (parm->redact_received_auth)
+				copy_until_redacted(parm, in, fp);
+				
+			if (parm->dyn.rtc == 0)
+			{
+				if (filecopy(in, fp) == 0)
+					parm->dyn.rtc = 1;
+				else
+					parm->dyn.rtc = -1;
+			}
 		}
 	}
 }
@@ -2997,6 +3050,12 @@ int main(int argc, char *argv[])
 		rtc = 2;
 		fl_report(LOG_ERR, "Unable to read config file");
 	}
+
+	if (parm.redact_received_auth && !redact_is_fully_featured())
+		fl_report(LOG_WARNING,
+			"Option redact_received_header is set in %s,"
+			" but it is not fully featured.",
+				config_file? config_file: default_config_file);
 
 #if defined HAVE_LIBOPENDKIM_22
 	if (parm.verbose >= 2 &&
