@@ -45,7 +45,6 @@ typedef struct parm_t
 	char *redact_received_auth;
 	const char **sign_hfields;
 	const char **skip_hfields;
-	const char **domain_whitelist;
 	const char **key_choice_header;
 	const char **trusted_vouchers;
 

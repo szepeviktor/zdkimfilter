@@ -251,7 +251,6 @@ static config_conf const conf[] =
 	CONFIG(parm_t, max_signatures, "int", assign_int),
 	CONFIG(parm_t, honor_author_domain, "Y=enable ADSP", assign_char),
 	CONFIG(parm_t, reject_on_nxdomain, "Y=procrustean ADSP", assign_char),
-	CONFIG(parm_t, domain_whitelist, "space-separated domains", assign_array),
 	CONFIG(parm_t, no_reputation, "Y=skip reputation lookup", assign_char),
 	CONFIG(parm_t, reputation_fail, "high int", assign_int),
 	CONFIG(parm_t, reputation_pass, "low int", assign_int),

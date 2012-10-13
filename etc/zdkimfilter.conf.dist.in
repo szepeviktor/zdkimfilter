@@ -204,17 +204,6 @@ all_mode = @zdkimfilter_mode@
 # publish an ADSP policy different from "unknown".  (Publishing "unknown"
 # results in better caching, though.)
 
-# domain_whitelist (array)
-# Exceptions for ADSP behavior, if enabled. If there is an spf-authenticated
-# identity (MAIL FROM or HELO) or a good DKIM signature from a whitelisted
-# or vouched domain, an invalid From: <john.doe@NOSPAM.example.com> passes even
-# if ADSP configuration requires otherwise (see previous option).
-#
-# This is a space-separated list of domain names.
-# Alternatively, it may contain a single entry 
-# By default it's empty.
-
-
 # trusted_vouchers (array)
 # A space-separated list of trusted vouchers.  If a message has VBR-Info
 # header fields with trusted vouchers (mv) and the domain is authenticated by

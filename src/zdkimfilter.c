@@ -1598,6 +1598,8 @@ static void clean_stats(dkimfl_parm *parm)
 
 	if (parm->dyn.stats)
 	{
+		clear_prescreen(parm->dyn.stats->domain_head);
+		parm->dyn.stats->domain_head = NULL;
 		clean_stats_info_content(parm->dyn.stats);
 		free(parm->dyn.stats);
 		parm->dyn.stats = NULL;
@@ -2566,7 +2568,11 @@ static void after_filter_stats(fl_parm *fl)
 	if (parm && parm->dwa && parm->dyn.stats)
 	{
 		set_client_ip(parm);
-		db_set_stats_info(parm->dwa, parm->dyn.stats);
+		if (!parm->dyn.db_connected &&
+			db_connect(parm->dwa) == 0)
+				parm->dyn.db_connected = 1;
+		if (parm->dyn.db_connected)
+			db_set_stats_info(parm->dwa, parm->dyn.stats);
 		db_clear(parm->dwa);
 		parm->dwa = NULL;
 	}
