@@ -53,6 +53,8 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include "myvbr.h"
 #include "redact.h"
 #include "vb_fgets.h"
+#include "parm.h"
+#include "database.h"
 #include <assert.h>
 
 // utilities -----
@@ -163,41 +165,17 @@ static int filecopy(FILE *in, FILE *out)
 
 // ----- end utilities
 
-typedef struct stats_info
-{
-	DKIM *dkim;
-	char *ct, *cte;
-	char *client_ip;
-	char *jobid;
-	
-	// TODO: complete vbr processing
-	char *vbr_result;
-	unsigned vbr_info;
-
-	unsigned rhcnt;
-	unsigned adsp_found:2;
-	unsigned adsp_unknown:2;
-	unsigned adsp_all:2;
-	unsigned adsp_discardable:2;
-	unsigned adsp_fail:2;
-	unsigned fromlist:2;
-} stats_info;
-
 static void clean_stats_info_content(stats_info *stats)
 // only called by clean_stats
 {
 	if (stats)
 	{
-		if (stats->dkim)
-		{
-			dkim_free(stats->dkim);
-			stats->dkim = NULL;
-		}
-		free(stats->ct);
-		free(stats->cte);
-		free(stats->vbr_result);
-		// don't free(stats->client_ip); it is in dyn.info
-		// don't free(stats->id); it is in dyn.info
+		free(stats->content_type);
+		free(stats->content_encoding);
+		free(stats->date);
+		free(stats->message_id);
+		// don't free(stats->ip); it is in dyn.info
+		// don't free(stats->ino_mtime_pid); it is in dyn.info
 	}
 }
 
@@ -211,43 +189,19 @@ typedef struct per_message_parm
 	var_buf vb;
 	fl_msg_info info;
 	int rtc;
-	char nu[4];
+	char db_connected;
+	char nu[3];
 } per_message_parm;
 
 typedef struct dkimfl_parm
 {
 	DKIM_LIB *dklib;
 	fl_parm *fl;
-	char *domain_keys;
-	char *selector;
-	char *default_domain;
-	char *tmp;
-	char *stats_file;
-	char *redact_received_auth;
-	const char **sign_hfields;
-	const char **skip_hfields;
-	const char **domain_whitelist;
-	const char **key_choice_header;
-	const char **trusted_vouchers;
+	db_work_area *dwa;
 
-	// end of pointers (some malloc'd but never free'd)
+	parm_t z;
 	per_message_parm dyn;
-	int verbose;
-	int dns_timeout;
-	int stats_wait;
-	int reputation_fail, reputation_pass;
-	char add_a_r_anyway;
-	char report_all_sigs;
-	char no_spf;
-	char no_signlen;
-	char tempfail_on_error;
-	char no_author_domain;
-	char no_reputation;
-	char all_mode;
-	char sign_rsa_sha1;
-	char header_canon_relaxed;
-	char body_canon_relaxed;
-	
+
 	// other
 	char pid_created;
 } dkimfl_parm;
@@ -255,15 +209,14 @@ typedef struct dkimfl_parm
 static inline const u_char **
 cast_u_char_parm_array(const char **a) {return (const u_char **)a;}
 
-#define DEFAULT_STATS_WAIT 1200 /* 20 minutes */
 static void config_default(dkimfl_parm *parm) // only non-zero...
 {
 	static char const keys[] = COURIER_SYSCONF_INSTALL "/filters/keys";
-	parm->domain_keys = (char*) keys; // won't be freed
-	parm->reputation_fail = 32767;
-	parm->reputation_pass = -32768;
-	parm->verbose = 3;
-	parm->stats_wait = DEFAULT_STATS_WAIT;
+	parm->z.domain_keys = (char*) keys; // won't be freed
+	parm->z.reputation_fail = 32767;
+	parm->z.reputation_pass = -32768;
+	parm->z.verbose = 3;
+	parm->z.max_signatures = 128;
 }
 
 static void no_trailing_slash(char *s)
@@ -278,341 +231,94 @@ static void no_trailing_slash(char *s)
 
 static void config_wrapup(dkimfl_parm *parm)
 {
-	if (parm->reputation_fail < parm->reputation_pass)
+	if (parm->z.reputation_fail < parm->z.reputation_pass)
 	{
 		fl_report(LOG_WARNING,
 			"reputation_fail = %d < reputation_pass = %d: swapped?",
-				parm->reputation_fail, parm->reputation_pass);
-		parm->reputation_fail = INT_MAX;
+				parm->z.reputation_fail, parm->z.reputation_pass);
+		parm->z.reputation_fail = INT_MAX;
 	}
 
-	if (parm->dns_timeout < 0)
+	if (parm->z.dns_timeout < 0)
 	{
 		fl_report(LOG_WARNING,
-			"dns_timeout cannot be negative (%d)", parm->dns_timeout);
-		parm->dns_timeout = 0;
+			"dns_timeout cannot be negative (%d)", parm->z.dns_timeout);
+		parm->z.dns_timeout = 0;
 	}
 
-	if (parm->stats_wait <= 0)
-	{
-		if (parm->stats_wait <= 0)
-			fl_report(LOG_WARNING,
-				"stats_wait must be positive (was %d)", parm->stats_wait);
-		parm->stats_wait = DEFAULT_STATS_WAIT;
-	}
+	if (parm->z.verbose < 0)
+		parm->z.verbose = 0;
 
-	if (parm->verbose < 0)
-		parm->verbose = 0;
-
-	no_trailing_slash(parm->domain_keys);
-	no_trailing_slash(parm->tmp);
-	if (parm->tmp && strncmp(parm->tmp, "/tmp/", 5) == 0)
+	no_trailing_slash(parm->z.domain_keys);
+	no_trailing_slash(parm->z.tmp);
+	if (parm->z.tmp && strncmp(parm->z.tmp, "/tmp/", 5) == 0)
 	{
 		struct stat st;
-		int rtc = stat(parm->tmp, &st);
+		int rtc = stat(parm->z.tmp, &st);
 		if (rtc && errno == ENOENT)
 		{
-			if (mkdir(parm->tmp, 0770))
+			if (mkdir(parm->z.tmp, 0770))
 				fl_report(LOG_CRIT,
 					"mkdir %s failed: %s",
-						parm->tmp, strerror(errno));
-			rtc = stat(parm->tmp, &st);
+						parm->z.tmp, strerror(errno));
+			rtc = stat(parm->z.tmp, &st);
 		}
 		if (rtc || !S_ISDIR(st.st_mode) ||
-			euidaccess(parm->tmp, R_OK|W_OK|X_OK))
+			euidaccess(parm->z.tmp, R_OK|W_OK|X_OK))
 		{
 			fl_report(LOG_WARNING,
-				"disabling tmp = %s", parm->tmp);
-			free(parm->tmp);
-			parm->tmp = NULL;
+				"disabling tmp = %s", parm->z.tmp);
+			free(parm->z.tmp);
+			parm->z.tmp = NULL;
 		}
 	}
 }
-
-typedef struct config_conf
-{
-	char const *name, *descr;
-	int (*assign_fn)(dkimfl_parm*,struct config_conf const*, char*);
-	size_t offset, size;
-} config_conf;
-
-#define PARM_PTR(T) *(T*)(((char*)parm) + c->offset)
-
-static int assign_ptr(dkimfl_parm *parm, config_conf const *c, char*s)
-{
-	assert(parm && c && s && c->size == sizeof(char*));
-	char *v = strdup(s);
-	if (v == NULL)
-	{
-		fl_report(LOG_ALERT, "MEMORY FAULT");
-		return -1;
-	}
-	PARM_PTR(char*) = v;
-	return 0;
-}
-
-static int assign_char(dkimfl_parm *parm, config_conf const *c, char*s)
-{
-	assert(parm && c && s && c->size == sizeof(char));
-	char ch = *s, v;
-	if (strchr("YyTt1", ch)) v = 1; //incl. ch == 0
-	else if (strchr("Nn0", ch)) v = 0;
-	else return -1;
-	PARM_PTR(char) = v;
-	return 0;
-}
-
-static int assign_int(dkimfl_parm *parm, config_conf const *c, char*s)
-{
-	assert(parm && c && s && c->size == sizeof(unsigned int));
-	char *t = NULL;
-	errno = 0;
-	long l = strtol(s, &t, 0);
-	if (l > INT_MAX || l < INT_MIN || !t || *t || errno == ERANGE) return -1;
-	
-	PARM_PTR(int) = (int)l;
-	return 0;
-}
-
-static int hfields(char *h, const char **a)
-{
-	assert(h);
-
-	char *s = h;
-	int ch, count = 0;
-	
-	for (;;)
-	{
-		while (isspace(ch = *(unsigned char*)s))
-			++s;
-		if (ch == 0)
-			break;
-
-		char *field = s;
-		++count;
-		++s;
-		while (!isspace(ch = *(unsigned char*)s) && ch != 0)
-			++s;
-	
-		if (a)
-		{
-			*a++ = field;
-			*s++ = 0;
-		}
-		if (ch == 0)
-			break;
-	}
-	return count;
-}
-
-static int assign_array(dkimfl_parm *parm, config_conf const *c, char*s)
-{
-	assert(parm && c && s && c->size == sizeof(char**));
-
-	const char **a = NULL;
-	int count = hfields(s, NULL);
-	if (count > 0)
-	{
-		size_t l = strlen(s) + 1, n = (count + 1) * sizeof(char*);
-		char *all = malloc(l + n);
-		if (all == NULL)
-		{
-			fl_report(LOG_ALERT, "MEMORY FAULT");
-			return -1;
-		}
-		a = (const char**)all;
-		all += n;
-		strcpy(all, s);
-		a[count] = NULL;		
-		count -= hfields(all, a);
-	}
-	assert(count == 0);
-
-	PARM_PTR(const char **) = a;
-	return 0;
-}
-
-#define STRING2(P) #P
-#define STRING(P) STRING2(P)
-#define CONFIG(P,D,F) {STRING(P), D, F, \
-	offsetof(dkimfl_parm, P), sizeof(((dkimfl_parm*)0)->P)}
-
-static config_conf const conf[] =
-{
-	CONFIG(domain_keys, "key's directory", assign_ptr),
-	CONFIG(selector, "global", assign_ptr),
-	CONFIG(default_domain, "dns", assign_ptr),
-	CONFIG(tmp, "temp directory", assign_ptr), // to be used by dkimsign.c
-	CONFIG(stats_file, "stats file path", assign_ptr),
-	CONFIG(sign_hfields, "space-separated, no colon", assign_array),
-	CONFIG(skip_hfields, "space-separated, no colon", assign_array),
-	CONFIG(redact_received_auth, "any text", assign_ptr), // used by redact.c
-	CONFIG(domain_whitelist, "space-separated domains", assign_array),
-	CONFIG(key_choice_header, "key choice header", assign_array),
-	CONFIG(trusted_vouchers, "space-separated, no colon", assign_array),
-	CONFIG(verbose, "int", assign_int),
-	CONFIG(dns_timeout, "secs", assign_int),
-	CONFIG(stats_wait, "secs", assign_int),	
-	CONFIG(reputation_fail, "high int", assign_int),
-	CONFIG(reputation_pass, "low int", assign_int),
-	CONFIG(add_a_r_anyway, "Y/N", assign_char),
-	CONFIG(report_all_sigs, "Y/N", assign_char),
-	CONFIG(no_spf, "Y/N", assign_char),
-	CONFIG(no_signlen, "Y/N", assign_char),
-	CONFIG(tempfail_on_error, "Y/N", assign_char),
-	CONFIG(no_author_domain, "Y=disable ADSP", assign_char),
-	CONFIG(no_reputation, "Y=skip reputation lookup", assign_char),
-	CONFIG(all_mode, "Y/N", assign_char),
-	CONFIG(sign_rsa_sha1, "Y/N, N for rsa-sha256", assign_char),
-	CONFIG(header_canon_relaxed, "Y/N, N for simple", assign_char),
-	CONFIG(body_canon_relaxed, "Y/N, N for simple", assign_char),
-	{NULL, NULL, NULL, 0, 0}
-};
-
-static void report_config(fl_parm *fl)
-{
-	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
-	config_conf const *c = &conf[0];
-	while (c->name)
-	{
-		int i = 0;
-
-		printf("%-20s = ", c->name);
-		if (c->size == 1U)
-			fputc(PARM_PTR(char)? 'Y': 'N', stdout);
-		else if (c->assign_fn == assign_ptr)
-		{
-			char const * const p = PARM_PTR(char*);
-			fputs(p? p: "NULL", stdout);
-		}
-		else if (c->assign_fn == assign_array)
-		{
-			char const ** const a = PARM_PTR(char const**);
-			if (a == NULL)
-				fputs("NULL", stdout);
-			else
-			{
-				printf("(%s)\n", c->descr);
-				for (; a[i]; ++i)
-					printf("%22d %s\n", i, a[i]);
-
-				i = 1;
-			}
-		}
-		else
-			printf("%d", PARM_PTR(int));
-
-		if (i == 0)
-			printf(" (%s)\n", c->descr);
-		++c;
-	}
-}
-
-#undef CONFIG
-#undef PARM_PTR
-
-static config_conf const* conf_name(char const *p)
-{
-	for (config_conf const *c = conf; c->name; ++c)
-		if (stricmp(c->name, p) == 0)
-			return c;
-
-	return NULL;
-}
-
-#include "parm.h"
 
 static int parm_config(dkimfl_parm *parm, char const *fname)
 // initialization, 0 on success
 {
-	int line_no = 0;
-	if (fname == NULL)
-		fname = default_config_file;
+	set_parm_logfun(&fl_report);
 
 	config_default(parm);
-	errno = 0;
+	parm->dwa = db_init();
 
-	FILE *fp = fopen(fname, "r");
-	if (fp == NULL)
+	if (fname == NULL)
 	{
-		if (fname == default_config_file && errno == ENOENT)
-			return 0; // can do without it
-
-		fl_report(LOG_ALERT,
-			"Cannot read %s: %s", fname, strerror(errno));
-		return -1;
-	}
-	
-	var_buf vb;
-	if (vb_init(&vb))
-	{
-		fclose(fp);
-		return -1;
-	}
-
-	int errs = 0;
-	size_t keep = 0;
-	char *p;
-
-	while ((p = vb_fgets(&vb, keep, fp)) != NULL)
-	{
-		char *eol = p + strlen(p) - 1;
-		int ch = 0;
-		++line_no;
-
-		while (eol >= p && isspace(ch = *(unsigned char*)eol))
-			*eol-- = 0;
-
-		if (ch == '\\')
+		struct stat st;
+		if (!stat(default_config_file, &st))
 		{
-			*eol = ' '; // this replaces the backslash
-			keep += eol + 1 - p;
-			continue;
+			if (errno == ENOENT)
+				return 0; // can do without it
+
+			fl_report(LOG_ALERT,
+				"Cannot stat %s: %s", default_config_file, strerror(errno));
+			return -1;
 		}
 
-		/*
-		* full logic line
-		*/
-		keep = 0;
-
-		char *s = p = vb.buf;
-		while (isspace(ch = *(unsigned char*)s))
-			++s;
-		if (ch == '#' || ch == 0)
-			continue;
-
-		char *const name = s;
-		while (isalnum(ch = *(unsigned char*)s) || ch == '_')
-			++s;
-		*s = 0;
-		config_conf const *c = conf_name(name);
-		if (c == NULL)
-		{
-			fl_report(LOG_ERR,
-				"Invalid name %s at line %d in %s", name, line_no, fname);
-			++errs;
-			continue;
-		}
-	
-		*s = ch;
-		while (isspace(ch = *(unsigned char*)s) || ch == '=')
-			++s;
-	
-		char *const value = s;
-	
-		if ((*c->assign_fn)(parm, c, value) != 0)
-		{
-			fl_report(LOG_ERR,
-				"Invalid value %s for %s at line %d in %s",
-					value, c->name, line_no, fname);
-			++errs;
-		}
+		fname = default_config_file;
 	}
+	else if (*fname == 0)  // invoked with -f ""
+		return 0;
 
-	vb_clean(&vb);
-	fclose(fp);
+	
+	void *parm_target[PARM_TARGET_SIZE];
+	parm_target[parm_t_id] = &parm->z;
+	parm_target[db_parm_t_id] = db_parm_addr(parm->dwa);
+
+	int errs = read_all_values(parm_target, fname);
+
 	if (errs == 0)
+	{
 		config_wrapup(parm);
+		int rtc = db_config_wrapup(parm->dwa);
+		if (rtc < 0)
+			errs = 1;
+		else if (rtc == 0) // no statements compiled: reset
+		{
+			db_clear(parm->dwa);
+			parm->dwa = NULL;
+		}
+	}
 
 	return errs;
 }
@@ -636,7 +342,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 
 		if (eol == NULL)
 		{
-			if (parm->verbose)
+			if (parm->z.verbose)
 				fl_report(LOG_ALERT,
 					"id=%s: header too long (%.20s...)",
 					parm->dyn.info.id, vb_what(vb, fp));
@@ -661,7 +367,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 		*/
 		if (keep && (status = dkim_header(dkim, start, keep)) != DKIM_STAT_OK)
 		{
-			if (parm->verbose)
+			if (parm->z.verbose)
 			{
 				char const *err = dkim_getresultstr(status);
 				fl_report(LOG_CRIT,
@@ -687,7 +393,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 	status = dkim_eoh(dkim);
 	if (status != DKIM_STAT_OK)
 	{
-		if (parm->verbose >= 3)
+		if (parm->z.verbose >= 3)
 		{
 			char const *err = dkim_getresultstr(status);
 			fl_report(LOG_INFO,
@@ -726,7 +432,7 @@ static int copy_body(dkimfl_parm *parm, DKIM *dkim)
 		DKIM_STAT status = dkim_body(dkim, buf, len);
 		if (status != DKIM_STAT_OK)
 		{
-			if (parm->verbose)
+			if (parm->z.verbose)
 			{
 				char const *err = dkim_geterror(dkim);
 				if (err == NULL)
@@ -759,14 +465,14 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	struct stat st;
 	size_t dkl, fl;
 	
-	if ((dkl = strlen(parm->domain_keys)) +
+	if ((dkl = strlen(parm->z.domain_keys)) +
 		(fl = strlen(fname)) + 2 >= PATH_MAX)
 	{
 		errno = ENAMETOOLONG;
 		goto error_exit;
 	}
 	
-	memcpy(buf, parm->domain_keys, dkl);
+	memcpy(buf, parm->z.domain_keys, dkl);
 	buf[dkl] = '/';
 	strcpy(&buf[dkl+1], fname);
 	if (stat(buf, &st))
@@ -793,7 +499,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	ssize_t lsz = readlink(buf, buf2, sizeof buf2);
 	if (lsz < 0 || (size_t)lsz >= sizeof buf2)
 	{
-		if (errno != EINVAL && parm->verbose || parm->verbose >= 8)
+		if (errno != EINVAL && parm->z.verbose || parm->z.verbose >= 8)
 			fl_report(errno == EINVAL? LOG_INFO: LOG_ALERT,
 				"id=%s: cannot readlink for %s: no selector in %zd: %s",
 				parm->dyn.info.id,
@@ -837,7 +543,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	return 0;
 
 	error_exit:
-		if (parm->verbose)
+		if (parm->z.verbose)
 			fl_report(LOG_ERR,
 				"id=%s: error reading key %s: %s",
 				parm->dyn.info.id,
@@ -865,7 +571,7 @@ static int default_key_choice(dkimfl_parm *parm, int type)
 		(domain = strchr(parm->dyn.info.authsender, '@')) != NULL)
 			++domain;
 	else
-		domain = parm->default_domain; // is that how local domains work?
+		domain = parm->z.default_domain; // is that how local domains work?
 
 	if (domain &&
 		(rc = read_key(parm, domain)) == 0)
@@ -881,7 +587,7 @@ static int read_key_choice(dkimfl_parm *parm)
 	assert(parm->dyn.selector == NULL);
 	assert(parm->dyn.domain == NULL);
 
-	if (parm->key_choice_header == NULL)
+	if (parm->z.key_choice_header == NULL)
 		return default_key_choice(parm, '*');
 
 	/*
@@ -898,7 +604,7 @@ static int read_key_choice(dkimfl_parm *parm)
 		char const* header;  // alias, not malloced
 	} *choice;
 	
-	while (parm->key_choice_header[choice_max] != NULL)
+	while (parm->z.key_choice_header[choice_max] != NULL)
 		++choice_max;
 	
 	if ((choice =
@@ -916,7 +622,7 @@ static int read_key_choice(dkimfl_parm *parm)
 	count = choice_max;
 	for (i = 0; i < choice_max; ++i)
 	{
-		char const* const h = parm->key_choice_header[i];
+		char const* const h = parm->z.key_choice_header[i];
 		if (h[1] == 0 && strchr("-*", h[0]))
 			++keep;
 		choice[i].header = h;
@@ -933,7 +639,7 @@ static int read_key_choice(dkimfl_parm *parm)
 		count -= keep;
 		for (i = 0; i < choice_max; ++i)
 		{
-			char const *const  h = parm->key_choice_header[i];
+			char const *const  h = parm->z.key_choice_header[i];
 			if (h[1] == 0 && strchr("-*", h[0]))
 			{
 				if (strchr(seen, h[0]) == NULL)
@@ -979,7 +685,7 @@ static int read_key_choice(dkimfl_parm *parm)
 
 			if (eol == NULL)
 			{
-				if (parm->verbose)
+				if (parm->z.verbose)
 					fl_report(LOG_ALERT,
 						"id=%s: header too long (%.20s...)",
 						parm->dyn.info.id, vb_what(vb, fp));
@@ -1029,7 +735,7 @@ static int read_key_choice(dkimfl_parm *parm)
 
 						choice[i].header = NULL; // don't reuse it
 						count -= 1;
-						if (parm->verbose >= 8)
+						if (parm->z.verbose >= 8)
 							fl_report(LOG_DEBUG,
 								"id=%s: matched header \"%s\" at choice %zd: "
 								"domain=%s, key=%s, selector=%s",
@@ -1090,7 +796,7 @@ static int read_key_choice(dkimfl_parm *parm)
 static void copy_until_redacted(dkimfl_parm *parm, FILE *fp, FILE *fp_out)
 {
 	assert(parm);
-	assert(parm->redact_received_auth);
+	assert(parm->z.redact_received_auth);
 	assert(fp);
 	assert(fp_out);
 
@@ -1109,7 +815,7 @@ static void copy_until_redacted(dkimfl_parm *parm, FILE *fp, FILE *fp_out)
 
 		if (eol == NULL)
 		{
-			if (parm->verbose)
+			if (parm->z.verbose)
 				fl_report(LOG_ALERT,
 					"id=%s: header too long (%.20s...)",
 					parm->dyn.info.id, vb_what(&vb, fp));
@@ -1158,7 +864,7 @@ static void copy_until_redacted(dkimfl_parm *parm, FILE *fp, FILE *fp_out)
 				*/
 				{
 					char *red =
-						redacted(parm->redact_received_auth,
+						redacted(parm->z.redact_received_auth,
 							parm->dyn.info.authsender);
 					int ok =
 						fwrite(start, addr - start, 1, fp_out) == 1 &&
@@ -1219,7 +925,7 @@ static void sign_message(dkimfl_parm *parm)
 
 	if (parm->dyn.key == NULL)
 	{
-		if (parm->verbose >= 2)
+		if (parm->z.verbose >= 2)
 			fl_report(LOG_INFO,
 				"id=%s: not signing for %s: no %s",
 				parm->dyn.info.id,
@@ -1229,17 +935,17 @@ static void sign_message(dkimfl_parm *parm)
 	else
 	{
 		char *selector = parm->dyn.selector? parm->dyn.selector:
-			parm->selector? parm->selector: "s";
+			parm->z.selector? parm->z.selector: "s";
 
 		DKIM_STAT status;
 		DKIM *dkim = dkim_sign(parm->dklib, parm->dyn.info.id, NULL,
 			parm->dyn.key, selector, parm->dyn.domain,
-			parm->header_canon_relaxed? DKIM_CANON_RELAXED: DKIM_CANON_SIMPLE,
-			parm->body_canon_relaxed? DKIM_CANON_RELAXED: DKIM_CANON_SIMPLE,
-			parm->sign_rsa_sha1? DKIM_SIGN_RSASHA1: DKIM_SIGN_RSASHA256,
+			parm->z.header_canon_relaxed? DKIM_CANON_RELAXED: DKIM_CANON_SIMPLE,
+			parm->z.body_canon_relaxed? DKIM_CANON_RELAXED: DKIM_CANON_SIMPLE,
+			parm->z.sign_rsa_sha1? DKIM_SIGN_RSASHA1: DKIM_SIGN_RSASHA256,
 			ULONG_MAX /* signbytes */, &status);
 
-		if (parm->verbose >= 6 && dkim && status == DKIM_STAT_OK)
+		if (parm->z.verbose >= 6 && dkim && status == DKIM_STAT_OK)
 			fl_report(LOG_INFO,
 				"id=%s: signing for %s with domain %s, selector %s",
 				parm->dyn.info.id,
@@ -1257,7 +963,7 @@ static void sign_message(dkimfl_parm *parm)
 		
 		if (dkim == NULL || status != DKIM_STAT_OK)
 		{
-			if (parm->verbose)
+			if (parm->z.verbose)
 			{
 				char const *err = dkim_getresultstr(status);
 				fl_report(LOG_ERR,
@@ -1280,7 +986,7 @@ static void sign_message(dkimfl_parm *parm)
 			status = dkim_eom(dkim, NULL);
 			if (status != DKIM_STAT_OK)
 			{
-				if (parm->verbose)
+				if (parm->z.verbose)
 				{
 					char const *err = dkim_geterror(dkim);
 					if (err == NULL)
@@ -1321,7 +1027,7 @@ static void sign_message(dkimfl_parm *parm)
 			assert(in);
 			rewind(in);
 
-			if (parm->redact_received_auth)
+			if (parm->z.redact_received_auth)
 				copy_until_redacted(parm, in, fp);
 				
 			if (parm->dyn.rtc == 0)
@@ -1340,6 +1046,7 @@ static void sign_message(dkimfl_parm *parm)
 typedef struct verify_parms
 {
 	char *sender_domain, *helo_domain; // imply SPF "pass"
+	domain_prescreen *domain_head, **domain_ptr;
 	vbr_info *vbr;  // store of all VBR-Info fields
 
 	vbr_check_result vbr_result;  // vbr_result.resp is malloc'd
@@ -1347,42 +1054,31 @@ typedef struct verify_parms
 	// not malloc'd or maintained elsewhere
 	dkimfl_parm *parm;
 	char *dkim_domain;
-	DKIM_SIGINFO *sig, *vbr_sig, *whitelisted_sig;
-	char *sig_domain, *whitelisted_domain; // vbr_domain in vbr_result.vbr->md
+	DKIM_SIGINFO *sig, *author_sig, *vbr_sig, *whitelisted_sig;
+	domain_prescreen *dps, *author_dps, *vbr_dps, *whitelisted_dps;
+	char *whitelisted_domain; // vbr_domain in vbr_result.vbr->md
 	dkim_policy_t policy;
 
 	void *dkim_or_file;
 	int step;
 
+	// number of signing domains, elements of domain_ptr
+	int ndoms;
+	
+	// domains with special characteristics
+	int have_trusted_vbr;
+	int have_whitelisted;
+
 	int presult;
 	int dkim_reputation;
-	size_t auth_sigs;
 	size_t received_spf;
-	size_t trusted_sigs;
-	char sig_is_author;
+	// char sig_is_author;
 	char dkim_reputation_flag;
 
 } verify_parms;
 
 // odd-aligned constant may replace vbr_sig or whitelisted_sig
 static DKIM_SIGINFO *const not_sig_but_spf = (DKIM_SIGINFO*)0xb16b00b5;
-
-static int
-domain_is_whitelisted(verify_parms const *vh, char const *const domain)
-{
-	assert(vh);
-	assert(vh->parm);
-	
-	char const ** const wl = vh->parm->domain_whitelist;
-	if (wl == NULL || domain == NULL)
-		return 0; // no whitelist given
-
-	for (int i = 0; wl[i] != 0; ++i)
-		if (stricmp(wl[i], domain) == 0)
-			return 1;
-
-	return 0;
-}
 
 static int is_trusted_voucher(char const **const tv, char const *const voucher)
 // return non-zero if voucher is in the trusted_voucher list
@@ -1405,7 +1101,7 @@ has_trusted_voucher(verify_parms const *vh, vbr_info const *const vbr)
 
 	if (vbr && vbr->mv)
 	{
-		char const ** const tv = vh->parm->trusted_vouchers;
+		char const ** const tv = vh->parm->z.trusted_vouchers;
 
 		for (char *const *mv = vbr->mv; *mv; ++mv)
 		{
@@ -1427,48 +1123,160 @@ static int count_trusted_vouchers(char const **const tv)
 	return i;
 }
 
-static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
-// callback to check useful signatures
+static domain_prescreen*
+get_prescreen(domain_prescreen** dps_head, char const *domain)
 {
-	verify_parms *const vh = (verify_parms*)dkim_get_user_context(dkim);
-	
-	assert(dkim && sigs && vh);
-	int *val = (int*)malloc(nsigs * sizeof(int));
-	if (val == NULL)
-		return DKIM_CBSTAT_TRYAGAIN;
+	assert(dps_head);
+	assert(domain);
 
-	int const vbr_count = count_trusted_vouchers(vh->parm->trusted_vouchers);
+	domain_prescreen**dps = dps_head;
+	while (*dps != NULL)
+	{
+		int const cmp = stricmp(domain, (*dps)->name);
+		if (cmp < 0)
+		{
+			dps = &(*dps)->next;
+			continue;
+		}
+		if (cmp == 0)
+			return *dps;
+
+		break;
+	}
+
+	size_t const len = sizeof(domain_prescreen);
+	size_t const len2 = strlen(domain) + 1;
+	domain_prescreen *new_dps = malloc(len + len2);
+	if (new_dps)
+	{
+		memset(new_dps, 0, len);
+		new_dps->next = *dps;
+		*dps = new_dps;
+		memcpy(&new_dps->name[0], domain, len2);
+	}
+
+	return new_dps;
+}
+
+static void clear_prescreen(domain_prescreen* dps)
+{
+	while (dps != NULL)
+	{
+		domain_prescreen* const next = dps->next;
+		free(dps);
+		dps = next;
+	}
+}
+
+static void clean_vh(verify_parms *vh)
+{
+	clear_prescreen(vh->domain_head);
+	vbr_info_clear(vh->vbr);
+	free(vh->sender_domain);
+	free(vh->helo_domain);
+	free(vh->domain_ptr);
+	free(vh->vbr_result.resp);
+}
+
+static int
+domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
+/*
+*
+* return -1 for fatal error, number of domains otherwise
+*/
+{
+	if (vh->dkim_domain == NULL)
+		vh->dkim_domain = dkim_getdomain(dkim);
+	char const save_from_anyway = vh->parm->z.save_from_anyway;
+	char *const from = vh->dkim_domain;
+	char *const mfrom = vh->sender_domain;
+	char *const helo = vh->helo_domain;
+	char from_k = from == NULL, mfrom_k = mfrom == NULL, helo_k = helo == NULL;
+
+	int ndoms = nsigs + 2 - mfrom_k - helo_k;
+	if (save_from_anyway)
+		ndoms += 1 - from_k;
+
+	domain_prescreen** domain_ptr = calloc(ndoms+1, sizeof(domain_prescreen*));
+	domain_prescreen** sigs_mirror = calloc(nsigs+1, sizeof(domain_prescreen*));
+	DKIM_SIGINFO** sigs_copy = calloc(nsigs+1, sizeof(DKIM_SIGINFO*));
+	if (!(domain_ptr && sigs_mirror && sigs_copy))
+	{
+		fl_report(LOG_ALERT, "MEMORY FAULT");
+		ndoms = -1;
+	}
+
+	db_work_area *const dwa = vh->parm->dwa;
+	if (dwa && ndoms > 0)
+	{
+		if (db_connect(dwa) == 0)
+			vh->parm->dyn.db_connected = 1;
+		else
+			ndoms = -1;
+	}
+
+	if (ndoms <= 0)
+	{
+		free(domain_ptr);
+		free(sigs_mirror);
+		free(sigs_copy);
+		return ndoms;
+	}
+
+	int const vbr_count = count_trusted_vouchers(vh->parm->z.trusted_vouchers);
 	int const vbr_factor = vbr_count < 2? 0: 1000/(vbr_count - 1);
 
 	size_t const helolen = vh->helo_domain? strlen(vh->helo_domain): 0;
 
-	// will this always be supported here?
-	if (vh->dkim_domain == NULL)
-		vh->dkim_domain = dkim_getdomain(dkim);
-	
-	// establish a value for each signature
+	domain_prescreen *dps_head = NULL;
+	ndoms = 0;
+
+	/*
+	* 1st pass: Create prescreens with name-based domain evaluation.
+	* Fill in sigs_mirror and domain_ptr.
+	*/
 	for (int c = 0; c < nsigs; ++c)
 	{
-		int sigval = 0;
-		DKIM_SIGERROR err = dkim_sig_geterror(sigs[c]);
-		if (err == DKIM_SIGERROR_UNKNOWN || err == DKIM_SIGERROR_OK)
+		char *const domain = dkim_sig_getdomain(sigs[c]);
+		if (domain)
 		{
-			char *domain = dkim_sig_getdomain(sigs[c]);
-			if (domain)
+			domain_prescreen *dps = get_prescreen(&dps_head, domain);
+			if (dps == NULL)
 			{
-				if (vh->dkim_domain && stricmp(vh->dkim_domain, domain) == 0)
+				fl_report(LOG_ALERT, "MEMORY FAULT");
+				clear_prescreen(dps_head);
+				free(domain_ptr);
+				free(sigs_mirror);
+				free(sigs_copy);
+				return -1;
+			}
+
+			sigs_mirror[c] = dps;
+
+			if (dps->nsigs++ == 0)  // first time domain seen
+			{
+				domain_ptr[ndoms++] = dps;
+
+				if (from_k == 0 && stricmp(from, domain) == 0)
 				{
-					sigval += 2000;    // author domain signature
-					++vh->auth_sigs;
+					from_k = dps->u.f.is_from = 1;
+					dps->sigval += 2000;    // author domain signature
+					// vh->have_author_sig += 1;
 				}
 
-				if (domain_is_whitelisted(vh, domain))
-					sigval += 1000;    // trusted signer
+				if (dwa &&
+					(dps->whitelisted = db_is_whitelisted(dwa, domain)) > 1)
+				{
+					dps->sigval += 1000;    // trusted signer
+					dps->u.f.is_whitelisted = 1;
+					vh->have_whitelisted += 1;
+				}
 
 				vbr_info *const vbr = vbr_info_get(vh->vbr, domain);
 				if (vbr)
 				{
-					sigval += 5;       // sender's adverized vouching
+					dps->u.f.has_vbr = 1;   // sender's adverized vouching
+					dps->sigval += 5;
 					if (vbr_count)
 					{
 						/*
@@ -1476,67 +1284,324 @@ static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 						* from 1200 for trust=1 down to 200 for trust=vbr_count
 						* assuming 1 <= trust <= vbr_count
 						*/
-						int trust = has_trusted_voucher(vh, vbr);
+						int const trust = has_trusted_voucher(vh, vbr);
 						if (trust)
 						{
-							sigval += vbr_factor * (vbr_count - trust) + 200;
-							++vh->trusted_sigs;
+							dps->sigval += vbr_factor * (vbr_count - trust) + 200;
+							dps->u.f.vbr_is_trusted = 1;
+							vh->have_trusted_vbr += 1;
 						}
 					}
 				}
 
-				if (vh->sender_domain && stricmp(vh->sender_domain, domain) == 0)
-					sigval += 100;     // sender's domain signature
+				if (mfrom_k == 0 && stricmp(mfrom, domain) == 0)
+				{
+					mfrom_k = dps->u.f.is_mfrom = 1;
+					dps->sigval += 100;     // sender's domain signature
+				}
 
-				if (helolen)
+				if (helo_k == 0 && stricmp(helo, domain) == 0)
+				{
+					helo_k = dps->u.f.is_helo = 1;
+					dps->sigval += 15;
+				}
+				else if (helolen)
 				{
 					size_t dl = strlen(domain);
-					char *helocmp = vh->helo_domain;
 					if (helolen > dl)
-						helocmp += helolen - dl;
-					// should check it's not co.uk or similar...
-					if (stricmp(helocmp, domain) == 0)
-						sigval += 10;   // helo domain signature
+					{
+						char *const helocmp = &helo[helolen - dl];
+						// should check helo is not co.uk or similar...
+						if (stricmp(helocmp, domain) == 0)
+						{
+							dps->sigval += 8; // helo domain signature
+							dps->u.f.looks_like_helo = 1;
+						}
+					}
 				}
 			}
 		}
-
-#if 0
-		// domain may have a reputation...
-		if (sigval <= 0)
-			dkim_sig_ignore(sigs[c]);
-#endif
-		val[c] = sigval;
 	}
 
-	// sort signatures high values first (gnome sort)
-	int c = 0;
-	while (c < nsigs)
-		if (c == 0 || val[c] <= val[c-1])
+	/*
+	* Sort domain_ptr, based on evaluation.  Use gnome sort, as we
+	* expect 2 ~ 4 elements.  (It starts getting sensibly slow with
+	* 1000 elements --1ms on nocona xeon.)
+	*/
+
+	for (int c = 0; c < ndoms;)
+	{
+		if (c == 0 || domain_ptr[c]->sigval <= domain_ptr[c-1]->sigval)
 			++c;
 		else
 		{
-			DKIM_SIGINFO *tsig = sigs[c];
-			sigs[c] = sigs[c-1];
-			sigs[c-1] = tsig;
-			int tint = val[c];
-			val[c] = val[c-1];
-			val[c-1] = tint;
+			domain_prescreen *const dps = domain_ptr[c];
+			domain_ptr[c] = domain_ptr[c-1];
+			domain_ptr[c-1] = dps;
 			--c;
 		}
+	}
 
-	free(val);
+	/*
+	* Allocate indexes in the sorted sigs array.  Reuse sigval as next_index.
+	*/
+
+	int next_ndx = 0;
+	for (int c = 0; c < ndoms; ++c)
+	{
+		domain_prescreen *const dps = domain_ptr[c];
+		dps->sigval = dps->start_ndx = next_ndx;
+		next_ndx += dps->nsigs;
+	}
+
+	/*
+	* Make a copy of sigs, then
+	* 2nd pass: Rewrite it based on allocated indexes.
+	*/
+
+	if (nsigs)
+	{
+		memcpy(sigs_copy, sigs, nsigs * sizeof(DKIM_SIGINFO*));
+		for (int c = 0; c < nsigs; ++c)
+		{
+			domain_prescreen *const dps = sigs_mirror[c];
+			DKIM_SIGINFO *const sig = sigs_copy[c];
+			sigs[dps->sigval++] = sig;
+		}
+	}
+
+	/*
+	* If SPF-authenticated domains were not among the signers, add them
+	* to domain list and check whether any of them is whitelisted.
+	*/
+
+	free(sigs_mirror);
+	free(sigs_copy);
+
+	if (save_from_anyway && dwa && from_k == 0)
+	{
+		domain_prescreen *dps = get_prescreen(&dps_head, from);
+		if (dps)
+		{
+			dps->u.f.is_from = 1;
+			domain_ptr[ndoms++] = dps;	
+			if ((dps->whitelisted = db_is_whitelisted(dwa, dps->name)) > 1)
+				dps->u.f.is_whitelisted = 1;
+		}
+		else
+			ndoms = -1;
+	}
+
+	if (ndoms >= 0 && dwa && mfrom_k == 0)
+	{
+		domain_prescreen *dps = get_prescreen(&dps_head, mfrom);
+		if (dps)
+		{
+			dps->u.f.is_mfrom = 1;
+			domain_ptr[ndoms++] = dps;	
+			if ((dps->whitelisted = db_is_whitelisted(dwa, dps->name)) > 1)
+				dps->u.f.is_whitelisted = 1;
+		}
+		else
+			ndoms = -1;
+	}
+
+	if (ndoms >= 0 && dwa && helo_k == 0)
+	{
+		domain_prescreen *dps = get_prescreen(&dps_head, helo);
+		if (dps)
+		{
+			dps->u.f.is_helo = 1;
+			domain_ptr[ndoms++] = dps;	
+			if ((dps->whitelisted = db_is_whitelisted(dwa, dps->name)) > 1)
+				dps->u.f.is_whitelisted = 1;
+		}
+		else
+			ndoms = -1;
+		if ((dps->whitelisted = db_is_whitelisted(dwa, helo)) > 1)
+			dps->u.f.is_whitelisted = 1;
+		dps->u.f.is_helo = 1;
+		domain_ptr[ndoms++] = dps;	
+	}
+
+	if (ndoms < 0)
+	{
+		fl_report(LOG_ALERT, "MEMORY FAULT");
+		clear_prescreen(dps_head);
+		free(domain_ptr);
+		return -1;
+	}
+
+	vh->ndoms = ndoms;
+	vh->domain_ptr = realloc(domain_ptr, ndoms * sizeof(domain_prescreen*));
+	vh->domain_head = dps_head;
+	return ndoms;
+}
+
+static DKIM_STAT dkim_sig_sort(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
+{
+	verify_parms *const vh = (verify_parms*)dkim_get_user_context(dkim);
+
+	assert(dkim && sigs && vh);
+
+	if (nsigs > vh->parm->z.max_signatures)
+	{
+		fl_pass_message(vh->parm->fl, "554 Too many DKIM signatures\n");
+		vh->parm->dyn.rtc = 2;
+		if (vh->parm->z.verbose >= 3)
+			fl_report(LOG_ERR,
+				"id=%s: %d DKIM signatures, max is %d, message rejected.",
+				vh->parm->dyn.info.id,
+				nsigs,
+				vh->parm->z.max_signatures);
+		return DKIM_CBSTAT_REJECT;
+	}
+
+	int rtc = domain_sort(vh, dkim, sigs, nsigs);
+	if (rtc < 0)
+	{
+		vh->parm->dyn.rtc = -1;
+		return DKIM_CBSTAT_TRYAGAIN;
+	}
+	return DKIM_CBSTAT_CONTINUE;
+}
+
+static int run_vbr_check(verify_parms *vh, char const *const domain)
+{
+	assert(vh);
+	assert(vh->parm);
+
+	dkimfl_parm *parm = vh->parm;
+	size_t const queries = vh->vbr_result.queries;
+
+	vh->vbr_result.vbr = NULL;
+	vh->vbr_result.mv = NULL;
+	vh->vbr_result.tv = vh->parm->z.trusted_vouchers;
+	int rc = vbr_check(vh->vbr, domain, &is_trusted_voucher, &vh->vbr_result);
+	if (rc != 0 && parm->z.verbose >= 3)
+	{
+		if (queries == vh->vbr_result.queries && vh->vbr_result.vbr != NULL)
+		// no certifiers are trusted for this domain
+		{
+			char *verifiers = vbr_info_vouchers(vh->vbr_result.vbr);
+			fl_report(LOG_INFO, "non-trusted VBR certifier(s) for %s: %s",
+				domain, verifiers? verifiers: "(null)");
+			free(verifiers);
+		}
+		else if (rc == 3 && vh->vbr_result.mv != NULL)
+			fl_report(LOG_NOTICE,
+				"%s claims VBR-Info by trusted VBR certifier %s, who says NXDOMAIN",
+					domain, vh->vbr_result.mv);
+	}
+	return rc;
+}
+
+static inline int sig_is_good(DKIM_SIGINFO *const sig)
+{
+	unsigned int const sig_flags = dkim_sig_getflags(sig);
+	unsigned int const bh = dkim_sig_getbh(sig);
+	DKIM_SIGERROR const rc = dkim_sig_geterror(sig);
+	return (sig_flags & DKIM_SIGFLAG_IGNORE) == 0 &&
+		(sig_flags & DKIM_SIGFLAG_PASSED) != 0 &&
+		bh == DKIM_SIGBH_MATCH &&
+		rc == DKIM_SIGERROR_OK;
+}
+
+static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
+/*
+* Check author domain, whitelisted, vouched.
+*/
+{
+	verify_parms *const vh = (verify_parms*)dkim_get_user_context(dkim);
+	assert(dkim && sigs && vh);
+
+	int const ndoms = vh->ndoms;
+	domain_prescreen **const domain_ptr = vh->domain_ptr;
+	
+	int trusted_vbr = vh->have_trusted_vbr;
+	int whitelisted = vh->have_whitelisted;
+	int const do_all = vh->parm->z.report_all_sigs;
+
+	for (int c = 0; c < ndoms; ++c)
+	{
+		domain_prescreen *const dps = domain_ptr[c];
+		dps->sigval = 0; // reuse for number of verified signatures
+		if (dps->nsigs > 0) // TODO option for verifying only dps->u.all != 0
+		{
+			for (int n = 0; n < dps->nsigs; ++n)
+			{
+				int const ndx = n + dps->start_ndx;
+				assert(ndx >= 0 && ndx < nsigs);
+				DKIM_SIGINFO *const sig = sigs[ndx];
+				unsigned int const sig_flags = dkim_sig_getflags(sig);
+				if ((sig_flags & DKIM_SIGFLAG_IGNORE) == 0 &&
+					dkim_sig_process(dkim, sig) == DKIM_STAT_OK &&
+					sig_is_good(sig))
+				{
+					dps->u.f.sig_is_ok = 1;
+					dps->sigval += 1;
+					if (vh->sig == NULL)
+					{
+						vh->sig = sig;
+						vh->dps = dps;
+					}
+
+					if (dps->u.f.is_from && vh->author_sig == NULL)
+					{
+						vh->author_sig = sig;
+						vh->author_dps = dps;
+					}
+
+					if (trusted_vbr > 0 && dps->u.f.vbr_is_trusted)
+					{
+						--trusted_vbr;
+						if (run_vbr_check(vh, dps->name) == 0)
+						{
+							vh->vbr_sig = sig;
+							vh->vbr_dps = dps;
+							dps->u.f.vbr_is_ok = 1;
+							dps->vbr_mv = vh->vbr_result.mv;
+							trusted_vbr = 0; // one is enough
+						}
+					}
+
+					if (whitelisted && dps->u.f.is_whitelisted)
+					{
+						vh->whitelisted_sig = sig;
+						vh->whitelisted_dps = dps;
+						vh->whitelisted_domain = &dps->name[0];
+						whitelisted = 0;
+					}
+
+					if (!do_all)
+						break;
+				}
+				else
+				{
+					if (dps->u.f.is_whitelisted)
+						--whitelisted;
+					if (dps->u.f.vbr_is_trusted)
+						--trusted_vbr;
+				}
+			}
+		}
+		if (do_all == 0 && whitelisted == 0 && trusted_vbr == 0)
+			break;
+	}
+
 	return DKIM_CBSTAT_CONTINUE;
 }
 
 static void clean_stats(dkimfl_parm *parm)
 {
 	assert(parm);
-	assert(parm->dyn.stats);
-	
-	clean_stats_info_content(parm->dyn.stats);
-	free(parm->dyn.stats);
-	parm->dyn.stats = NULL;
+
+	if (parm->dyn.stats)
+	{
+		clean_stats_info_content(parm->dyn.stats);
+		free(parm->dyn.stats);
+		parm->dyn.stats = NULL;
+	}
 }
 
 static int verify_headers(verify_parms *vh)
@@ -1554,7 +1619,7 @@ static int verify_headers(verify_parms *vh)
 	FILE *const out = vh->step? (FILE*)vh->dkim_or_file: NULL;
 	
 	int seen_received = 0;
-	int const do_vbr = parm->trusted_vouchers != NULL;
+	int const do_vbr = parm->z.trusted_vouchers != NULL;
 	
 	for (;;)
 	{
@@ -1563,7 +1628,7 @@ static int verify_headers(verify_parms *vh)
 
 		if (eol == NULL)
 		{
-			if (parm->verbose)
+			if (parm->z.verbose)
 				fl_report(LOG_ALERT,
 					"id=%s: header too long (%.20s...)",
 					parm->dyn.info.id, vb_what(vb, fp));
@@ -1623,13 +1688,13 @@ static int verify_headers(verify_parms *vh)
 					if (parm->dyn.authserv_id &&
 						stricmp(authserv_id, parm->dyn.authserv_id) == 0)
 							maybe_attack = zap = 1;
-					if (dkim == NULL && parm->verbose >= 2) // log on 2nd pass only
+					if (dkim == NULL && parm->z.verbose >= 2) // log on 2nd pass only
 					{
 						if (maybe_attack)
 							fl_report(LOG_NOTICE,
 								"id=%s: removing Authentication-Results from %s",
 								parm->dyn.info.id, authserv_id);
-						else if (parm->verbose >= 6)
+						else if (parm->z.verbose >= 6)
 							fl_report(LOG_INFO,
 								"id=%s: found Authentication-Results by %s",
 								parm->dyn.info.id, authserv_id);
@@ -1649,7 +1714,7 @@ static int verify_headers(verify_parms *vh)
 				if ((s = hdrval(start, "Received")) != NULL)
 				{
 					if (parm->dyn.stats)
-						parm->dyn.stats->rhcnt += 1;
+						parm->dyn.stats->received_count += 1;
 
 					if (parm->dyn.authserv_id == NULL && seen_received == 0)
 					{
@@ -1683,7 +1748,7 @@ static int verify_headers(verify_parms *vh)
 					}
 				}
 
-				else if (!parm->no_spf && vh->received_spf < 2 &&
+				else if (!parm->z.no_spf && vh->received_spf < 2 &&
 					(s = hdrval(start, "Received-SPF")) != NULL)
 				{
 					++vh->received_spf;
@@ -1735,20 +1800,24 @@ static int verify_headers(verify_parms *vh)
 						fl_report(LOG_ALERT, "MEMORY FAULT");
 						return parm->dyn.rtc = -1;
 					}
-					else if (rtc && parm->verbose >= 3)
+					else if (rtc && parm->z.verbose >= 3)
 						fl_report(LOG_INFO, "id=%s: bad VBR-Info: %s",
 							parm->dyn.info.id, s);
 				}
 			}
 			// (only if stats enabled)
-			// save stats' ct and cte, check fromlist
+			// save stats' content_type and content_encoding, check mailing_list
 			else if (parm->dyn.stats)
 			{
 				char **target = NULL;
 				if ((s = hdrval(start, "Content-Type")) != NULL)
-					target = &parm->dyn.stats->ct;
+					target = &parm->dyn.stats->content_type;
 				else if ((s = hdrval(start, "Content-Transfer-Encoding")) != NULL)
-					target = &parm->dyn.stats->cte;
+					target = &parm->dyn.stats->content_encoding;
+				else if ((s = hdrval(start, "Date")) != NULL)
+					target = &parm->dyn.stats->date;
+				else if ((s = hdrval(start, "Message-Id")) != NULL)
+					target = &parm->dyn.stats->message_id;
 
 				if (target)
 				{
@@ -1791,7 +1860,7 @@ static int verify_headers(verify_parms *vh)
 					if (strincmp(s, "list", 4) == 0 &&
 						((len = strlen(s)) <= 4 ||
 							(ch = ((unsigned char*)s)[5]) == ';' || isspace(ch)))
-								parm->dyn.stats->fromlist = 1;
+								parm->dyn.stats->mailing_list = 1;
 				}
 				
 				else if (strincmp(start, "List-", 5) == 0)
@@ -1799,11 +1868,11 @@ static int verify_headers(verify_parms *vh)
 					if (hdrval(start, "List-Id") ||
 						hdrval(start, "List-Post") ||
 						hdrval(start, "List-Unsubscribe"))
-							parm->dyn.stats->fromlist = 1;
+							parm->dyn.stats->mailing_list = 1;
 				}
 				
 				else if (hdrval(start, "Mailing-List"))
-					parm->dyn.stats->fromlist = 1;
+					parm->dyn.stats->mailing_list = 1;
 			}
 		}
 
@@ -1822,7 +1891,7 @@ static int verify_headers(verify_parms *vh)
 
 			if (err)
 			{
-				if (parm->verbose)
+				if (parm->z.verbose)
 				{
 					char const *errs, *what;
 					if (dkim)
@@ -1862,30 +1931,29 @@ static int verify_headers(verify_parms *vh)
 	{
 		vh->dkim_domain = dkim_getdomain(dkim);
 		dkim_set_user_context(dkim, vh);
-		dkim_set_final(parm->dklib, dkim_sig_sort);
-		
+
 		DKIM_STAT status = dkim_eoh(dkim);
 		if (status != DKIM_STAT_OK)
 		{
-			if (parm->verbose >= 7 ||
-				parm->verbose >= 5 && status != DKIM_STAT_NOSIG)
+			if (parm->z.verbose >= 7 ||
+				parm->z.verbose >= 5 && status != DKIM_STAT_NOSIG)
 			{
 				char const *err = dkim_getresultstr(status);
 				fl_report(LOG_INFO,
 					"id=%s: verifying dkim_eoh: %s (stat=%d)",
 					parm->dyn.info.id, err? err: "(NULL)", (int)status);
 			}
-			// return parm->dyn.rtc = -1;
+			// parm->dyn.rtc set by callback
 		}
 		
-		if (parm->dyn.authserv_id == NULL && parm->verbose)
+		if (parm->dyn.authserv_id == NULL && parm->z.verbose)
 			fl_report(LOG_ERR,
 				"id=%s: missing courier's Received field",
 				parm->dyn.info.id);
 	}
 	else if (ferror(out))
 	{
-		if (parm->verbose)
+		if (parm->z.verbose)
 			fl_report(LOG_ALERT,
 				"id=%s: frwite failed with %s",
 				parm->dyn.info.id, strerror(errno));
@@ -1895,17 +1963,6 @@ static int verify_headers(verify_parms *vh)
 	return parm->dyn.rtc;
 }
 
-static inline int sig_is_good(DKIM_SIGINFO *const sig)
-{
-	unsigned int const sig_flags = dkim_sig_getflags(sig);
-	unsigned int const bh = dkim_sig_getbh(sig);
-	DKIM_SIGERROR const rc = dkim_sig_geterror(sig);
-	return (sig_flags & DKIM_SIGFLAG_IGNORE) == 0 &&
-		(sig_flags & DKIM_SIGFLAG_PASSED) != 0 &&
-		bh == DKIM_SIGBH_MATCH &&
-		rc == DKIM_SIGERROR_OK;
-}
-
 typedef struct dkim_result_summary
 {
 	char *id; //malloc'd
@@ -1913,12 +1970,12 @@ typedef struct dkim_result_summary
 } dkim_result_summary;
 
 static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
-	dkim_result_summary *drs, DKIM *dkim, char const *xcomment)
-// last argument, dkim, in order to use header.b
-// start printing the semicolon+newline that terminate either the previous
+	dkim_result_summary *drs, DKIM *dkim, domain_prescreen *dps)
+// Last but one argument, dkim, in order to use header.b, if dps->nsigs > 1.
+// Start printing the semicolon+newline that terminate either the previous
 // resinfo or the authserv-id, then print the signature details.
-// no print for ignored signatures.
-// return 1 or 0, the number of resinfo's written.
+// No print for ignored signatures.
+// Return 1 or 0, the number of resinfo's written.
 {
 	unsigned int sig_flags;
 	if (sig == NULL || sig == not_sig_but_spf ||
@@ -1927,7 +1984,7 @@ static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
 
 	char buf[80], *id = NULL, htype;
 	memset(buf, 0, sizeof buf);
-	if (dkim_sig_getidentity(dkim, sig, buf, sizeof buf) == DKIM_STAT_OK)
+	if (dkim_sig_getidentity(NULL, sig, buf, sizeof buf) == DKIM_STAT_OK)
 	{
 		id = buf;
 		htype = 'i';
@@ -1940,7 +1997,7 @@ static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
 	memset(buf2, 0, sizeof buf2);
 #if defined HAVE_LIBOPENDKIM_22
 // dkim_get_sigsubstring was added for version 2.1.0
-	if (dkim &&
+	if (dkim && dps && dps->nsigs > 1 &&
 		dkim_get_sigsubstring(dkim, sig, buf2, &sz2) == DKIM_STAT_OK &&
 		sz2 < sizeof buf2)
 			id2 = &buf2[0];
@@ -1996,7 +2053,15 @@ static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
 	}
 
 	fprintf(fp, ";\n  dkim=%s ", result);
-	if (err || is_test || xcomment)
+
+	union flags_as_an_int_or_bitfields u;
+	u.all = 0;
+	if (dps)
+	{
+		u.f.is_whitelisted = dps->u.f.is_whitelisted;
+		u.f.vbr_is_ok = dps->u.f.vbr_is_ok;
+	}
+	if (err || is_test || u.all)
 	{
 		int cont = 0;
 		fputc('(', fp);
@@ -2011,10 +2076,16 @@ static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
 			fputs(err, fp);
 			cont = 1;
 		}
-		if (xcomment)
+		if (u.f.is_whitelisted)
 		{
 			if (cont) fputs(", ", fp);
-			fputs(xcomment, fp);
+			fputs("whitelisted", fp);
+			cont = 1;
+		}
+		if (u.f.vbr_is_ok)
+		{
+			if (cont) fputs(", ", fp);
+			fputs("vbr", fp);
 		}
 		fputs(") ", fp);		
 	}
@@ -2030,36 +2101,6 @@ static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
 	}
 
 	return 1;
-}
-
-static int run_vbr_check(verify_parms *vh, char const *const domain)
-{
-	assert(vh);
-	assert(vh->parm);
-
-	dkimfl_parm *parm = vh->parm;
-	size_t const queries = vh->vbr_result.queries;
-
-	vh->vbr_result.vbr = NULL;
-	vh->vbr_result.mv = NULL;
-	vh->vbr_result.tv = vh->parm->trusted_vouchers;
-	int rc = vbr_check(vh->vbr, domain, &is_trusted_voucher, &vh->vbr_result);
-	if (rc != 0 && parm->verbose >= 3)
-	{
-		if (queries == vh->vbr_result.queries && vh->vbr_result.vbr != NULL)
-		// no certifiers are trusted for this domain
-		{
-			char *verifiers = vbr_info_vouchers(vh->vbr_result.vbr);
-			fl_report(LOG_INFO, "non-trusted VBR certifier(s) for %s: %s",
-				domain, verifiers? verifiers: "(null)");
-			free(verifiers);
-		}
-		else if (rc == 3 && vh->vbr_result.mv != NULL)
-			fl_report(LOG_NOTICE,
-				"%s claims VBR-Info by trusted VBR certifier %s, who says NXDOMAIN",
-					domain, vh->vbr_result.mv);
-	}
-	return rc;
 }
 
 static void verify_message(dkimfl_parm *parm)
@@ -2085,440 +2126,427 @@ static void verify_message(dkimfl_parm *parm)
 	vh.dkim_or_file = dkim;
 	vh.parm = parm;
 	verify_headers(&vh);
-	if (parm->dyn.authserv_id == NULL)
+	if (parm->dyn.authserv_id == NULL || parm->dyn.rtc != 0)
 	{
 		clean_stats(parm);
-		vbr_info_clear(vh.vbr);
-		vh.vbr = NULL;
+		clean_vh(&vh);
+		dkim_free(dkim);
+		if (parm->dyn.rtc == 0)
+			fl_report(LOG_ERR,
+				"id=%s: missing Courier Received: ignoring message",
+				parm->dyn.info.id);
+		return;
 	}
-	else if (parm->dyn.rtc == 0)
+
+	if (dkim_minbody(dkim) > 0)
+		copy_body(parm, dkim);
+
+	status = dkim_eom(dkim, NULL);
+
+	/*
+	* Wrap up for non-dkim domains
+	*/
+	if (parm->dyn.rtc == 0 && vh.domain_head == NULL)
 	{
-		if (dkim_minbody(dkim) > 0)
-			copy_body(parm, dkim);
+		int rtc = domain_sort(&vh, dkim, NULL, 0);
+		if (rtc < 0)
+			parm->dyn.rtc = -1;
+	}
 
-		status = dkim_eom(dkim, NULL);
+	/*
+	* If no DKIM domain is vouched but SPF passed, try that
+	*/
+	if (parm->dyn.rtc == 0 &&
+		vh.vbr_sig == NULL &&
+		vh.sender_domain != NULL &&
+		parm->z.trusted_vouchers &&
+		run_vbr_check(&vh, vh.sender_domain) == 0)
+			vh.vbr_sig = not_sig_but_spf;
 
-		// author domain signature (if passed) is on top
-		vh.sig = dkim_getsignature(dkim);
-		vh.sig_domain = vh.sig? dkim_sig_getdomain(vh.sig): NULL;
-		vh.sig_is_author = vh.sig_domain && vh.dkim_domain &&
-			stricmp(vh.sig_domain, vh.dkim_domain) == 0;
-
-		/*
-		* VBR and whitelist
-		*/
-		if ((parm->trusted_vouchers || parm->domain_whitelist) &&
-			status == DKIM_STAT_OK)
+	/*
+	* If no DKIM domain is whitelisted but SPF passed, try that
+	* SPF helo is ok!
+	*/
+	if (parm->dyn.rtc == 0 && vh.whitelisted_sig == NULL && parm->dwa &&
+		(vh.sender_domain || vh.helo_domain))
+	{
+		if (parm->dyn.db_connected == 0)
 		{
-			DKIM_SIGINFO **sigs;
-			int nsigs;
-			if (dkim_getsiglist(dkim, &sigs, &nsigs) == DKIM_STAT_OK)
-			{
-				int at_or_after = 0;
-				for (int c = 0; c < nsigs; ++c)
-				{
-					DKIM_SIGINFO *const sig = sigs[c];
-					if (sig == vh.sig)
-						at_or_after = 1;
-					if (at_or_after)
-					{
-						char *const domain = dkim_sig_getdomain(sig);
-						if (domain != NULL && sig_is_good(sig))
-						{
-							if (parm->trusted_vouchers && vh.vbr_sig == NULL &&
-								run_vbr_check(&vh, domain) == 0)
-							{
-								vh.vbr_sig = sig;
-								if (vh.whitelisted_sig != NULL ||
-									parm->domain_whitelist == NULL)
-										break;
-							}
-							
-							if (parm->domain_whitelist && vh.whitelisted_sig == NULL &&
-								domain_is_whitelisted(&vh, domain))
-							{
-								vh.whitelisted_sig = sig;
-								vh.whitelisted_domain = domain;
-								if (vh.vbr_sig != NULL ||
-									parm->trusted_vouchers == NULL)
-										break;
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// if no DKIM domain is vouched but SPF passed, try that
-		if (vh.vbr_sig == NULL &&
-			vh.sender_domain != NULL &&
-			parm->trusted_vouchers &&
-			run_vbr_check(&vh, vh.sender_domain) == 0)
-				vh.vbr_sig = not_sig_but_spf;
-
-		// if no DKIM domain is whitelisted but SPF passed, try that
-		if (vh.whitelisted_sig == NULL && vh.sender_domain != NULL &&
-			domain_is_whitelisted(&vh, vh.sender_domain))
-		{
-			vh.whitelisted_sig = not_sig_but_spf;
-			vh.whitelisted_domain = vh.sender_domain;
-		}
-
-		
-		switch (status)
-		{
-			case DKIM_STAT_OK:
-				// pass
-				break;
-
-			case DKIM_STAT_NOSIG:
-				// none
-				break;
-
-			case DKIM_STAT_BADSIG:
-			case DKIM_STAT_CANTVRFY:
-			case DKIM_STAT_REVOKED:
-				// fail or neutral
-				break;
-
-			case DKIM_STAT_NORESOURCE:
-			case DKIM_STAT_INTERNAL:
-			case DKIM_STAT_CBTRYAGAIN:
-			case DKIM_STAT_KEYFAIL:
+			if (db_connect(parm->dwa) == 0)
+				parm->dyn.db_connected = 1;
+			else
 				parm->dyn.rtc = -1;
-				// temperror
-				break;
-
-			case DKIM_STAT_SYNTAX:
-			default:
-				// permerror
-				break;
 		}
 
-		/*
-		* ADSP check and possibly reject
-		*/
 		if (parm->dyn.rtc == 0)
 		{
-			if ((vh.dkim_domain != NULL ||
-					(vh.dkim_domain = dkim_getdomain(dkim)) != NULL) &&
-				dkim_policy(dkim, &vh.policy, NULL) == DKIM_STAT_OK)
+			if (vh.sender_domain != NULL &&
+				db_is_whitelisted(parm->dwa, vh.sender_domain) > 1)
 			{
-				vh.presult = dkim_getpresult(dkim);
-				bool const adsp_fail =
-					(vh.policy == DKIM_POLICY_DISCARDABLE ||
-						vh.policy == DKIM_POLICY_ALL) &&
-					/* redundant: vh.presult == DKIM_PRESULT_AUTHOR && */
-					(!vh.sig_is_author || status != DKIM_STAT_OK);
-				if (parm->dyn.stats)
-				{
-					parm->dyn.stats->adsp_found = vh.presult == DKIM_PRESULT_AUTHOR;
-					parm->dyn.stats->adsp_unknown = vh.policy == DKIM_POLICY_UNKNOWN;
-					parm->dyn.stats->adsp_all = vh.policy == DKIM_POLICY_ALL;
-					parm->dyn.stats->adsp_discardable =
-						vh.policy == DKIM_POLICY_DISCARDABLE;
-					parm->dyn.stats->adsp_fail = adsp_fail;
-				}
-
-				/*
-				* unless disabled by parameter or whitelisted, do action:
-				* reject if dkim_domain is not valid, or ADSP == all,
-				* discard if ADSP == discardable;
-				*/
-				if (!parm->no_author_domain &&
-						(vh.presult == DKIM_PRESULT_NXDOMAIN || adsp_fail))
-/*							((vh.policy == DKIM_POLICY_DISCARDABLE ||
-								vh.policy == DKIM_POLICY_ALL) &&
-							vh.presult == DKIM_PRESULT_AUTHOR &&
-							(!vh.sig_is_author || status != DKIM_STAT_OK))))
-*/
-				{
-					char const *log_reason, *smtp_reason = NULL;
-					
-					if (vh.presult == DKIM_PRESULT_NXDOMAIN)
-					{
-						log_reason = "invalid domain";
-						smtp_reason = "554 Invalid author domain\n";
-					}
-					else if (vh.policy != DKIM_POLICY_DISCARDABLE)
-					{
-						log_reason = "adsp=all policy for";
-						smtp_reason = "554 DKIM signature required by ADSP\n";
-					}
-					else
-						log_reason = "adsp=discardable policy:";
-
-					if (parm->verbose >= 3)
-					{
-						if (vh.whitelisted_domain)
-							fl_report(LOG_INFO,
-								"id=%s: %s %s, but %s is whitelisted (auth: %s)",
-								parm->dyn.info.id,
-								log_reason,
-								vh.dkim_domain,
-								vh.whitelisted_domain,
-								vh.whitelisted_sig == not_sig_but_spf? "SPF": "DKIM");
-						else if (vh.vbr_sig)
-							fl_report(LOG_INFO,
-								"id=%s: %s %s, but %s is VBR vouched by %s (auth: %s)",
-								parm->dyn.info.id,
-								log_reason,
-								vh.dkim_domain,
-								vh.vbr_result.vbr->md,
-								vh.vbr_result.mv,
-								vh.vbr_sig == not_sig_but_spf? "SPF": "DKIM");
-						else
-							fl_report(LOG_INFO,
-								"id=%s: %s %s, no VBR and no whitelist",
-								parm->dyn.info.id,
-								log_reason,
-								vh.dkim_domain);
-					}
-
-					if (vh.vbr_sig == NULL && vh.whitelisted_sig == NULL)
-					{
-						if (smtp_reason) //reject
-							fl_pass_message(parm->fl, smtp_reason);
-						else // drop, and stop filtering
-						{
-							fl_pass_message(parm->fl, "050 Message dropped.\n");
-							fl_drop_message(parm->fl, "adsp=discard\n");
-						}
-						
-						parm->dyn.rtc = 2;
-					}
-				}
+				vh.whitelisted_sig = not_sig_but_spf;
+				vh.whitelisted_domain = vh.sender_domain;
+			}
+			else if (vh.helo_domain != NULL &&
+				db_is_whitelisted(parm->dwa, vh.helo_domain) > 1)
+			{
+				vh.whitelisted_sig = not_sig_but_spf;
+				vh.whitelisted_domain = vh.helo_domain;
 			}
 		}
-		
-		if (parm->dyn.rtc == 0 &&
-			!parm->no_reputation && status == DKIM_STAT_OK && vh.sig)
+	}
+
+	switch (status)
+	{
+		case DKIM_STAT_OK:
+			// pass
+			break;
+
+		case DKIM_STAT_NOSIG:
+			// none
+			break;
+
+		case DKIM_STAT_BADSIG:
+		case DKIM_STAT_CANTVRFY:
+		case DKIM_STAT_REVOKED:
+			// fail or neutral
+			break;
+
+		case DKIM_STAT_NORESOURCE:
+		case DKIM_STAT_INTERNAL:
+		case DKIM_STAT_CBTRYAGAIN:
+		case DKIM_STAT_KEYFAIL:
+			parm->dyn.rtc = -1;
+			// temperror
+			break;
+
+		case DKIM_STAT_SYNTAX:
+		default:
+			// permerror
+			break;
+	}
+
+	/*
+	* ADSP check and possibly reject/drop
+	*/
+	if (parm->dyn.rtc == 0)
+	{
+		if ((vh.dkim_domain != NULL ||
+				(vh.dkim_domain = dkim_getdomain(dkim)) != NULL) &&
+			dkim_policy(dkim, &vh.policy, NULL) == DKIM_STAT_OK)
 		{
-			int rep;
-			/*
-			* (don't) reject on passing configured value
-			*/
-			if (dkim_get_reputation(dkim, vh.sig, DKIM_REP_ROOT, &rep) ==
-				DKIM_STAT_OK)
+			vh.presult = dkim_getpresult(dkim);
+			bool const adsp_fail =
+				(vh.policy == DKIM_POLICY_DISCARDABLE ||
+					vh.policy == DKIM_POLICY_ALL) &&
+				/* redundant: vh.presult == DKIM_PRESULT_AUTHOR && */
+				(vh.author_sig == NULL || status != DKIM_STAT_OK);
+			if (parm->dyn.stats)
 			{
-				vh.dkim_reputation = rep;
-				vh.dkim_reputation_flag = 1;
-#if 0				
-				if (rep > parm->reputation_reject)
+				parm->dyn.stats->adsp_found = vh.presult == DKIM_PRESULT_AUTHOR;
+				parm->dyn.stats->adsp_unknown = vh.policy == DKIM_POLICY_UNKNOWN;
+				parm->dyn.stats->adsp_all = vh.policy == DKIM_POLICY_ALL;
+				parm->dyn.stats->adsp_discardable =
+					vh.policy == DKIM_POLICY_DISCARDABLE;
+				parm->dyn.stats->adsp_fail = adsp_fail;
+			}
+
+			/*
+			* unless disabled by parameter or whitelisted, do action:
+			* reject if dkim_domain is not valid, or ADSP == all,
+			* discard if ADSP == discardable;
+			*/
+			if (parm->z.honor_author_domain && adsp_fail ||
+				parm->z.reject_on_nxdomain &&
+					vh.presult == DKIM_PRESULT_NXDOMAIN)
+			{
+				char const *log_reason, *smtp_reason = NULL;
+				
+				if (vh.presult == DKIM_PRESULT_NXDOMAIN)
 				{
-					fl_pass_message(parm->fl, "550 Bad reputation?\n");
+					log_reason = "invalid domain";
+					smtp_reason = "554 Invalid author domain\n";
+				}
+				else if (vh.policy != DKIM_POLICY_DISCARDABLE)
+				{
+					log_reason = "adsp=all policy for";
+					smtp_reason = "554 DKIM signature required by ADSP\n";
+				}
+				else
+					log_reason = "adsp=discardable policy:";
+
+				if (parm->z.verbose >= 3)
+				{
+					if (vh.whitelisted_domain)
+						fl_report(LOG_INFO,
+							"id=%s: %s %s, but %s is whitelisted (auth: %s)",
+							parm->dyn.info.id,
+							log_reason,
+							vh.dkim_domain,
+							vh.whitelisted_domain,
+							vh.whitelisted_sig == not_sig_but_spf? "SPF": "DKIM");
+					else if (vh.vbr_sig)
+						fl_report(LOG_INFO,
+							"id=%s: %s %s, but %s is VBR vouched by %s (auth: %s)",
+							parm->dyn.info.id,
+							log_reason,
+							vh.dkim_domain,
+							vh.vbr_result.vbr->md,
+							vh.vbr_result.mv,
+							vh.vbr_sig == not_sig_but_spf? "SPF": "DKIM");
+					else
+						fl_report(LOG_INFO,
+							"id=%s: %s %s, no VBR and no whitelist",
+							parm->dyn.info.id,
+							log_reason,
+							vh.dkim_domain);
+				}
+
+				if (vh.vbr_sig == NULL && vh.whitelisted_sig == NULL)
+				{
+					if (smtp_reason) //reject
+						fl_pass_message(parm->fl, smtp_reason);
+					else // drop, and stop filtering
+					{
+						fl_pass_message(parm->fl, "050 Message dropped.\n");
+						fl_drop_message(parm->fl, "adsp=discard\n");
+					}
+					
 					parm->dyn.rtc = 2;
 				}
-#endif
 			}
-		}
-
-
-		/*
-		* prepare ADSP results
-		*/
-		char const *policy_type = "", *policy_result = "";
-		if (parm->dyn.rtc == 0)
-		{
-			if (vh.presult == DKIM_PRESULT_NXDOMAIN)
-			{
-				policy_type = " adsp=";
-				policy_result = "nxdomain";
-			}
-			else if (vh.policy == DKIM_POLICY_ALL)
-			{
-				policy_type = " adsp:all=";
-				policy_result = vh.sig_is_author && status == DKIM_STAT_OK?
-					"pass": "fail";
-			}
-			else if (vh.policy == DKIM_POLICY_DISCARDABLE)
-			{
-				policy_type = " adsp:discardable=";
-				policy_result = vh.sig_is_author && status == DKIM_STAT_OK?
-					"pass": "discard";
-			}
-		}
-
-		/*
-		* write the A-R field if required anyway, spf, or signature
-		*/
-		if (parm->dyn.rtc == 0 &&
-			(parm->add_a_r_anyway ||
-				vh.sender_domain || vh.helo_domain ||
-				vh.sig || vh.vbr_sig || vh.whitelisted_sig ||
-				*policy_result))
-		{
-			FILE *fp = fl_get_write_file(parm->fl);
-			if (fp == NULL)
-			{
-				parm->dyn.rtc = -1;
-				if (parm->dyn.stats)
-					parm->dyn.stats->dkim = dkim;
-				else
-					dkim_free(dkim);
-
-				vbr_info_clear(vh.vbr);
-				return;
-			}
-
-			/*
-			* according to RFC 5451, Section 7.1, point 5, the A-R field
-			* should always appear above the corresponding Received field.
-			*/
-			fprintf(fp, "Authentication-Results: %s", parm->dyn.authserv_id);
-			int auth_given = 0;
-			int log_written = 0;
-			
-			if (vh.sender_domain || vh.helo_domain)
-			{
-				fprintf(fp, ";\n  spf=pass smtp.%s=%s",
-					vh.sender_domain? "mailfrom": "helo",
-					vh.sender_domain? vh.sender_domain: vh.helo_domain);
-				++auth_given;
-			}
-
-			if (vh.sig)
-			{
-				dkim_result_summary drs;
-				memset(&drs, 0, sizeof drs);
-				int d_auth = 0;
-				
-				if (parm->report_all_sigs)
-				{
-					DKIM_SIGINFO **sigs;
-					int nsigs;
-					dkim_result_summary *pdrs = &drs;
-					if (dkim_getsiglist(dkim, &sigs, &nsigs) == DKIM_STAT_OK)
-					{
-						for (int c = 0; c < nsigs; ++c)
-						{
-							d_auth +=
-								print_signature_resinfo(fp, sigs[c], pdrs, dkim, NULL);
-							if (drs.id)
-								pdrs = NULL;
-						}
-					}
-					
-					if (d_auth == 0)
-					{
-						fprintf(fp, ";\n  dkim=%s", drs.result = "none");
-						d_auth = 1;
-					}
-				}
-				else
-					d_auth = print_signature_resinfo(fp, vh.sig, &drs, NULL, NULL);
-
-				if (d_auth > 0 && parm->verbose >= 3)
-				{
-					fl_report(LOG_INFO,
-						"id=%s: verified:%s dkim=%s (id=%s, %s%sstat=%d)%s%s rep=%d",
-						parm->dyn.info.id,
-						(vh.sender_domain || vh.helo_domain)? " spf=pass,": "",
-						drs.result,
-						drs.id? drs.id: "-",
-						drs.err? drs.err: "", drs.err? ", ": "",
-						(int)status,
-						policy_type, policy_result,
-						vh.dkim_reputation);
-					log_written += 1;
-				}
-
-				free(drs.id);
-				if (vh.whitelisted_sig && vh.whitelisted_sig != vh.sig)
-					d_auth += print_signature_resinfo(fp, vh.whitelisted_sig,
-						NULL, NULL, "whitelisted");
-				if (vh.vbr_sig && vh.vbr_sig != vh.sig &&
-					vh.vbr_sig != vh.whitelisted_sig)
-						d_auth += print_signature_resinfo(fp, vh.vbr_sig,
-							NULL, NULL, "vbr");
-				auth_given += d_auth;
-			}
-
-			if (*policy_result)
-			{
-#if HAVE_LIBOPENDKIM_22
-				char const *const user = dkim_getuser(dkim);
-				if (user && vh.dkim_domain)
-					fprintf(fp, ";\n  dkim-adsp=%s header.from=%s@%s",
-						policy_result, user, vh.dkim_domain);
-				else
-#endif			
-					fprintf(fp, ";\n  dkim-adsp=%s", policy_result);
-				++auth_given;
-			}
-			
-			if (vh.dkim_reputation_flag && vh.sig_domain)
-			{
-				fprintf(fp, ";\n  x-dkim-rep=%s (%d from %s) header.d=%s",
-					vh.dkim_reputation >= parm->reputation_fail? "fail":
-					vh.dkim_reputation <= parm->reputation_pass? "pass": "neutral",
-						vh.dkim_reputation, DKIM_REP_ROOT, vh.sig_domain);
-				++auth_given;
-			}
-
-			if (vh.vbr_result.resp)
-			{
-				fprintf(fp,
-					";\n  vbr=pass header.mv=%s header.md=%s (%s)",
-					vh.vbr_result.mv, vh.vbr_result.vbr->md, vh.vbr_result.resp);
-				if (parm->dyn.stats)
-					parm->dyn.stats->vbr_result = vh.vbr_result.resp;
-				else
-				{
-					free(vh.vbr_result.resp);
-					vh.vbr_result.resp = NULL;
-				}
-				++auth_given;
-			}
-
-			if (auth_given <= 0)
-				fputs("; none", fp);
-			fputc('\n', fp);
-			if (parm->dyn.stats)
-				parm->dyn.stats->dkim = dkim;
-			else
-				dkim_free(dkim);
-			dkim = NULL;
-
-			if (log_written == 0 && parm->verbose >= 7)
-			{
-				fl_report(LOG_INFO,
-					"id=%s: verified: %d auth method(s) written",
-					parm->dyn.info.id,
-					auth_given);
-			}
-
-			/*
-			* now for the rest of the header, and body
-			*/
-			vh.step = 1;
-			vh.dkim_or_file = fp;
-			rewind(fl_get_file(parm->fl));
-			if (verify_headers(&vh) == 0 &&
-				fputc('\n', fp) != EOF &&
-				filecopy(fl_get_file(parm->fl), fp) == 0)
-					parm->dyn.rtc = 1;
-			else
-				parm->dyn.rtc = -1;
 		}
 	}
 
-	if (dkim)
-		if (parm->dyn.stats)
-			parm->dyn.stats->dkim = dkim;
-		else
-			dkim_free(dkim);
+	/*
+	* Reputation
+	*/
+	if (parm->dyn.rtc == 0 &&
+		!parm->z.no_reputation && status == DKIM_STAT_OK && vh.sig)
+	{
+		int rep;
+		/*
+		* (don't) reject on passing configured value
+		*/
+		if (dkim_get_reputation(dkim, vh.sig, DKIM_REP_ROOT, &rep) ==
+			DKIM_STAT_OK)
+		{
+			vh.dkim_reputation = rep;
+			vh.dkim_reputation_flag = 1;
+#if 0				
+			if (rep > parm->reputation_reject)
+			{
+				fl_pass_message(parm->fl, "550 Bad reputation?\n");
+				parm->dyn.rtc = 2;
+			}
+#endif
+		}
+	}
 
-	free(vh.vbr_result.resp); // TODO: check dyn.stats above!!!!!!!
-	vbr_info_clear(vh.vbr);
+
+	/*
+	* prepare ADSP results
+	*/
+	char const *policy_type = "", *policy_result = "";
+	if (parm->dyn.rtc == 0)
+	{
+		if (vh.presult == DKIM_PRESULT_NXDOMAIN)
+		{
+			policy_type = " adsp=";
+			policy_result = "nxdomain";
+		}
+		else if (vh.policy == DKIM_POLICY_ALL)
+		{
+			policy_type = " adsp:all=";
+			policy_result = vh.author_sig && status == DKIM_STAT_OK?
+				"pass": "fail";
+		}
+		else if (vh.policy == DKIM_POLICY_DISCARDABLE)
+		{
+			policy_type = " adsp:discardable=";
+			policy_result = vh.author_sig && status == DKIM_STAT_OK?
+				"pass": "discard";
+		}
+	}
+
+	/*
+	* write the A-R field if required anyway, spf, or signature
+	*/
+	if (parm->dyn.rtc == 0 &&
+		(parm->z.add_a_r_anyway ||
+			vh.sender_domain || vh.helo_domain ||
+			vh.author_sig || vh.vbr_sig || vh.whitelisted_sig ||
+			*policy_result))
+	{
+		FILE *fp = fl_get_write_file(parm->fl);
+		if (fp == NULL)
+		{
+			parm->dyn.rtc = -1;
+			clean_stats(parm);
+			clean_vh(&vh);
+			dkim_free(dkim);
+			return;
+		}
+
+		/*
+		* according to RFC 5451, Section 7.1, point 5, the A-R field
+		* should always appear above the corresponding Received field.
+		*/
+		fprintf(fp, "Authentication-Results: %s", parm->dyn.authserv_id);
+		int auth_given = 0;
+		int log_written = 0;
+		
+		if (vh.sender_domain || vh.helo_domain)
+		{
+			fprintf(fp, ";\n  spf=pass smtp.%s=%s",
+				vh.sender_domain? "mailfrom": "helo",
+				vh.sender_domain? vh.sender_domain: vh.helo_domain);
+			++auth_given;
+		}
+
+		// mention a failed signature if none verified
+		if (vh.sig || (vh.sig = dkim_getsignature(dkim)) != NULL)
+		{
+			dkim_result_summary drs;
+			memset(&drs, 0, sizeof drs);
+			int d_auth = 0;
+			
+			if (parm->z.report_all_sigs)
+			{
+				DKIM_SIGINFO **sigs;
+				int nsigs;
+				dkim_result_summary *pdrs = &drs;
+				if (vh.domain_ptr &&
+					dkim_getsiglist(dkim, &sigs, &nsigs) == DKIM_STAT_OK)
+				{
+					for (int c = 0; c < vh.ndoms; ++c)
+					{
+						domain_prescreen *dps = vh.domain_ptr[c];
+						int ndx = dps->start_ndx;
+						int const upto_ndx = ndx + dps->nsigs;
+						for (; ndx < upto_ndx; ++ndx)
+						{
+							DKIM_SIGINFO *const sig = sigs[ndx];
+							d_auth += 
+								print_signature_resinfo(fp, sig, pdrs, dkim, dps);
+							if (drs.id)
+								pdrs = NULL; // keep the first id for logging
+						}
+					}
+				}
+				
+				if (d_auth == 0)
+				{
+					fprintf(fp, ";\n  dkim=%s", drs.result = "none");
+					d_auth = 1;
+				}
+			}
+			else
+				d_auth = print_signature_resinfo(fp, vh.sig, &drs, dkim, vh.dps);
+
+			if (d_auth > 0 && parm->z.verbose >= 3)
+			{
+				fl_report(LOG_INFO,
+					"id=%s: verified:%s dkim=%s (id=%s, %s%sstat=%d)%s%s rep=%d",
+					parm->dyn.info.id,
+					(vh.sender_domain || vh.helo_domain)? " spf=pass,": "",
+					drs.result,
+					drs.id? drs.id: "-",
+					drs.err? drs.err: "", drs.err? ", ": "",
+					(int)status,
+					policy_type, policy_result,
+					vh.dkim_reputation);
+				log_written += 1;
+			}
+
+			free(drs.id);
+			if (!parm->z.report_all_sigs)
+			{
+				if (vh.whitelisted_sig && vh.whitelisted_sig != vh.sig)
+					d_auth += print_signature_resinfo(fp, vh.whitelisted_sig, NULL,
+						dkim, vh.whitelisted_dps);
+				if (vh.vbr_sig && vh.vbr_sig != vh.sig &&
+					vh.vbr_sig != vh.whitelisted_sig)
+						d_auth += print_signature_resinfo(fp, vh.vbr_sig, NULL,
+							dkim, vh.vbr_dps);
+			}
+			auth_given += d_auth;
+		}
+
+		if (*policy_result)
+		{
+#if HAVE_LIBOPENDKIM_22
+			char const *const user = dkim_getuser(dkim);
+			if (user && vh.dkim_domain)
+				fprintf(fp, ";\n  dkim-adsp=%s header.from=%s@%s",
+					policy_result, user, vh.dkim_domain);
+			else
+#endif			
+				fprintf(fp, ";\n  dkim-adsp=%s", policy_result);
+			++auth_given;
+		}
+		
+		if (vh.dkim_reputation_flag && vh.dps)
+		{
+			fprintf(fp, ";\n  x-dkim-rep=%s (%d from %s) header.d=%s",
+				vh.dkim_reputation >= parm->z.reputation_fail? "fail":
+				vh.dkim_reputation <= parm->z.reputation_pass? "pass": "neutral",
+					vh.dkim_reputation, DKIM_REP_ROOT, vh.dps->name);
+			++auth_given;
+		}
+
+		if (vh.vbr_result.resp)
+		{
+			fprintf(fp,
+				";\n  vbr=pass header.mv=%s header.md=%s (%s)",
+				vh.vbr_result.mv, vh.vbr_result.vbr->md, vh.vbr_result.resp);
+			++auth_given;
+		}
+
+		if (auth_given <= 0)
+			fputs("; none", fp);
+		fputc('\n', fp);
+
+		if (log_written == 0 && parm->z.verbose >= 7)
+		{
+			fl_report(LOG_INFO,
+				"id=%s: verified: %d auth method(s) written",
+				parm->dyn.info.id,
+				auth_given);
+		}
+
+		/*
+		* now for the rest of the header, and body
+		*/
+		vh.step = 1;
+		vh.dkim_or_file = fp;
+		rewind(fl_get_file(parm->fl));
+		if (verify_headers(&vh) == 0 &&
+			fputc('\n', fp) != EOF &&
+			filecopy(fl_get_file(parm->fl), fp) == 0)
+				parm->dyn.rtc = 1;
+		else
+			parm->dyn.rtc = -1;
+	}
+
+	if (parm->dyn.rtc < 0)
+		clean_stats(parm);
+	else if (parm->dyn.stats)
+	{
+		parm->dyn.stats->domain_head = vh.domain_head;
+		vh.domain_head = NULL;
+
+		parm->dyn.stats->vbr_result_resp = vh.vbr_result.resp;
+		vh.vbr_result.resp = NULL;
+	}
+	clean_vh(&vh);
+	dkim_free(dkim);
 }
 
 static void set_client_ip(dkimfl_parm *parm)
 {
+	assert(parm);
+
 	char *s;
-	
-	if (parm->dyn.stats && parm->dyn.stats->dkim == NULL)
-		clean_stats(parm);
 	
 	if (parm->dyn.stats && (s = parm->dyn.info.frommta) != NULL &&
 		strincmp(s, "dns;", 4) == 0)
@@ -2527,250 +2555,22 @@ static void set_client_ip(dkimfl_parm *parm)
 		int ch;
 		while ((ch = *(unsigned char*)s) != 0 && isspace(ch))
 			++s;
-		parm->dyn.stats->client_ip = s;
-	}
-}
-
-static char *lcdomain(char*domain)
-{
-	if (domain)
-	{
-		char *d = strdup(domain);
-		if (d)
-		{
-			char *s = d;
-			int ch;
-			while ((ch = *s) != 0)
-			{
-				if (isascii(ch) && isupper(ch))
-					*s = tolower(ch);
-				++s;
-			}
-			return d;
-		}
-	}
-	return NULL;
-}
-
-static void write_stats(dkimfl_parm *parm, FILE *fp)
-{
-	DKIM *dkim = parm->dyn.stats->dkim;
-	DKIM_SIGINFO **sigs;
-	int nsigs = 0;
-	int status = dkim_getsiglist(dkim, &sigs, &nsigs);
-	if (status != DKIM_STAT_OK)
-	{
-		if (parm->verbose)
-			fl_report(LOG_ALERT,
-				"id=%s: dkim_getsiglist() failed",
-				parm->dyn.info.id);
-		return;
-	}
-
-	char *fromdomain = dkim_getdomain(dkim);
-	if (fromdomain == NULL)
-	{
-		if (parm->verbose >= 8)
-			fl_report(LOG_DEBUG,
-				"id=%s: dkim_getdomain() failed",
-				parm->dyn.info.id);
-		return;
-	}
-
-	fromdomain = lcdomain(fromdomain);
-	if (fromdomain == NULL)
-	{
-		if (parm->verbose)
-			fl_report(LOG_ALERT,
-				"id=%s: strdup() failed",
-				parm->dyn.info.id);
-		return;
-	}
-
-	stats_info const*const stats = parm->dyn.stats;
-	fprintf(fp, "M%s\t%s\t%s\t%s\t0\t%ld",
-		stats->jobid,
-		parm->dyn.authserv_id,
-		fromdomain,
-		stats->client_ip? stats->client_ip: "unknown",
-		/* 0 = not anon, */
-		(long)time(NULL));
-
-	off_t canonlen = 0;
-	off_t signlen = 0;
-	off_t msglen = 0;
-	if (nsigs > 0)
-		dkim_sig_getcanonlen(dkim, sigs[0], &msglen, &canonlen, &signlen);
-
-#if !defined NDEBUG
-	if (parm->verbose)
-	{
-		bool validauthorsig = false;
-		for (int c = 0; c < nsigs; ++c)
-		{
-			if (stricmp(dkim_sig_getdomain(sigs[c]), fromdomain) == 0 &&
-				 dkim_sig_geterror(sigs[c]) == DKIM_SIGERROR_OK)
-			{
-				validauthorsig = true;
-				break;
-			}
-		}
-	
-		bool const my_adsp_fail = !validauthorsig &&
-			(stats->adsp_all || stats->adsp_discardable);
-		if (stats->adsp_fail != my_adsp_fail)
-			fl_report(LOG_ERR,
-				"id=%s: ADSP wrong: my=%d, passed=%d",
-				parm->dyn.info.id,
-				my_adsp_fail, stats->adsp_fail);
-	}
-#endif
-
-	fprintf(fp, "\t%lu\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%u\t%s\t%s\n",
-		msglen,
-		nsigs,
-		stats->adsp_found,
-		stats->adsp_unknown,
-		stats->adsp_all,
-		stats->adsp_discardable,
-		stats->adsp_fail,
-		stats->fromlist,
-		stats->rhcnt,
-		stats->ct? stats->ct: "text/plain",
-		stats->cte? stats->cte: "7bit");
-	free(fromdomain);
-
-	for (int c = 0; c < nsigs; ++c)
-	{
-		dkim_alg_t alg = 0;
-		dkim_sig_getsignalg(sigs[c], &alg);
-		dkim_canon_t bc = 0;
-		dkim_canon_t hc = 0;
-		dkim_sig_getcanons(sigs[c], &hc, &bc);
-
-		char *sigdomain = lcdomain(dkim_sig_getdomain(sigs[c]));
-		fprintf(fp, "S%s\t%d\t%d\t%d",
-			sigdomain? sigdomain: "-", alg, hc, bc);
-		free(sigdomain);
-
-		unsigned int const flags = dkim_sig_getflags(sigs[c]);
-		dkim_sig_getcanonlen(dkim, sigs[c], &msglen, &canonlen, &signlen);
-		fprintf(fp, "\t%d\t%d\t%d\t%ld",
-			(flags & DKIM_SIGFLAG_IGNORE) != 0,
-			(flags & DKIM_SIGFLAG_PASSED) != 0,
-			dkim_sig_getbh(sigs[c]) == DKIM_SIGBH_MISMATCH,
-			(long)signlen);
-
-#if HAVE_LIBOPENDKIM_22
-		char *p = dkim_sig_gettagvalue(sigs[c], true, "t");
-		fprintf(fp, "\t%d", p != NULL);
-		
-		p = dkim_sig_gettagvalue(sigs[c], true, "g");
-		fprintf(fp, "\t%d\t%d",
-			p != NULL,
-			p != NULL && *p != '\0' && *p != '*');
-
-
-		/* DK-compatible keys */
-		fprintf(fp, "\t%d",
-			dkim_sig_gettagvalue(sigs[c], true, "v") == NULL &&
-				p && *p == '\0');
-		
-		/* syntax error codes */
-		fprintf(fp, "\t%d", dkim_sig_geterror(sigs[c]));
-
-		fprintf(fp, "\t%d\t%d\t%d\t%d",
-			dkim_sig_gettagvalue(sigs[c], false, "t") != NULL,
-			dkim_sig_gettagvalue(sigs[c], false, "x") != NULL,
-			dkim_sig_gettagvalue(sigs[c], false, "z") != NULL,
-			dkim_sig_getdnssec(sigs[c]));
-
-		p = dkim_sig_gettagvalue(sigs[c], false, "h");
-		fputc('\t', fp);
-		if (p == NULL)
-			fputc('-', fp);
-		else
-		{
-			int ch;
-			while ((ch = *(unsigned char*)p) != 0)
-			{
-				if (isascii(ch) && isupper(ch))
-					ch = tolower(ch);
-				putc(ch, fp);
-				++p;
-			}
-		}
-#else /* HAVE_LIBOPENDKIM_22 */
-		fprintf(fp, "\t-\t-\t-\t-\t%d\t-\t-\t-\t%d\t-",
-			dkim_sig_geterror(sigs[c]),
-			dkim_sig_getdnssec(sigs[c]));
-#endif
-		fputs("\t-\n", fp); /* DIFFHEADERS  not supported */
+		parm->dyn.stats->ip = s;
 	}
 }
 
 static void after_filter_stats(fl_parm *fl)
 {
 	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
-	
-	set_client_ip(parm);
-	while (parm->dyn.stats)
+
+	if (parm && parm->dwa && parm->dyn.stats)
 	{
-		FILE *fp = fopen(parm->stats_file, "a");
-		if (fp)
-		{
-			int fd = fileno(fp), rc, save_errno;
-			struct flock lock;
-		
-			memset(&lock, 0, sizeof lock);
-			lock.l_type = F_WRLCK;
-			lock.l_whence = SEEK_SET;
-			lock.l_len = 1;
-
-			fl_init_signal(init_signal_lock); // catch USR1 and ALRM
-			fl_alarm(parm->stats_wait);
-			rc = fcntl(fd, F_SETLKW, &lock);
-			save_errno = errno;
-			fl_alarm(0);
-			fl_reset_signal(); // ignore USR1, ALRM terminates
-			if (rc == 0)
-			{
-				write_stats(parm, fp);
-			}
-			else if (save_errno == EINTR)
-			{
-				/*
-				* if file has been moved, reopen old name;
-				* if alarm fired, slip through.
-				*/
-				if (fl_keep_running())
-				{
-					fclose(fp);
-					continue;
-				}
-			}
-			else if (parm->verbose)
-			{
-				fl_report(LOG_ALERT,
-					"id=%s: cannot lock %s: %s",
-					parm->dyn.info.id,
-					parm->stats_file,
-					strerror(errno));
-			}
-
-			fclose(fp); // this releases the lock as well
-		}
-		else if (parm->verbose)
-		{
-			fl_report(LOG_ALERT,
-				"id=%s: cannot open %s: %s",
-				parm->dyn.info.id,
-				parm->stats_file,
-				strerror(errno));
-		}
-
-		clean_stats(parm);
+		set_client_ip(parm);
+		db_set_stats_info(parm->dwa, parm->dyn.stats);
+		db_clear(parm->dwa);
+		parm->dwa = NULL;
 	}
+	clean_stats(parm);
 }
 
 static void dkimfilter(fl_parm *fl)
@@ -2778,7 +2578,7 @@ static void dkimfilter(fl_parm *fl)
 	static char default_jobid[] = "NULL";
 	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
 	parm->fl = fl;
-	
+
 	fl_get_msg_info(fl, &parm->dyn.info);
 	if (parm->dyn.info.id == NULL)
 		parm->dyn.info.id = default_jobid;
@@ -2794,22 +2594,13 @@ static void dkimfilter(fl_parm *fl)
 			parm->dyn.rtc = -1;
 		else
 		{
-			/*
-			* if a stats file is configured, prepare stats info and
-			* in case no error occurs, request after_filter processing.
-			*
-			* functions may call clean_stats to stop it
-			*/
-			if (parm->dyn.info.id != default_jobid &&
-				parm->stats_file &&
+			if (parm->dwa &&
 				(parm->dyn.stats = malloc(sizeof *parm->dyn.stats)) != NULL)
 			{
 				memset(parm->dyn.stats, 0, sizeof *parm->dyn.stats);
-				parm->dyn.stats->jobid = parm->dyn.info.id;
+				parm->dyn.stats->ino_mtime_pid = parm->dyn.info.id;
 			}
 			verify_message(parm);
-			if (parm->dyn.stats)
-				fl_set_after_filter(parm->fl, after_filter_stats);
 		}
 	}
 	vb_clean(&parm->dyn.vb);
@@ -2820,13 +2611,15 @@ static void dkimfilter(fl_parm *fl)
 	switch (parm->dyn.rtc)
 	{
 		case -1: // unrecoverable error
-			if (parm->tempfail_on_error)
+			if (parm->z.tempfail_on_error)
 			{
 				fl_pass_message(fl, resp_tempfail);
 				verbose_threshold = 3;
 			}
 			else
 				fl_pass_message(fl, "250 Failed.\n");
+
+			clean_stats(parm);
 			break;
 
 		case 0: // not rewritten
@@ -2841,11 +2634,18 @@ static void dkimfilter(fl_parm *fl)
 			// rejected, message already given to fl_pass_message, or dropped;
 			// available info already logged if verbose >= 3
 			break;
+
+		default:
+			assert(0);
+			break;
 	}
+
+	if (parm->dyn.stats)
+		fl_set_after_filter(parm->fl, after_filter_stats);
 
 	assert(fl_get_passed_message(fl) != NULL);
 
-	if (parm->verbose >= verbose_threshold)
+	if (parm->z.verbose >= verbose_threshold)
 	{
 		char const *msg = fl_get_passed_message(fl);
 		int l = strlen(msg) - 1;
@@ -2855,6 +2655,20 @@ static void dkimfilter(fl_parm *fl)
 	}
 
 	// TODO: free dyn allocated stuff (almost useless at this point)
+}
+
+/*
+* print parm
+*/
+static void report_config(fl_parm *fl)
+{
+	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+
+	void *parm_target[PARM_TARGET_SIZE];
+	parm_target[parm_t_id] = &parm->z;
+	parm_target[db_parm_t_id] = db_parm_addr(parm->dwa);	
+
+	print_parm(parm_target);
 }
 
 /*
@@ -2876,7 +2690,7 @@ static void set_keyfile(fl_parm *fl)
 		dkim_options(parm->dklib, DKIM_OP_SETOPT,
 			DKIM_OPTS_QUERYINFO, keyfile, strlen(keyfile));
 	
-	if (nok || parm->verbose >= 8)
+	if (nok || parm->z.verbose >= 8)
 		fl_report(nok? LOG_ERR: LOG_INFO,
 			"DKIM query method%s set to file \"%s\"",
 			nok? " not": "", keyfile);
@@ -2889,7 +2703,7 @@ DKIM_CBSTAT my_policy_lookup(DKIM *dkim, unsigned char *query,
 {
 	assert(qstat);
 	verify_parms *const vh = (verify_parms*)dkim_get_user_context(dkim);
-	if (vh && vh->parm && vh->parm->verbose >= 8)
+	if (vh && vh->parm && vh->parm->z.verbose >= 8)
 		fl_report(LOG_DEBUG, "query: %s", query);
 	
 	struct stat st;
@@ -2936,7 +2750,7 @@ static void set_policyfile(fl_parm *fl)
 	assert(parm);
 	
 	DKIM_STAT status = dkim_set_policy_lookup(parm->dklib, &my_policy_lookup);
-	if (status != DKIM_STAT_OK || parm->verbose >= 8)
+	if (status != DKIM_STAT_OK || parm->z.verbose >= 8)
 		fl_report(status != DKIM_STAT_OK? LOG_ERR: LOG_INFO,
 			"DKIM policy method%s set to file \"%s\"",
 			status != DKIM_STAT_OK? " not": "", policyfile);
@@ -3051,14 +2865,14 @@ int main(int argc, char *argv[])
 		fl_report(LOG_ERR, "Unable to read config file");
 	}
 
-	if (parm.redact_received_auth && !redact_is_fully_featured())
+	if (parm.z.redact_received_auth && !redact_is_fully_featured())
 		fl_report(LOG_WARNING,
 			"Option redact_received_header is set in %s,"
 			" but it is not fully featured.",
 				config_file? config_file: default_config_file);
 
 #if defined HAVE_LIBOPENDKIM_22
-	if (parm.verbose >= 2 &&
+	if (parm.z.verbose >= 2 &&
 		dkim_libversion() !=	(unsigned long)(OPENDKIM_LIB_VERSION))
 			fl_report(LOG_WARNING,
 				"Mismatched library versions: compile=%#lX link=%#lX",
@@ -3076,39 +2890,44 @@ int main(int argc, char *argv[])
 	if (rtc == 0)
 	{
 		int nok = 0;
-		if (!parm.no_signlen)
+		if (!parm.z.no_signlen || !parm.z.report_all_sigs)
 		{
 			unsigned int options = 0;
 			nok |= dkim_options(parm.dklib, DKIM_OP_GETOPT, DKIM_OPTS_FLAGS,
 				&options, sizeof options) != DKIM_STAT_OK;
-			options |= DKIM_LIBFLAGS_SIGNLEN;
+			if (!parm.z.no_signlen)
+				options |= DKIM_LIBFLAGS_SIGNLEN;
+			if (!parm.z.report_all_sigs)
+				options |= DKIM_LIBFLAGS_VERIFYONE;
 			nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_FLAGS,
 				&options, sizeof options) != DKIM_STAT_OK;
 		}
 		
-		if (parm.dns_timeout > 0) // DEFTIMEOUT is 10 secs
+		if (parm.z.dns_timeout > 0) // DEFTIMEOUT is 10 secs
 		{
 			nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_TIMEOUT,
-				&parm.dns_timeout, sizeof parm.dns_timeout) != DKIM_STAT_OK;
+				&parm.z.dns_timeout, sizeof parm.z.dns_timeout) != DKIM_STAT_OK;
 		}
 		
-		if (parm.tmp)
+		if (parm.z.tmp)
 		{
 			nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_TMPDIR,
-				parm.tmp, sizeof parm.tmp) != DKIM_STAT_OK;
+				parm.z.tmp, sizeof parm.z.tmp) != DKIM_STAT_OK;
 		}
-		
+
+		nok |= dkim_set_prescreen(parm.dklib, dkim_sig_sort) != DKIM_STAT_OK;
+		nok |= dkim_set_final(parm.dklib, dkim_sig_final) != DKIM_STAT_OK;
 		nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_SIGNHDRS,
-			parm.sign_hfields?
-				cast_u_char_parm_array(parm.sign_hfields):
+			parm.z.sign_hfields?
+				cast_u_char_parm_array(parm.z.sign_hfields):
 				dkim_should_signhdrs,
-					sizeof parm.sign_hfields) != DKIM_STAT_OK;
+					sizeof parm.z.sign_hfields) != DKIM_STAT_OK;
 
 		nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_SKIPHDRS,
-			parm.skip_hfields?
-				cast_u_char_parm_array(parm.skip_hfields):
+			parm.z.skip_hfields?
+				cast_u_char_parm_array(parm.z.skip_hfields):
 				dkim_should_not_signhdrs,
-					sizeof parm.skip_hfields) != DKIM_STAT_OK;
+					sizeof parm.z.skip_hfields) != DKIM_STAT_OK;
 
 		if (nok)
 		{
@@ -3120,7 +2939,7 @@ int main(int argc, char *argv[])
 	if (rtc == 0)
 	{
 		rtc =
-			fl_main(&functions, &parm, argc, argv, parm.all_mode, parm.verbose);
+			fl_main(&functions, &parm, argc, argv, parm.z.all_mode, parm.z.verbose);
 		delete_pid_file(&parm);
 	}
 

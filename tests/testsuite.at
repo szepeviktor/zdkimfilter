@@ -142,34 +142,37 @@ m4_if([$#], [1],, m4_foreach([link], [$2],
 ]))
 ])
 
-# default parm from tmp onward
+# default parms
 m4_define([ZF_DEFAULT_PARM_TMP],
-[tmp                  = NULL (temp directory)
-stats_file           = NULL (stats file path)
-sign_hfields         = NULL (space-separated, no colon)
-skip_hfields         = NULL (space-separated, no colon)
-redact_received_auth = NULL (any text)
-domain_whitelist     = NULL (space-separated domains)
-key_choice_header    = NULL (key choice header)
-trusted_vouchers     = NULL (space-separated, no colon)
-verbose              = 0 (int)
-dns_timeout          = 0 (secs)
-stats_wait           = 1200 (secs)
-reputation_fail      = 32767 (high int)
-reputation_pass      = -32768 (low int)
-add_a_r_anyway       = N (Y/N)
-report_all_sigs      = N (Y/N)
-no_spf               = N (Y/N)
-no_signlen           = N (Y/N)
-tempfail_on_error    = N (Y/N)
-no_author_domain     = N (Y=disable ADSP)
-no_reputation        = N (Y=skip reputation lookup)
-all_mode             = N (Y/N)
-sign_rsa_sha1        = N (Y/N, N for rsa-sha256)
-header_canon_relaxed = N (Y/N, N for simple)
-body_canon_relaxed   = N (Y/N, N for simple)
+[all_mode                 = N (Y/N)
+verbose                  = 0 (int)
+domain_keys              = . (key's directory)
+header_canon_relaxed     = N (Y/N, N for simple)
+body_canon_relaxed       = N (Y/N, N for simple)
+sign_rsa_sha1            = N (Y/N, N for rsa-sha256)
+key_choice_header        = NULL (key choice header)
+default_domain           = m4_default([$1], [NULL]) (dns)
+selector                 = NULL (global)
+sign_hfields             = NULL (space-separated, no colon)
+skip_hfields             = NULL (space-separated, no colon)
+no_signlen               = N (Y/N)
+redact_received_auth     = NULL (any text)
+tmp                      = NULL (temp directory)
+tempfail_on_error        = N (Y/N)
+no_spf                   = N (Y/N)
+save_from_anyway         = N (Y/N)
+add_a_r_anyway           = N (Y/N)
+report_all_sigs          = N (Y/N)
+max_signatures           = 128 (int)
+honor_author_domain      = N (Y=enable ADSP)
+reject_on_nxdomain       = N (Y=procrustean ADSP)
+domain_whitelist         = NULL (space-separated domains)
+no_reputation            = N (Y=skip reputation lookup)
+reputation_fail          = 32767 (high int)
+reputation_pass          = -32768 (low int)
+trusted_vouchers         = NULL (space-separated, no colon)
+dns_timeout              = 0 (secs)
 ])
-
 
 #
 AT_INIT
@@ -186,10 +189,7 @@ ZF_BATCH([test1])
 AT_CHECK(
 ZF_RUN,
 0,
-[domain_keys          = . (key's directory)
-selector             = NULL (global)
-default_domain       = NULL (dns)
-ZF_DEFAULT_PARM_TMP], [])
+[ZF_DEFAULT_PARM_TMP], [])
 AT_CLEANUP
 
 #
@@ -219,16 +219,12 @@ ZF_BATCH([test1])
 AT_CHECK(
 ZF_RUN,
 0,
-[domain_keys          = . (key's directory)
-selector             = NULL (global)
-default_domain       = should be a domain name, but here we use it to test that a rather lengthy string can be put into that variable. In facts, it is just a string variable... (dns)
-ZF_DEFAULT_PARM_TMP], [])
+[ZF_DEFAULT_PARM_TMP([should be a domain name, but here we use it to test that a rather lengthy string can be put into that variable. In facts, it is just a string variable...])], [])
 AT_CLEANUP
 
 #
 AT_SETUP([Sign and verify my signature])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 ])
 ZF_PRIVATEKEY([example.com])
 AT_DATA([mail], [ZF_MESSAGE])
@@ -274,8 +270,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign with default domain])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.com
 ])
 ZF_PRIVATEKEY([example.com])
@@ -300,8 +295,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign with default domain, selector given])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.com
 selector given
 ])
@@ -327,8 +321,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign with default domain, selector linked])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.com
 selector given
 ])
@@ -359,9 +352,7 @@ AT_CLEANUP
 #
 m4_define([ZF_KEYCONFIG],
 [ZF_KEYFILE
-ZF_CONFIG(3, [no_author_domain
-no_reputation
-stats_file ./test-stats
+ZF_CONFIG(3, [no_reputation
 ])])
 
 m4_define([ZF_CTLBATCH],
@@ -382,10 +373,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=$1 rep=0
-])
-AT_CHECK([zdkimstats-anon < ./test-stats > ./test-stats-out], 0, [], [])
-#no, ipaddr differ: AT_CHECK([cmp ./test-stats ./test-stats-out], 0, [], [])
-])
+])])
 
 #
 AT_SETUP([Verify simple author signature])
@@ -490,7 +478,8 @@ AT_CLEANUP
 
 #
 AT_SETUP([Reject message with non-existent From: domain])
-ZF_CONFIG(3)
+ZF_CONFIG(3, [reject_on_nxdomain
+])
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctl], [Mfraudmsg
 usmtp
@@ -511,8 +500,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Accept message with non-existent From: domain])
-ZF_CONFIG(3, [no_author_domain
-])
+ZF_CONFIG(3)
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctl], [Mfraudmsg
 usmtp
@@ -539,7 +527,9 @@ AT_CLEANUP
 
 #
 AT_SETUP([Whitelisted sender, non-existent From: domain])
-ZF_CONFIG(3, [domain_whitelist sender.example
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_whitelisted sender.example:2
 ])
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctl], [Musenetmsg
@@ -568,7 +558,9 @@ AT_CLEANUP
 
 #
 AT_SETUP([Whitelisted signer, non-existent From: domain])
-ZF_CONFIG(3, [domain_whitelist sender.example
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_whitelisted sender.example:2
 ])
 ZF_KEYFILE
 AT_DATA([mail], [ZF_MESSAGE_NOSPF(, ZF_SIGSENDER, ZF_SIGOTHER)])
@@ -593,14 +585,16 @@ ZF_REQUIRE_22
 AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;
-  dkim=pass header.i=@sender.example;
+  dkim=pass (whitelisted) header.i=@sender.example;
   dkim-adsp=nxdomain header.from=user@author.example
 ], [])
 AT_CLEANUP
 
 #
 AT_SETUP([Whitelisted both ways, SPF ignored])
-ZF_CONFIG(3, [domain_whitelist other.example sender.example
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_whitelisted other.example:2 sender.example:2
 ])
 ZF_KEYFILE
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
@@ -626,14 +620,16 @@ AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
-  dkim=pass header.i=@sender.example;
+  dkim=pass (whitelisted) header.i=@sender.example;
   dkim-adsp=nxdomain header.from=user@author.example
 ], [])
 AT_CLEANUP
 
 #
 AT_SETUP([Dkim whitelisting with SPF-validated signer])
-ZF_CONFIG(3, [domain_whitelist other.example
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_whitelisted other.example:2
 ])
 ZF_KEYFILE
 AT_DATA([mail], [ZF_MESSAGE(, ZF_SIGSENDER, ZF_SIGOTHER)])
@@ -659,7 +655,7 @@ AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
-  dkim=pass header.i=@other.example;
+  dkim=pass (whitelisted) header.i=@other.example;
   dkim-adsp=nxdomain header.from=user@author.example
 ], [])
 AT_CLEANUP
@@ -736,8 +732,7 @@ AT_SETUP([Fail author signature with policy: all])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
 author.example X
 ])
-ZF_CONFIG(3, [no_author_domain
-])
+ZF_CONFIG(3)
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
 AT_DATA([ctl], [Mpolicymsg
 usmtp
@@ -770,7 +765,8 @@ AT_SETUP([Reject author signature with policy: all])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
 author.example X
 ])
-ZF_CONFIG(0)
+ZF_CONFIG(0, [honor_author_domain
+])
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
 AT_DATA([ctl], [Mpolicymsg
 usmtp
@@ -793,7 +789,8 @@ AT_SETUP([Drop author signature with policy: discard])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
 author.example X
 ])
-ZF_CONFIG(3)
+ZF_CONFIG(3, [honor_author_domain
+])
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
 AT_DATA([ctl], [Mpolicymsg
 usmtp
@@ -819,7 +816,9 @@ AT_SETUP([Whitelisted sender, failed policy: discard])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
 author.example X
 ])
-ZF_CONFIG(3, [domain_whitelist sender.example
+ZF_CONFIG(3, [honor_author_domain
+db_backend test
+db_sql_whitelisted sender.example:2
 ])
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
 AT_DATA([ctl], [Mpolicymsg
@@ -854,8 +853,7 @@ AT_SETUP([Verify sender, fail author, policy: all])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
 author.example X
 ])
-ZF_CONFIG(3, [no_author_domain
-])
+ZF_CONFIG(3)
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER)])
 AT_DATA([ctl], [Mpolicymsg
 usmtp
@@ -888,8 +886,7 @@ AT_SETUP([Verify sender, fail author, policy: discard])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
 author.example X
 ])
-ZF_CONFIG(0, [no_author_domain
-])
+ZF_CONFIG(0)
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER)])
 AT_DATA([ctl], [Mpolicymsg
 usmtp
@@ -921,8 +918,7 @@ AT_SETUP([Missing author signature with policy: all])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
 author.example X
 ])
-ZF_CONFIG(0, [no_author_domain
-])
+ZF_CONFIG(0)
 AT_DATA([POLICYFILE], [dkim=all
 ])
 AT_DATA([mail], [ZF_MESSAGE])
@@ -956,8 +952,7 @@ AT_SETUP([Missing author signature with policy: discard])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
 author.example X
 ])
-ZF_CONFIG(0, [no_author_domain
-])
+ZF_CONFIG(0)
 AT_DATA([POLICYFILE], [dkim=discardable
 ])
 AT_DATA([mail], [ZF_MESSAGE])
@@ -991,8 +986,7 @@ AT_SETUP([Mandatory author signature without SPF])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
 author.example X
 ])
-ZF_CONFIG(0, [no_author_domain
-])
+ZF_CONFIG(0)
 AT_DATA([POLICYFILE], [dkim=discardable
 ])
 AT_DATA([mail], [ZF_MESSAGE_NOSPF])
@@ -1025,7 +1019,8 @@ AT_SETUP([Drop missing signature with 1 recipient])
 ZF_KEYFILE
 AT_DATA([POLICYFILE], [dkim=discardable
 ])
-ZF_CONFIG(0)
+ZF_CONFIG(0, [honor_author_domain
+])
 AT_DATA([mail], [ZF_MESSAGE_NOSPF])
 AT_DATA([ctl], [Mpolicymsg
 usmtp
@@ -1062,8 +1057,7 @@ author.example X
 ])
 AT_DATA([POLICYFILE], [dkim=unknown
 ])
-ZF_CONFIG(0, [no_author_domain
-])
+ZF_CONFIG(0)
 AT_DATA([mail], [ZF_MESSAGE_NOSPF])
 AT_DATA([ctl], [Mpolicymsg
 usmtp
@@ -1138,8 +1132,7 @@ INFO:zdkimfilter[0]:id=dyndom: response: 250 Ok.
 
 # one field, given
 AT_SETUP([Signing after the From field])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.com
 key_choice_header from
 ])
@@ -1150,8 +1143,7 @@ AT_CLEANUP
 
 # one field, not given
 AT_SETUP([Not signing for missing choice field])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.com
 key_choice_header no-such-header-field
 ])
@@ -1162,8 +1154,7 @@ AT_CLEANUP
 
 # one field, given, but the key is missing
 AT_SETUP([Not signing for missing key])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.com
 selector given
 key_choice_header from
@@ -1175,8 +1166,7 @@ AT_CLEANUP
 
 # default default_domain
 AT_SETUP([Default domain even if login domain])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.org
 key_choice_header - *
 ])
@@ -1187,8 +1177,7 @@ AT_CLEANUP
 
 # default login domain
 AT_SETUP([Login domain preferred])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.org
 key_choice_header * -
 ])
@@ -1199,8 +1188,7 @@ AT_CLEANUP
 
 # from overrides default
 AT_SETUP([Login domain not preferred])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.org
 key_choice_header from *
 ])
@@ -1211,8 +1199,7 @@ AT_CLEANUP
 
 # repeated field overrides default
 AT_SETUP([Custom field, second instance overrides])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.com
 key_choice_header from x-repeated x-repeated *
 ])
@@ -1227,8 +1214,7 @@ AT_CLEANUP
 
 # repeated field does not override default
 AT_SETUP([Custom field, second instance does not override])
-ZF_CONFIG(6, [no_author_domain
-no_reputation
+ZF_CONFIG(6, [no_reputation
 default_domain example.com
 key_choice_header from x-repeated * x-repeated
 ])
@@ -1245,8 +1231,7 @@ AT_CLEANUP
 m4_define([ZF_SIGREPORT],
 [ZF_KEYFILE([author.example X
 ])
-ZF_CONFIG(2, [no_author_domain
-no_reputation
+ZF_CONFIG(2, [no_reputation
 $1])
 AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
 AT_DATA([ctl], [Mverifymsg
@@ -1282,7 +1267,8 @@ AT_CLEANUP
 
 # check A-R layout with multiple signatures: whitelisted
 AT_SETUP([Whitelisted domain reported])
-ZF_SIGREPORT([domain_whitelist sender.example
+ZF_SIGREPORT([db_backend test
+db_sql_whitelisted sender.example:2
 ])
 AT_CHECK(
 head -n 5 mail, 0,
@@ -1309,31 +1295,66 @@ DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
 ], [])
 AT_CLEANUP
 
+# check A-R layout with multiple signatures: whitelisted+vouched
+AT_SETUP([Whitelisted + vouched domain])
+ZF_SIGREPORT([trusted_vouchers sender-cert.example
+db_backend test
+db_sql_whitelisted sender.example:2
+])
+AT_CHECK(
+head -n 6 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim=pass (whitelisted, vbr) header.i=@sender.example;
+  vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
 # check A-R layout with multiple signatures: vouched + report_all_sigs
 AT_SETUP([Report all sigs])
 ZF_SIGREPORT([trusted_vouchers sender-cert.example
 report_all_sigs
 ])
 AT_CHECK(
-head -n 11 mail, 0,
+head -n 7 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
-  dkim=pass header.i=@author.example
-    header.b=ZmMMHnWo;
-  dkim=pass header.i=@sender.example
-    header.b=d6AyU6LW;
-  dkim=pass header.i=@other.example
-    header.b=ejTAOxjZ;
+  dkim=pass header.i=@author.example;
   dkim=pass (vbr) header.i=@sender.example;
+  dkim=pass header.i=@other.example;
   vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
 DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
 ], [])
 AT_CLEANUP
 
+AT_SETUP([Reject too many signatures])
+ZF_KEYFILE([author.example X
+])
+ZF_CONFIG(2, [max_signatures 2
+])
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_DATA([ctl], [Mverifymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+exit
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[554 Too many DKIM signatures
+],
+[])
+AT_CLEANUP
+
 #
 AT_SETUP([Obfuscate userid])
-ZF_CONFIG(3, [no_author_domain
-no_reputation
+ZF_CONFIG(3, [no_reputation
 default_domain example.com
 redact_received_auth using this secret text
 ])
@@ -1371,8 +1392,7 @@ m4_define([ZF_REQUIRE_NETTLE], [AT_CHECK([$HAVE_NETTLE || exit 77])])
 
 #
 AT_SETUP([Retrieve obfuscated userid])
-ZF_CONFIG(3, [no_author_domain
-no_reputation
+ZF_CONFIG(3, [no_reputation
 default_domain example.com
 redact_received_auth using this secret text
 ])

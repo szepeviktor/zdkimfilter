@@ -2,30 +2,35 @@
 
 @SET_MAKE@
 
-AM_CFLAGS = -I$(top_srcdir) -fno-strict-aliasing
-noinst_HEADERS = filterlib.h filedefs.h OpenDKIMstats.h myvbr.h redact.h vb_fgets.h parm.h
+AM_CFLAGS = -I$(top_srcdir)
+AM_CPPFLAGS = -fno-strict-aliasing
+noinst_HEADERS = filterlib.h filedefs.h \
+ myvbr.h redact.h vb_fgets.h parm.h database.h database_variables.h
 
 filterexecdir = @COURIER_FILTER_INSTALL@
 filterexec_PROGRAMS = zdkimfilter
 filterexecPROGRAMS_INSTALL = $(INSTALL_PROGRAM)@PROGRAM_OWNER@
 
-zdkimfilter_SOURCES = zdkimfilter.c filterlib.c myvbr.c redact.c
-zdkimfilter_LDADD = @OPENDKIM_LIB@ @RESOLVER_LIB@ @NETTLE_LIB@
-zdkimfilter_LDFLAGS = @OPENDKIM_LIB_PATH@
-zdkimfilter_CFLAGS = -DFILTER_NAME=zdkimfilter $(AM_CFLAGS)@OPENDKIM_CFLAGS@
+zdkimfilter_SOURCES = zdkimfilter.c filterlib.c parm.c myvbr.c redact.c \
+ database.c ip_to_hex.c
+zdkimfilter_LDADD = @OPENDKIM_LIB@ @RESOLVER_LIB@ @NETTLE_LIB@ @OPENDBX_LIB@
+zdkimfilter_CPPFLAGS = -DFILTER_NAME=zdkimfilter @OPENDKIM_CFLAGS@ @OPENDBX_CFLAGS@
+# nozdkimfilter_CCLD = libtool --mode=link $(CCLD)
 
-bin_PROGRAMS = zdkimstats-wait zdkimstats-anon dkimsign redact
-zdkimstats_wait_SOURCES = zdkimstats-wait.c
-zdkimstats_anon_SOURCES = zdkimstats-anon.C
-zdkimstats_anon_CXXFLAGS = @LIBSSL_CFLAGS@ $(AM_CXXFLAGS)
-zdkimstats_anon_LDADD = @LIBSSL_LDADD@
-dkimsign_SOURCES = dkimsign.c
-redact_SOURCES = redact.c
+bin_PROGRAMS = dkimsign redact zfilter_db
+dkimsign_SOURCES = dkimsign.c parm.c parm.h
+redact_SOURCES = redact.c parm.c
+redact_CPPFLAGS = -DMAIN
 redact_LDADD = @NETTLE_LIB@
-redact_CFLAGS = -DMAIN $(AM_CFLAGS)
+zfilter_db_SOURCES = zfilter_db.c database.c ip_to_hex.c parm.c
+zfilter_db_CPPFLAGS = @OPENDBX_CFLAGS@
+zfilter_db_LDADD = @OPENDBX_LIB@
 
-check_PROGRAMS = TESTmyvbr
+check_PROGRAMS = TESTmyvbr TESTdb
 TESTmyvbr_SOURCES = myvbr.c myvbr.h
 TESTmyvbr_CPPFLAGS = -DTEST_MAIN
 TESTmyvbr_LDADD = @RESOLVER_LIB@
+TESTdb_SOURCES = database.c ip_to_hex.c parm.c
+TESTdb_CPPFLAGS = -DTEST_MAIN
+TESTdb_LDADD = @OPENDBX_LIB@
 

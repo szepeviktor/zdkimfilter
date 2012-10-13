@@ -1,13 +1,14 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ(2.55)
-AC_INIT([zdkimfilter for courier], 1.0, [vesely@tana.it], zdkimfilter)
+AC_PREREQ([2.67])
+AC_INIT([zdkimfilter for courier],[1.0],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
+AC_CONFIG_MACRO_DIR([m4])
 AC_LANG([C])
 AC_USE_SYSTEM_EXTENSIONS
-AM_INIT_AUTOMAKE([no-dependencies])
+AM_INIT_AUTOMAKE
 # dnl AC_PROG_MAKE_SET
 AC_CONFIG_HEADER([config.h])
 
@@ -16,11 +17,18 @@ AC_PROG_CC
 AC_PROG_CC_C99
 AM_PROG_CC_C_O()
 
-AC_PROG_CXX
-
 AC_PROG_AWK
 AC_PROG_EGREP
 PKG_PROG_PKG_CONFIG
+
+# Need libtool to properly link static/dynamic inter-library dependencies,
+# as accessible through .la files.  We build no library, though.
+LT_INIT
+
+# Need perl to build documentation
+AC_CHECK_PROG([PERL], [perl], [perl])
+AC_CHECK_PROG([POD2MAN], [pod2man], [pod2man])
+AM_CONDITIONAL([BUILD_DOC], [test "$PERL" = perl -a "$POD2MAN" = pod2man])
 
 # check debugging
 ZDKIMFILTER_DEBUG="0"
@@ -228,6 +236,91 @@ else
 fi
 AC_SUBST([OPENDKIM_CFLAGS])
 
+OPENDKIM_LIB="`$PKG_CONFIG --libs-only-L opendkim` -lopendkim"
+AC_MSG_CHECKING([flags for opendkim library])
+	av_cv_flags_library_opendkim="none"
+	SAVE_LIBS="$LIBS"
+	LIBS="$SAVE_LIBS $OPENDKIM_LIB"
+	save_ac_link="$ac_link"
+	ac_link="libtool --mode=link $ac_link"
+	AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
+		[av_cv_flags_library_opendkim="ok"])
+	ac_link="$save_ac_link"
+	LIBS="$SAVE_LIBS"
+	LDFLAGS="$SAVE_LDFLAGS"
+
+if test "$av_cv_flags_library_opendkim" = "none"; then
+	AC_MSG_ERROR([unable to use opendkim library])
+fi
+AC_MSG_RESULT([$OPENDKIM_LIB])
+AC_SUBST([OPENDKIM_LIB])
+
+
+#
+AC_CACHE_CHECK([opendbx version],
+	av_cv_opendbx_version,
+	[
+	av_cv_opendbx_version="`$PKG_CONFIG --modversion opendbx`"
+	])
+OPENDBX_CFLAGS=""
+OPENDBX_LIB=""
+if $PKG_CONFIG --atleast-version=1.4.5 opendbx; then
+	AC_CACHE_CHECK([cflags for opendbx],
+		av_cv_cflags_opendbx,
+		[
+		SAVE_CFLAGS="$CFLAGS"
+		AC_COMPILE_IFELSE([
+			#include <opendbx/api.h>
+			],
+			[av_cv_cflags_opendbx="none"],
+			[av_cv_cflags_opendbx="fail"]
+			)
+		if test "$av_cv_cflags_opendbx" = "fail"; then
+			av_cv_cflags_opendbx="`$PKG_CONFIG --cflags-only-I opendbx`"
+			CFLAGS="$av_cv_cflags_opendbx $CFLAGS"
+			AC_COMPILE_IFELSE([
+				#include <opendbx/api.h>
+				],
+				[],
+				[av_cv_cflags_opendbx="fail"]
+				)
+		fi
+		CFLAGS="$SAVE_CFLAGS"
+		])
+
+	if test "$av_cv_cflags_opendbx" = "fail"; then
+		AC_MSG_ERROR([unable to use opendbx/api.h])
+	fi
+	if test "$av_cv_cflags_opendbx" = "none"; then
+		:
+	else
+		OPENDBX_CFLAGS=" $av_cv_cflags_opendbx"
+	fi
+
+	# Check opendbx library
+	AC_MSG_CHECKING([whether opendbx is usable])
+	HAVE_OPENDBX="no"
+	OPENDBX_LIB=" `$PKG_CONFIG --libs-only-L opendbx` -lopendbx"
+	SAVE_LIBS="$LIBS"
+	LIBS="$SAVE_LIBS $OPENDBX_LIB"
+	save_ac_link="$ac_link"
+	ac_link="libtool --mode=link $ac_link"
+	AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <opendbx/api.h>
+	], [odbx_t *h;
+	odbx_init(&h, "", "", "");
+	])], [HAVE_OPENDBX="yes"])
+	ac_link="$save_ac_link"
+	LIBS="$SAVE_LIBS"
+	AC_MSG_RESULT([$HAVE_OPENDBX])
+	if test "$HAVE_OPENDBX" = "yes"; then
+		AC_DEFINE(HAVE_OPENDBX, 1, [Define if using opendbx])
+	else
+		OPENDBX_LIB=""
+	fi
+fi
+AC_SUBST([OPENDBX_CFLAGS])
+AC_SUBST([OPENDBX_LIB])
+
 AC_HEADER_RESOLV
 RESOLVER_LIB=
 av_cv_flags_library_resolver="none"
@@ -264,102 +357,6 @@ fi
 AC_MSG_RESULT([$RESOLVER_LIB])
 AC_SUBST([RESOLVER_LIB])
 
-
-OPENDKIM_LIB=" -lopendkim"
-OPENDKIM_LIB_PATH=""
-AC_MSG_CHECKING([flags for opendkim library])
-	av_cv_flags_library_opendkim="none"
-	SAVE_LIBS="$LIBS"
-	SAVE_LDFLAGS="$LDFLAGS"
-	# bit0=Lopendkim, 1=lssl+, 2=Lssl+, 3=NU(lresolv); skip *100(4,12), *101 (5,13)
-	LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
-	AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-		[av_cv_flags_library_opendkim="ok_0"])
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB_PATH="`$PKG_CONFIG --libs-only-L opendkim`"
-		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok1"])
-	fi
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		LDFLAGS="$SAVE_LDFLAGS"
-		OPENDKIM_LIB_PATH=""
-		OPENDKIM_LIB="-lopendkim -lssl -lcrypto"
-		LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok2"])
-	fi
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB_PATH="`$PKG_CONFIG --libs-only-L opendkim`"
-		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok3"])
-	fi
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB="-lopendkim -lssl -lcrypto"
-		OPENDKIM_LIB_PATH="`$PKG_CONFIG --libs-only-L libssl libcrypto`"
-		LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
-		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok6"])
-	fi
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB_PATH="`$PKG_CONFIG --libs-only-L opendkim libssl libcrypto`"
-		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok7"])
-	fi
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB="-lopendkim"
-		OPENDKIM_LIB_PATH=""
-		LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
-		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok8"])
-	fi
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB_PATH="`$PKG_CONFIG --libs-only-L opendkim`"
-		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok9"])
-	fi
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		LDFLAGS="$SAVE_LDFLAGS"
-		OPENDKIM_LIB_PATH=""
-		OPENDKIM_LIB="-lopendkim -lssl -lcrypto"
-		LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok10"])
-	fi
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB_PATH="`$PKG_CONFIG --libs-only-L opendkim`"
-		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok11"])
-	fi
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB="-lopendkim -lssl -lcrypto"
-		OPENDKIM_LIB_PATH="`$PKG_CONFIG --libs-only-L libssl libcrypto`"
-		LIBS="$SAVE_LIBS $RESOLVER_LIB $OPENDKIM_LIB"
-		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok14"])
-	fi
-	if test "$av_cv_flags_library_opendkim" = "none"; then
-		OPENDKIM_LIB_PATH="`$PKG_CONFIG --libs-only-L opendkim libssl libcrypto`"
-		LDFLAGS="$SAVE_LDFLAGS $OPENDKIM_LIB_PATH"
-		AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
-			[av_cv_flags_library_opendkim="ok15"])
-	fi
-	LIBS="$SAVE_LIBS"
-	LDFLAGS="$SAVE_LDFLAGS"
-
-if test "$av_cv_flags_library_opendkim" = "none"; then
-	AC_MSG_ERROR([unable to use opendkim library])
-fi
-AC_MSG_RESULT([$OPENDKIM_LIB_PATH $OPENDKIM_LIB])
-AC_SUBST([OPENDKIM_LIB_PATH])
-AC_SUBST([OPENDKIM_LIB])
 
 # ssl
 AC_MSG_CHECKING([flags for ssl library])

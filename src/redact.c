@@ -1,11 +1,11 @@
 /*
-** redact.c - written in milano by vesely on 20sep2010
+** redact.c - written in milano by vesely on 20sep2012
 ** string redaction (encription)
 */
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010-2012 Alessandro Vesely
+Copyright (C) 2012 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -30,6 +30,9 @@ containing parts covered by the applicable licence, the licensor or
 zdkimfilter grants you additional permission to convey the resulting work.
 */
 #include <config.h>
+#if !ZDKIMFILTER_DEBUG
+#define NDEBUG
+#endif
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -276,81 +279,6 @@ int redact_is_fully_featured()
 }
 
 #if defined MAIN
-
-static char* read_single_value(char const *pname, char const *fname)
-// read a single value from parameter file
-// return malloced string or NULL
-// errno == 0 for undefined parameter, otherwise fname/memory problem
-{
-	char *value = NULL;
-	if (fname == NULL)
-		fname = default_config_file;
-
-	errno = 0;
-
-	FILE *fp = fopen(fname, "r");
-	if (fp == NULL)
-		return NULL;
-	
-	var_buf vb;
-	if (vb_init(&vb))
-	{
-		fclose(fp);
-		errno = ENOBUFS;
-		return NULL;
-	}
-
-	size_t keep = 0;
-	char *p;
-
-	while ((p = vb_fgets(&vb, keep, fp)) != NULL)
-	{
-		char *eol = p + strlen(p) - 1;
-		int ch = 0;
-
-		while (eol >= p && isspace(ch = *(unsigned char*)eol))
-			*eol-- = 0;
-
-		if (ch == '\\')
-		{
-			*eol = ' '; // this replaces the backslash
-			keep += eol + 1 - p;
-			continue;
-		}
-
-		/*
-		* full logic line
-		*/
-		keep = 0;
-
-		char *s = p = vb.buf;
-		while (isspace(ch = *(unsigned char*)s))
-			++s;
-		if (ch == '#' || ch == 0)
-			continue;
-		
-		char *const name = s;
-		while (isalnum(ch = *(unsigned char*)s) || ch == '_')
-			++s;
-
-		if (strncasecmp(pname, name, s - name) == 0)
-		{
-			while (isspace(ch = *(unsigned char*)s) || ch == '=')
-				++s;
-	
-			if ((value = strdup(s)) == NULL)
-				errno = ENOBUFS;
-
-			break;
-		}
-	}
-
-	vb_clean(&vb);
-	fclose(fp);
-
-	return value;
-}
-
 #if defined HAVE_NETTLE
 static inline int do_get_password(char *config_file, char**password)
 // return 0 if ok, 1 if ok and must free, -1 if error
@@ -469,4 +397,4 @@ int main(int argc, char *argv[])
 
 	return rtc;
 }
-#endif
+#endif // MAIN

@@ -2,7 +2,15 @@
 
 @SET_MAKE@
 
-EXTRA_DIST = logrotate.example
+man_MANS = zdkimfilter.conf.5
+
+EXTRA_DIST = conf2man.pl
+
+if BUILD_DOC
+zdkimfilter.conf.5: zdkimfilter.conf.dist conf2man.pl
+	perl conf2man.pl zdkimfilter.conf.dist
+
+endif
 
 sysfilterconfDATA_INSTALL = $(INSTALL) -m 640@PROGRAM_OWNER@
 

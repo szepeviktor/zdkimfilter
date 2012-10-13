@@ -2,7 +2,7 @@
 * dkimsign - written by ale in milano on Fri Jun 24 18:48:11 CEST 2011 
 * Sign a mail message on a file
 
-Copyright (C) 2011 Alessandro Vesely
+Copyright (C) 2011-2012 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -25,6 +25,10 @@ If you modify zdkimfilter, or any covered work, by linking or combining it
 with OpenDKIM, containing parts covered by the applicable licence, the licensor
 or zdkimfilter grants you additional permission to convey the resulting work.
 */
+#include <config.h>
+#if !ZDKIMFILTER_DEBUG
+#define NDEBUG
+#endif
 
 #include "filedefs.h"
 

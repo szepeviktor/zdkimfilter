@@ -30,6 +30,9 @@ containing parts covered by the applicable licence, the licensor or
 zdkimfilter grants you additional permission to convey the resulting work.
 */
 #include <config.h>
+#if !ZDKIMFILTER_DEBUG
+#define NDEBUG
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
