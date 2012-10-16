@@ -38,15 +38,7 @@ int db_config_wrapup(db_work_area* dwa);
 int db_connect(db_work_area *dwa);
 int db_is_whitelisted(db_work_area* dwa, char const* domain);
 
-typedef struct domain_data
-{
-	char *domain;
-	int whitelisted:8;
-	int auth_spf:2;
-	int auth_dkim:2;
-	int author_domain:2;
-	int vbr:2;
-} domain_data;
+void db_set_client_ip(db_work_area *dwa, char const *ip);
 
 typedef struct domain_prescreen
 {
@@ -82,7 +74,6 @@ typedef struct stats_info
 	char *message_id;
 	char *vbr_result_resp;         // actual response from vbr check
 
-	char *ip;
 	char *ino_mtime_pid;
 
 	domain_prescreen* domain_head;
@@ -96,6 +87,8 @@ typedef struct stats_info
 	unsigned adsp_discardable:2;
 	unsigned adsp_fail:2;
 	unsigned mailing_list:2;
+	unsigned reject:2;
+	unsigned drop:2;
 } stats_info;
 
 void db_set_stats_info(db_work_area* dwa, stats_info const*info);

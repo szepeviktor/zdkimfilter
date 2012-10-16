@@ -33,7 +33,7 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #if !ZDKIMFILTER_DEBUG
 #define NDEBUG
 #endif
-#include <stdio.h> // sprintf
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -257,6 +257,16 @@ typedef enum stmt_id
 	total_statements
 } stmt_id;
 
+// keep in sync by hands
+static const char*stmt_name[] =
+{
+	"db_sql_whitelisted",
+	"db_sql_select_domain",
+	"db_sql_update_domain",
+	"db_sql_insert_domain",
+	"db_sql_insert_msg_ref",
+	"db_sql_insert_message"
+};
 
 // typedef'd in .h
 struct db_work_area
@@ -422,6 +432,29 @@ static int clear_pending_result(db_work_area* dwa)
 
 #define OTHER_ERROR (-100 - (ODBX_MAX_ERRNO))
 
+static int dump_vars(db_work_area* dwa, stmt_id sid, var_flag_t bitflag)
+{
+	FILE *fp = fopen("database_dump", "a");
+	if (fp)
+	{
+		assert(sid < total_statements);
+		fprintf(fp, "Variables for statement %s:\n", stmt_name[sid]);
+
+		variable_id id = 0;
+		var_flag_t mask = 1, bit;
+		for (bit = bitflag; bit; bit &= ~mask, mask <<= 1, ++id)
+		{
+			assert((bitflag & mask) == 0 || dwa->var[id] != NULL);
+
+			if (bitflag & mask)
+				fprintf(fp, "%s: %s\n", variable_name[id], dwa->var[id]);
+		}
+		fputc('\n', fp);
+		fclose(fp);
+	}
+	return 0;
+}
+
 static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 	char **wantchar, int* wantint)
 /*
@@ -445,9 +478,12 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 	assert(dwa);
 	assert(sid < total_statements);
 
+	if (dwa->is_test)
+		return dump_vars(dwa, sid, bitflag);
+
 	odbx_t *const handle = dwa->handle;
 	stmt_compose const *const stmt = dwa->stmt[sid];
-	if (stmt == NULL || clear_pending_result(dwa))
+	if (handle == NULL || stmt == NULL || clear_pending_result(dwa))
 		return OTHER_ERROR;
 
 	size_t arglen[DB_SQL_VAR_SIZE];
@@ -819,13 +855,17 @@ int db_connect(db_work_area *dwa)
 
 static int test_whitelisted(db_work_area* dwa, char const* domain)
 {
-	char *x = strstr(dwa->z.db_sql_whitelisted, domain);
-	if (x)
+	char *const h = dwa->z.db_sql_whitelisted;
+	if (h)
 	{
-		x += strlen(domain);
-		if (*x == ':')
-			++x;
-		return atoi(x);
+		char *x = strstr(h, domain);
+		if (x)
+		{
+			x += strlen(domain);
+			if (*x == ':')
+				++x;
+			return atoi(x);
+		}
 	}
 	return 0;
 }
@@ -844,12 +884,15 @@ int db_is_whitelisted(db_work_area* dwa, char const* domain)
 * ignored.
 */
 {
-	assert(dwa);
-	assert(dwa->handle || dwa->is_test);
+	assert(dwa == NULL || dwa->handle || dwa->is_test);
 	assert(domain);
+
+	if (dwa == NULL)
+		return 0;
+
 #if !defined NDEBUG
 	for (int i = 0; i < DB_SQL_VAR_SIZE; ++i)
-		assert(dwa->var[i] == NULL);
+		assert(dwa->var[i] == NULL || i == ip_variable);
 #endif
 	if (dwa->is_test)
 		return test_whitelisted(dwa, domain);
@@ -863,6 +906,14 @@ int db_is_whitelisted(db_work_area* dwa, char const* domain)
 }
 
 extern char *ip_to_hex(char const *ip); // ip_to_hex.c
+void db_set_client_ip(db_work_area *dwa, char const *ip)
+{
+	assert(dwa);
+	assert(ip);
+
+	dwa->var[ip_variable] = ip_to_hex(ip);
+}
+
 
 #if 0
 static inline int makeint2(int const ch, char const **p)
@@ -993,7 +1044,7 @@ void db_set_stats_info(db_work_area* dwa, stats_info const*info)
 	assert(info);
 #if !defined NDEBUG
 	for (int i = 0; i < DB_SQL_VAR_SIZE; ++i)
-		assert(dwa->var[i] == NULL);
+		assert(dwa->var[i] == NULL || i == ip_variable);
 #endif
 
 	if (info == NULL || info->domain_head == NULL)
@@ -1047,7 +1098,7 @@ void db_set_stats_info(db_work_area* dwa, stats_info const*info)
 		return;
 	}
 
-	if ((dwa->var[ip_variable] = ip_to_hex(info->ip)) != NULL)
+	if (dwa->var[ip_variable] != NULL) // this may have been set in its own call
 		bitflag |= 1 << ip_variable;
 
 #define SET_STRING(N) \
@@ -1314,7 +1365,7 @@ int main(int argc, char*argv[])
 				switch(n)
 				{
 					case 0: stats.ino_mtime_pid = arg; break;
-					case 1: stats.ip = arg; break;
+					case 1: db_set_client_ip(dwa, arg); break;
 					case 2: stats.date = arg; break;
 					case 3: stats.message_id = arg; break;
 					case 4: stats.content_type = arg; break;

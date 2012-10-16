@@ -1,8 +1,6 @@
 #! /usr/bin/perl
 use strict;
 use warnings;
-use Pod::Man;
-use Data::Dumper;
 
 my $version;
 my $fname = "config.h";
@@ -36,22 +34,13 @@ die "$fname is empty" unless <$conf>; # discard 1st line
 my $basedir = '';
 $basedir = $1 if $fname =~ /^(.*\/)[^\/]+$/;
 
-my $fname_out = $basedir .'zdkimfilter.conf.5';
+my $fname_out = $basedir .'zdkimfilter.conf.pod';
 open my $man, "> $fname_out" or die "cannot write $fname_out: $!";
 
-my $parser = Pod::Man->new(
-	release => "zdkimfilter $version",
-	center => 'zdkimfilter',
-	section => 5,
-	name => 'ZDKIMFILTER.CONF'
-	);
-
-$parser->output_fh($man);
-
-$parser->parse_lines(("=pod\n", "\n"));
-$parser->parse_lines(("=head2 NAME\n", "\n"));
-$parser->parse_lines(("\n", "zdkimfilter.conf - zdkimfilter(8) configuration file\n", "\n"));
-$parser->parse_lines(("=head2 SYNTAX\n", "\n"));
+write_lines(("=pod\n", "\n"));
+write_lines(("=head1 NAME\n", "\n"));
+write_lines(("\n", "zdkimfilter.conf - zdkimfilter(8) configuration file\n", "\n"));
+write_lines(("=head1 SYNTAX\n", "\n"));
 
 read_ahead(); # discard 2nd line
 read_ahead();
@@ -61,9 +50,9 @@ unshift @res, ("\n",
 	"\n",
 	"The file consists of zero or more lines. \n");
 pop @res; pop @res; # discard the bottom two lines of the intro.
-$parser->parse_lines(@res);
+write_lines(@res);
 
-$parser->parse_lines(("\n", "=head2 OPTIONS\n", "\n",
+write_lines(("\n", "=head1 OPTIONS\n", "\n",
 	"Valid names and their types are listed below.  All boolean values \n",
 	"default to C<N>, while C<Y> is assumed if the name is specified but the \n",
 	"value is omitted.  Most values default to NULL, but the program behaves \n",
@@ -71,24 +60,35 @@ $parser->parse_lines(("\n", "=head2 OPTIONS\n", "\n",
 	"the relevant description. \n",
 	"\n"));
 
-$parser->parse_lines(("=over\n", "\n"));
+write_lines(("=over\n", "\n"));
 
 read_para();
 while (scalar (@res > 1))
 {
-	$parser->parse_lines(@res);
+	write_lines(@res);
 	read_para();
 }
-$parser->parse_lines(("=back\n", "\n"));
+write_lines(("=back\n"));
 
-#$parser->parse_lines("The configuration file consists of a sequence of lines.  ".
-#"Physical lines may be grouped into logical lines by putting ".
-#"a backslash (B<\\>) at the end.  Each physical line blah blah blah\n");
+write_lines(("\n", "\n", "\n", "\n"));
+write_lines(("=head1 AUTHOR\n", "\n",
+	"\n",
+	"Alessandro Vesely E<lt>vesely\@tana.itE<gt>\n",
+	"\n", "\n", "\n"));
 
-$parser->parse_lines(undef);
+write_lines("\n", "\n", "\n", "\n");
+write_lines("=head1 SEE ALSO\n", "\n",
+	"\n",
+	"B<courier>(8), B<zdkimfilter>(8), B<zfilterdb>(1)\n",
+	"\n", "\n");
 
 close $conf;
 close $man;
+
+sub write_lines
+{
+	print $man @_;
+}
 
 sub read_ahead
 {
@@ -171,10 +171,10 @@ sub read_para
 	elsif (defined($line) && $line =~ /^\#\s\s/)
 	{
 		push @res, ("\n", "=over\n", "\n");
-		while (defined($line) && $line =~ /^\#\s\s+/)
+		while (defined($line) && $line =~ /^\#\s(\s+)/)
 		{
+			my $item = length($1) > 1? '=item ': '';
 			$line =~ s/^\#\s*//;
-			my $item = '=item ';
 			while ($line =~ s/\\+$//)
 			{
 				push @res, $item . mangle($line) ."\n";
@@ -198,8 +198,6 @@ sub read_para
 		read_ahead();
 	}
 
-	# debug each stanza
-	#print Dumper(@res), "-------\n";
 	return @res;
 }
 
