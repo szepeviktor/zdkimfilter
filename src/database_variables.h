@@ -31,6 +31,8 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #endif
 
 DATABASE_VARIABLE(domain)
+DATABASE_VARIABLE(local_part)
+DATABASE_VARIABLE(user_ref)
 DATABASE_VARIABLE(ino)
 DATABASE_VARIABLE(mtime)
 DATABASE_VARIABLE(pid)
@@ -44,5 +46,9 @@ DATABASE_VARIABLE(content_encoding)
 DATABASE_VARIABLE(received_count)
 DATABASE_VARIABLE(signatures_count)
 DATABASE_VARIABLE(mailing_list)
+DATABASE_VARIABLE(adsp_flags)
+DATABASE_VARIABLE(message_status)
+DATABASE_VARIABLE(vbr_mv)
+DATABASE_VARIABLE(vbr_response)
 DATABASE_VARIABLE(message_ref)
 

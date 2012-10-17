@@ -79,7 +79,7 @@ int strincmp(const char *a, const char *b, size_t n)
 	return 0;
 }
 
-static char *hdrval(char *a, const char *b)
+static char *hdrval(const char *a, const char *b)
 // b must be without trailing ':'
 // return pointer after column if headers match, NULL otherwise
 {
@@ -96,10 +96,10 @@ static char *hdrval(char *a, const char *b)
 		if (!isspace(c) || (c = *(unsigned char const*)a++) == 0)
 			return NULL;
 
-	return a;
+	return (char*)a;
 }
 
-static char *skip_comment(char *s)
+static char *skip_comment(char const *s)
 {
 	assert(s && *s == '(');
 	
@@ -117,7 +117,7 @@ static char *skip_comment(char *s)
 
 			case ')':
 				if (--comment <= 0)
-					return s;
+					return (char*)s;
 				break;
 
 			case '\\': // quoted pair, backslash cannot be last char
@@ -130,12 +130,12 @@ static char *skip_comment(char *s)
 	}
 }
 
-static char *skip_cfws(char *s)
+static char *skip_cfws(char const *s)
 {
 	while (s)
 	{
 		int ch;
-		while (isspace(ch = *(unsigned char*)s))
+		while (isspace(ch = *(unsigned char const*)s))
 			++s;
 		if (ch == '(')
 		{
@@ -146,11 +146,11 @@ static char *skip_cfws(char *s)
 			}
 		}
 		else if (ch)
-			return s;
+			break;
 		else
 			s = NULL;
 	}
-	return s;
+	return (char*)s;
 }
 
 static int filecopy(FILE *in, FILE *out)
@@ -174,7 +174,6 @@ static void clean_stats_info_content(stats_info *stats)
 		free(stats->content_encoding);
 		free(stats->date);
 		free(stats->message_id);
-		// don't free(stats->ip); it is in dyn.info
 		// don't free(stats->ino_mtime_pid); it is in dyn.info
 	}
 }
@@ -204,6 +203,7 @@ typedef struct dkimfl_parm
 
 	// other
 	char pid_created;
+	char use_dwa_after_sign, use_dwa_verifying;
 } dkimfl_parm;
 
 static inline const u_char **
@@ -321,20 +321,173 @@ static int parm_config(dkimfl_parm *parm, char const *fname)
 	if (errs == 0)
 	{
 		config_wrapup(parm);
-		int rtc = db_config_wrapup(parm->dwa);
+		int in = 0, out = 0;
+		int rtc = db_config_wrapup(parm->dwa, &in, &out);
 		if (rtc < 0)
 			errs = 1;
-		else if (rtc == 0) // no statements compiled: reset
+		else if (in <= 0 && out <= 0) // no statements compiled: reset
 		{
 			parm_target[parm_t_id] = NULL;
 			clear_parm(parm_target);
 			db_clear(parm->dwa);
 			parm->dwa = NULL;
 		}
+		else
+		{
+			parm->use_dwa_after_sign = out > 0;
+			parm->use_dwa_verifying = in > 0;
+		}
 	}
 
 	return errs;
 }
+
+// functions common for both incoming and outgoing msgs
+
+static void clear_prescreen(domain_prescreen* dps)
+{
+	while (dps != NULL)
+	{
+		domain_prescreen* const next = dps->next;
+		free(dps);
+		dps = next;
+	}
+}
+
+static void clean_stats(dkimfl_parm *parm)
+{
+	assert(parm);
+
+	if (parm->dyn.stats)
+	{
+		clear_prescreen(parm->dyn.stats->domain_head);
+		parm->dyn.stats->domain_head = NULL;
+		clean_stats_info_content(parm->dyn.stats);
+		free(parm->dyn.stats);
+		parm->dyn.stats = NULL;
+	}
+}
+
+static void collect_stats(dkimfl_parm *parm, char const *start)
+{
+	assert(parm);
+	assert(parm->dyn.stats);
+
+	char **target = NULL;
+	char const *s;
+	if ((s = hdrval(start, "Content-Type")) != NULL)
+		target = &parm->dyn.stats->content_type;
+	else if ((s = hdrval(start, "Content-Transfer-Encoding")) != NULL)
+		target = &parm->dyn.stats->content_encoding;
+	else if ((s = hdrval(start, "Date")) != NULL)
+		target = &parm->dyn.stats->date;
+	else if ((s = hdrval(start, "Message-Id")) != NULL)
+		target = &parm->dyn.stats->message_id;
+
+	if (target && *target == NULL)
+	{
+		// trim left
+		int ch;
+		while ((ch = *(unsigned char const*)s) != 0 && !isspace(ch))
+			++s;
+
+		if (ch)
+		{
+			// find terminator
+			char const *t = s;
+			while ((ch = *(unsigned char const*)t) != 0 && ch != ';')
+				++t;
+			// trim right
+			while (t > s && isspace(*(unsigned char const*)(t - 1)))
+				--t;
+			assert(t > s);
+
+			// duplicate normalizing spaces
+			char *d = *target = malloc(t - s + 1);
+			if (d)
+			{
+				int spaces = 0;
+				while (s < t)
+				{
+					ch = *(unsigned char const *)s++;
+					if (isspace(ch))
+					{
+						if (spaces++ == 0)
+							*d++ = ' ';
+					}
+					else
+					{
+						spaces = 0;
+						*d++ = ch;
+					}
+				}
+				*d = 0;
+			}
+			else // memory faults are silently ignored for stats
+				clean_stats(parm);
+		}
+	}
+	
+	else if ((s = hdrval(start, "Precedence")) != NULL)
+	{
+		while (isspace(*(unsigned char const*)s))
+			++s;
+		size_t len;
+		int ch;
+		if (strincmp(s, "list", 4) == 0 &&
+			((len = strlen(s)) <= 4 ||
+				(ch = ((unsigned char const*)s)[5]) == ';' || isspace(ch)))
+					parm->dyn.stats->mailing_list = 1;
+	}
+	
+	else if (strincmp(start, "List-", 5) == 0)
+	{
+		if (hdrval(start, "List-Id") ||
+			hdrval(start, "List-Post") ||
+			hdrval(start, "List-Unsubscribe"))
+				parm->dyn.stats->mailing_list = 1;
+	}
+	
+	else if (hdrval(start, "Mailing-List"))
+		parm->dyn.stats->mailing_list = 1;
+}
+
+static domain_prescreen*
+get_prescreen(domain_prescreen** dps_head, char const *domain)
+{
+	assert(dps_head);
+	assert(domain);
+
+	domain_prescreen**dps = dps_head;
+	while (*dps != NULL)
+	{
+		int const cmp = stricmp(domain, (*dps)->name);
+		if (cmp < 0)
+		{
+			dps = &(*dps)->next;
+			continue;
+		}
+		if (cmp == 0)
+			return *dps;
+
+		break;
+	}
+
+	size_t const len = sizeof(domain_prescreen);
+	size_t const len2 = strlen(domain) + 1;
+	domain_prescreen *new_dps = malloc(len + len2);
+	if (new_dps)
+	{
+		memset(new_dps, 0, len);
+		new_dps->next = *dps;
+		*dps = new_dps;
+		memcpy(&new_dps->name[0], domain, len2);
+	}
+
+	return new_dps;
+}
+
+// outgoing
 
 static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 // return parm->dyn.rtc = -1 for unrecoverable error,
@@ -374,6 +527,9 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 			keep += 3;
 			continue;
 		}
+
+		if (parm->dyn.stats)
+			collect_stats(parm, start);
 
 		/*
 		* full field is in buffer (dkim_header does not want the trailing \n)
@@ -850,7 +1006,7 @@ static void copy_until_redacted(dkimfl_parm *parm, FILE *fp, FILE *fp_out)
 		* full 0-terminated header field, including trailing \n, is in buffer;
 		* search for the identbuf argv (see courier/module.esmtp/courieresmtpd.c)
 		*/
-		char *s = hdrval(start, "Received");
+		char const *s = hdrval(start, "Received");
 		if (s)
 		{
 			char *p2, *eol2, *authuserbuf, *addr;
@@ -916,6 +1072,34 @@ static void copy_until_redacted(dkimfl_parm *parm, FILE *fp, FILE *fp_out)
 	}
 
 	vb_clean(&vb);
+}
+
+static domain_prescreen *recipient_s_domains(dkimfl_parm *parm)
+{
+	assert(parm);
+	assert(parm->fl);
+
+	domain_prescreen *dps_head = NULL;
+	fl_rcpt_enum *fre = fl_rcpt_start(parm->fl);
+	if (fre)
+	{
+		char *rcpt;
+		while ((rcpt = fl_rcpt_next(fre)) != NULL)
+		{
+			char *dom = strchr(rcpt, '@');
+			if (dom)
+			{
+				domain_prescreen* dps = get_prescreen(&dps_head, dom + 1);
+				if (dps == NULL)
+				{
+					clear_prescreen(dps_head);
+					return NULL;
+				}
+			}
+		}
+		fl_rcpt_clear(fre);
+	}
+	return dps_head;
 }
 
 static void sign_message(dkimfl_parm *parm)
@@ -990,7 +1174,13 @@ static void sign_message(dkimfl_parm *parm)
 			return;
 		}
 
-		// TODO: if parm.no_signlen, instead of copy_body, stop at either
+		if (parm->dyn.stats)
+		{
+			parm->dyn.stats->outgoing = 1;
+			parm->dyn.stats->domain_head = recipient_s_domains(parm);
+		}
+
+		// (not)TODO: if parm.no_signlen, instead of copy_body, stop at either
 		// "-- " if plain text, or end of first mime alternative otherwise
 		if (sign_headers(parm, dkim) == 0 &&
 			copy_body(parm, dkim) == 0)
@@ -1136,51 +1326,6 @@ static int count_trusted_vouchers(char const **const tv)
 	return i;
 }
 
-static domain_prescreen*
-get_prescreen(domain_prescreen** dps_head, char const *domain)
-{
-	assert(dps_head);
-	assert(domain);
-
-	domain_prescreen**dps = dps_head;
-	while (*dps != NULL)
-	{
-		int const cmp = stricmp(domain, (*dps)->name);
-		if (cmp < 0)
-		{
-			dps = &(*dps)->next;
-			continue;
-		}
-		if (cmp == 0)
-			return *dps;
-
-		break;
-	}
-
-	size_t const len = sizeof(domain_prescreen);
-	size_t const len2 = strlen(domain) + 1;
-	domain_prescreen *new_dps = malloc(len + len2);
-	if (new_dps)
-	{
-		memset(new_dps, 0, len);
-		new_dps->next = *dps;
-		*dps = new_dps;
-		memcpy(&new_dps->name[0], domain, len2);
-	}
-
-	return new_dps;
-}
-
-static void clear_prescreen(domain_prescreen* dps)
-{
-	while (dps != NULL)
-	{
-		domain_prescreen* const next = dps->next;
-		free(dps);
-		dps = next;
-	}
-}
-
 static void clean_vh(verify_parms *vh)
 {
 	clear_prescreen(vh->domain_head);
@@ -1194,7 +1339,7 @@ static void clean_vh(verify_parms *vh)
 static int check_db_connected(dkimfl_parm *parm)
 /*
 * Track db_connected.  Connection is only attempted if dwa was inited.
-* On connection, pass the client IP.
+* On connection, pass the authenticated user or the client IP.
 *
 * Return -1 on hardfail, 0 otherwise.
 */
@@ -1209,7 +1354,16 @@ static int check_db_connected(dkimfl_parm *parm)
 	parm->dyn.db_connected = 1;
 
 	char *s = NULL;
-	if ((s = parm->dyn.info.frommta) != NULL &&
+	if ((s = parm->dyn.info.authsender) != NULL)
+	{
+		char *dom = strchr(s, '@');
+		if (dom)
+			*dom = 0;
+		db_set_authenticated_user(dwa, s, dom? dom + 1: NULL);
+		if (dom)
+			*dom = '@';
+	}
+	else if ((s = parm->dyn.info.frommta) != NULL &&
 		strincmp(s, "dns;", 4) == 0)
 	{
 		char *e = NULL;
@@ -1309,16 +1463,26 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 				if (from_k == 0 && stricmp(from, domain) == 0)
 				{
 					from_k = dps->u.f.is_from = 1;
-					dps->sigval += 2000;    // author domain signature
+					dps->sigval += 2500;    // author domain signature
 					// vh->have_author_sig += 1;
 				}
 
 				if (dwa &&
-					(dps->whitelisted = db_is_whitelisted(dwa, domain)) > 1)
+					(dps->whitelisted = db_is_whitelisted(dwa, domain)) > 0)
 				{
-					dps->sigval += 1000;    // trusted signer
-					dps->u.f.is_whitelisted = 1;
-					vh->have_whitelisted += 1;
+					if (dps->whitelisted > 1)
+					{
+						if (dps->whitelisted > 2)
+						{
+							dps->sigval += 500;
+							dps->u.f.is_trusted = 1;
+						}
+						dps->sigval += 500;
+						dps->u.f.is_whitelisted = 1;
+						vh->have_whitelisted += 1;
+					}
+					dps->sigval += 500;
+					dps->u.f.is_known = 1;
 				}
 
 				vbr_info *const vbr = vbr_info_get(vh->vbr, domain);
@@ -1665,20 +1829,6 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	return DKIM_CBSTAT_CONTINUE;
 }
 
-static void clean_stats(dkimfl_parm *parm)
-{
-	assert(parm);
-
-	if (parm->dyn.stats)
-	{
-		clear_prescreen(parm->dyn.stats->domain_head);
-		parm->dyn.stats->domain_head = NULL;
-		clean_stats_info_content(parm->dyn.stats);
-		free(parm->dyn.stats);
-		parm->dyn.stats = NULL;
-	}
-}
-
 static int verify_headers(verify_parms *vh)
 // return parm->dyn.rtc = -1 for unrecoverable error,
 // parm->dyn.rtc (0) otherwise
@@ -1883,72 +2033,7 @@ static int verify_headers(verify_parms *vh)
 			// (only if stats enabled)
 			// save stats' content_type and content_encoding, check mailing_list
 			else if (parm->dyn.stats)
-			{
-				char **target = NULL;
-				if ((s = hdrval(start, "Content-Type")) != NULL)
-					target = &parm->dyn.stats->content_type;
-				else if ((s = hdrval(start, "Content-Transfer-Encoding")) != NULL)
-					target = &parm->dyn.stats->content_encoding;
-				else if ((s = hdrval(start, "Date")) != NULL)
-					target = &parm->dyn.stats->date;
-				else if ((s = hdrval(start, "Message-Id")) != NULL)
-					target = &parm->dyn.stats->message_id;
-
-				if (target)
-				{
-					// trim left
-					while (isspace(*(unsigned char*)s))
-						++s;
-					// find terminator
-					char *const tok = s;
-					int ch;
-					while ((ch = *(unsigned char*)s) != 0 && ch != ';')
-						++s;
-					// trim right
-					while (s > tok && isspace(*(unsigned char*)(s - 1)))
-						--s;
-					// duplicate possibly signed value
-					ch = *s;
-					*s = 0;
-					*target = strdup(tok);
-					*s = ch;
-					// avoid newlines and tabs inside the field
-					if ((s = *target) != NULL)
-					{
-						while ((ch = *(unsigned char*)s) != 0)
-						{
-							if (isspace(ch))
-								*s = ' ';
-							++s;
-						}
-					}
-					else
-						clean_stats(parm);
-				}
-				
-				else if ((s = hdrval(start, "Precedence")) != NULL)
-				{
-					while (isspace(*(unsigned char*)s))
-						++s;
-					size_t len;
-					int ch;
-					if (strincmp(s, "list", 4) == 0 &&
-						((len = strlen(s)) <= 4 ||
-							(ch = ((unsigned char*)s)[5]) == ';' || isspace(ch)))
-								parm->dyn.stats->mailing_list = 1;
-				}
-				
-				else if (strincmp(start, "List-", 5) == 0)
-				{
-					if (hdrval(start, "List-Id") ||
-						hdrval(start, "List-Post") ||
-						hdrval(start, "List-Unsubscribe"))
-							parm->dyn.stats->mailing_list = 1;
-				}
-				
-				else if (hdrval(start, "Mailing-List"))
-					parm->dyn.stats->mailing_list = 1;
-			}
+				collect_stats(parm, start);
 		}
 
 		if (!zap)
@@ -2307,6 +2392,8 @@ static void verify_message(dkimfl_parm *parm)
 				parm->dyn.stats->adsp_discardable =
 					vh.policy == DKIM_POLICY_DISCARDABLE;
 				parm->dyn.stats->adsp_fail = adsp_fail;
+				parm->dyn.stats->adsp_whitelisted = adsp_fail &&
+					(vh.vbr_dps != NULL || vh.whitelisted_dps != NULL);
 			}
 
 			/*
@@ -2449,7 +2536,7 @@ static void verify_message(dkimfl_parm *parm)
 	}
 
 	/*
-	* write the A-R field if required anyway, spf, or signature
+	* write the A-R field if required anyway, spf, or signatures
 	*/
 	if (parm->dyn.rtc == 0 &&
 		(parm->z.add_a_r_anyway ||
@@ -2635,6 +2722,16 @@ static void after_filter_stats(fl_parm *fl)
 	clean_stats(parm);
 }
 
+static inline void enable_dwa(dkimfl_parm *parm)
+{
+	if (parm->dwa &&
+		(parm->dyn.stats = malloc(sizeof *parm->dyn.stats)) != NULL)
+	{
+		memset(parm->dyn.stats, 0, sizeof *parm->dyn.stats);
+		parm->dyn.stats->ino_mtime_pid = parm->dyn.info.id;
+	}
+}
+
 static void dkimfilter(fl_parm *fl)
 {
 	static char default_jobid[] = "NULL";
@@ -2648,7 +2745,11 @@ static void dkimfilter(fl_parm *fl)
 	if (parm->dyn.info.is_relayclient)
 	{
 		if (parm->dyn.info.authsender)
+		{
+			if (parm->use_dwa_after_sign)
+				enable_dwa(parm);
 			sign_message(parm);
+		}
 	}
 	else
 	{
@@ -2656,12 +2757,8 @@ static void dkimfilter(fl_parm *fl)
 			parm->dyn.rtc = -1;
 		else
 		{
-			if (parm->dwa &&
-				(parm->dyn.stats = malloc(sizeof *parm->dyn.stats)) != NULL)
-			{
-				memset(parm->dyn.stats, 0, sizeof *parm->dyn.stats);
-				parm->dyn.stats->ino_mtime_pid = parm->dyn.info.id;
-			}
+			if (parm->use_dwa_verifying)
+				enable_dwa(parm);
 			verify_message(parm);
 		}
 	}

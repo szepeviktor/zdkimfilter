@@ -34,10 +34,12 @@ typedef struct db_work_area db_work_area;
 db_work_area *db_init(void);
 void db_clear(db_work_area* dwa);
 db_parm_t* db_parm_addr(db_work_area *dwa);
-int db_config_wrapup(db_work_area* dwa);
+int db_config_wrapup(db_work_area* dwa, int *in, int *out);
 int db_connect(db_work_area *dwa);
 int db_is_whitelisted(db_work_area* dwa, char const* domain);
 
+void db_set_authenticated_user(db_work_area *dwa,
+	char const *local_part, char const *domain);
 void db_set_client_ip(db_work_area *dwa, char const *ip);
 
 typedef struct domain_prescreen
@@ -54,7 +56,9 @@ typedef struct domain_prescreen
 			unsigned int has_vbr:1;
 			unsigned int vbr_is_trusted:1;
 			unsigned int vbr_is_ok:1;      // verified trusted vbr
+			unsigned int is_trusted:1;     // whitelisted > 2
 			unsigned int is_whitelisted:1; // whitelisted > 1
+			unsigned int is_known:1;       // whitelisted > 0
 			unsigned int is_from:1;        // author_domain
 			unsigned int is_mfrom:1;       // spf authenticated
 			unsigned int is_helo:1;        // spf_helo auth
@@ -62,17 +66,21 @@ typedef struct domain_prescreen
 		} f;
 		unsigned int all;
 	} u;
-	char const *vbr_mv;            // trusted voucher (in parm->z) or NULL
-	struct domain_prescreen *next; // name alphabetic order
+	char *vbr_mv;                  // trusted voucher (in parm->z) or NULL
+	struct domain_prescreen *next; // name, in alphabetic order
 	char name[];
 } domain_prescreen;
 
 typedef struct stats_info
 {
+	// strings purposedly duplicated (collect_stats())
+	// can be "picked"
 	char *content_type, *content_encoding;
 	char *date;
 	char *message_id;
-	char *vbr_result_resp;         // actual response from vbr check
+
+	// actual response from vbr check
+	char *vbr_result_resp;
 
 	char *ino_mtime_pid;
 
@@ -86,12 +94,14 @@ typedef struct stats_info
 	unsigned adsp_all:2;
 	unsigned adsp_discardable:2;
 	unsigned adsp_fail:2;
+	unsigned adsp_whitelisted:2;
 	unsigned mailing_list:2;
 	unsigned reject:2;
 	unsigned drop:2;
+	unsigned outgoing:2;
 } stats_info;
 
-void db_set_stats_info(db_work_area* dwa, stats_info const*info);
+void db_set_stats_info(db_work_area* dwa, stats_info *info);
 
 #define DATABASE_H_INCLUDED
 #endif

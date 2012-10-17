@@ -269,12 +269,10 @@ static config_conf const conf[] =
 	CONFIG(db_parm_t, db_database, "", assign_ptr),
 	CONFIG(db_parm_t, db_user, "credentials", assign_ptr),
 	CONFIG(db_parm_t, db_password, "credentials", assign_ptr),
-	CONFIG(db_parm_t, db_sql_whitelisted, "", assign_ptr),
-	CONFIG(db_parm_t, db_sql_select_domain, "", assign_ptr),
-	CONFIG(db_parm_t, db_sql_update_domain, "", assign_ptr),
-	CONFIG(db_parm_t, db_sql_insert_domain, "", assign_ptr),
-	CONFIG(db_parm_t, db_sql_insert_msg_ref, "", assign_ptr),
-	CONFIG(db_parm_t, db_sql_insert_message, "", assign_ptr),
+
+#define DATABASE_STATEMENT(x) CONFIG(db_parm_t, x, "", assign_ptr),
+	#include "database_statements.h"
+#undef DATABASE_STATEMENT
 
 	{NULL, NULL, NULL, 0, 0, 0}
 };

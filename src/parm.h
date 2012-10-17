@@ -79,12 +79,11 @@ typedef struct db_parm_t
 	char *db_database;
 	char *db_user;
 	char *db_password;
-	char *db_sql_whitelisted;
-	char *db_sql_select_domain;
-	char *db_sql_update_domain;
-	char *db_sql_insert_domain;
-	char *db_sql_insert_msg_ref;
-	char *db_sql_insert_message;
+
+#define DATABASE_STATEMENT(x) char *x;
+	#include "database_statements.h"
+#undef DATABASE_STATEMENT
+
 	int db_opt_paged_results;
 	int db_timeout; // seconds
 	char db_opt_multi_statements;

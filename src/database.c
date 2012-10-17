@@ -53,6 +53,29 @@ static logfun_t do_report = &syslog;
 
 #if defined HAVE_OPENDBX
 /*
+* Statements also need to be defined in db_parm_t
+*/
+
+#define DATABASE_STATEMENT(x) x,
+typedef enum stmt_id
+{
+	#include "database_statements.h"
+
+	total_statements
+} stmt_id;
+#undef DATABASE_STATEMENT
+
+#define STRING2(P) #P
+#define STRING(P) STRING2(P)
+
+#define DATABASE_STATEMENT(x) STRING(x),
+static const char*stmt_name[] =
+{
+	#include "database_statements.h"
+};
+#undef DATABASE_STATEMENT
+
+/*
 * Each query/statement has a number of allowed variables that may or may not
 * be used.  They are passed as parameters to the relevant function
 */
@@ -67,8 +90,6 @@ typedef enum variable_id
 } variable_id;
 #undef DATABASE_VARIABLE
 
-#define STRING2(P) #P
-#define STRING(P) STRING2(P)
 #define DATABASE_VARIABLE(x) STRING(x),
 static const char * const variable_name[] =
 {
@@ -76,7 +97,6 @@ static const char * const variable_name[] =
 	#include "database_variables.h"
 	NULL
 };	
-
 #undef DATABASE_VARIABLE
 
 // high bit: allowed in statement
@@ -245,29 +265,6 @@ static stmt_compose *stmt_alloc(flags_var *flags, char *src)
 }
 
 //////////////////////////////////////////////////////////////
-typedef enum stmt_id
-{
-	db_sql_whitelisted,
-	db_sql_select_domain,
-	db_sql_update_domain,
-	db_sql_insert_domain,
-	db_sql_insert_msg_ref,
-	db_sql_insert_message,
-
-	total_statements
-} stmt_id;
-
-// keep in sync by hands
-static const char*stmt_name[] =
-{
-	"db_sql_whitelisted",
-	"db_sql_select_domain",
-	"db_sql_update_domain",
-	"db_sql_insert_domain",
-	"db_sql_insert_msg_ref",
-	"db_sql_insert_message"
-};
-
 // typedef'd in .h
 struct db_work_area
 {
@@ -275,6 +272,7 @@ struct db_work_area
 	odbx_result_t *result;
 	stmt_compose *stmt[total_statements];
 	char *var[DB_SQL_VAR_SIZE];
+	char *user_domain;
 
 	db_parm_t z;
 
@@ -306,6 +304,7 @@ void db_clear(db_work_area* dwa)
 			free(dwa->var[i]);
 		for (int i = 0; i < total_statements; ++i)
 			free(dwa->stmt[i]);
+		free(dwa->user_domain);
 		free(dwa);
 	}
 }
@@ -330,15 +329,17 @@ db_work_area *db_init(void)
 	return dwa;
 }
 
-int db_config_wrapup(db_work_area *dwa)
+int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 /*
-* return the number of db_sql_* statements configured, -1 for fatal error;
+* set the counters to the total number of db_sql_* statements configured
+* for incoming (verified) and outgoing (signed) messages.
+* return 0 if ok, -1 for fatal error;
 */
 {
 	int fatal = -1;
-	int count = 0;
 	if (dwa)
 	{
+		int count = 0;
 		fatal = 0;
 
 #define STMT_ALLOC(STMT, BITFLAG) \
@@ -349,41 +350,68 @@ int db_config_wrapup(db_work_area *dwa)
 				fatal = -1; \
 		} else (void)0
 
-		static const var_flag_t message_variables =
+		STMT_ALLOC(db_sql_whitelisted,
+			1 << domain_variable | 1 << ip_variable);
+
+		const var_flag_t common_variables =
 			1 << ino_variable | 1 << mtime_variable | 1 << pid_variable |
-			1 << ip_variable | 1 << date_variable | 1 << message_id_variable |
+			1 << date_variable | 1 << message_id_variable |
 			1 << content_type_variable | 1 << content_encoding_variable |
-			1 << received_count_variable | 1 << signatures_count_variable |
 			1 << mailing_list_variable;
 
-		STMT_ALLOC(db_sql_whitelisted, 1 << domain_variable);
+		const var_flag_t message_variables = common_variables |
+			1 << received_count_variable | 1 << signatures_count_variable |
+			1 << message_status_variable | 1 << adsp_flags_variable |
+			1 << ip_variable;
 
-		STMT_ALLOC(db_sql_select_domain,
-			1 << domain_variable | 1 << auth_type_variable |
-			message_variables);
-
-		STMT_ALLOC(db_sql_update_domain,
-			1 << domain_variable | 1 << auth_type_variable |
-			1 << domain_ref_variable |
-			message_variables);
-
-		STMT_ALLOC(db_sql_insert_domain,
-			1 << domain_variable | 1 << auth_type_variable |
-			message_variables);
-
-		STMT_ALLOC(db_sql_insert_msg_ref,
-			1 << domain_variable | 1 << auth_type_variable |
-			1 << domain_ref_variable | 1 << message_ref_variable |
-			message_variables);
-			
 		STMT_ALLOC(db_sql_insert_message, message_variables);
 
+		const var_flag_t domain_variables = message_variables |
+			1 << domain_variable | 1 << auth_type_variable |
+			1 << vbr_mv_variable | 1 << vbr_response_variable;
+
+		STMT_ALLOC(db_sql_select_domain, domain_variables);
+
+		STMT_ALLOC(db_sql_insert_domain, domain_variables);
+
+		STMT_ALLOC(db_sql_update_domain, domain_variables |
+			1 << domain_ref_variable);
+
+		STMT_ALLOC(db_sql_insert_msg_ref, domain_variables |
+			1 << domain_ref_variable | 1 << message_ref_variable);
+
+		if (in)
+			*in = count;
+		count = 0;
+
+		const var_flag_t outgoing_variables = common_variables |
+			1 << local_part_variable | 1 << domain_variable;
+
+		// $(domain) is the local domain when selecting the user
+		STMT_ALLOC(db_sql_select_user, outgoing_variables);
+
+		const var_flag_t target_variables = outgoing_variables |
+			1 << user_ref_variable;
+
+		// $(domain) is the target domain when selecting the domain
+		STMT_ALLOC(db_sql_select_target, target_variables);
+
+		STMT_ALLOC(db_sql_insert_target, target_variables);
+
+		STMT_ALLOC(db_sql_update_target, target_variables |
+			1 << domain_ref_variable);
+
+		STMT_ALLOC(db_sql_insert_target_ref, outgoing_variables |
+			1 << user_ref_variable | 1 << domain_ref_variable);
+
+		if (out)
+			*out = count;
 #undef STMT_ALLOC
 
 		if (dwa->z.db_timeout <= 0)
 			dwa->z.db_timeout = 2;
 	}
-	return fatal? fatal: count;
+	return fatal;
 }
 
 static int clear_pending_result(db_work_area* dwa)
@@ -905,12 +933,32 @@ int db_is_whitelisted(db_work_area* dwa, char const* domain)
 	return rtc;
 }
 
+void db_set_authenticated_user(db_work_area *dwa,
+	char const *local_part, char const *domain)
+{
+	assert(dwa);
+	assert(local_part);
+
+	if (dwa->var[local_part_variable])
+		free(dwa->var[local_part_variable]);
+	dwa->var[local_part_variable] = strdup(local_part);
+
+	if (dwa->user_domain)
+		free(dwa->user_domain);
+	if (domain)
+		dwa->user_domain = strdup(domain);
+	else
+		dwa->user_domain = NULL;
+}
+
 extern char *ip_to_hex(char const *ip); // ip_to_hex.c
 void db_set_client_ip(db_work_area *dwa, char const *ip)
 {
 	assert(dwa);
 	assert(ip);
 
+	if (dwa->var[ip_variable])
+		free(dwa->var[ip_variable]);
 	dwa->var[ip_variable] = ip_to_hex(ip);
 }
 
@@ -1038,13 +1086,180 @@ static void comma_copy(char *buf, char const *value, int *comma)
 	*comma = 1;
 }
 
-void db_set_stats_info(db_work_area* dwa, stats_info const*info)
+static var_flag_t
+in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
+{
+	assert(dwa);
+	assert(info);
+
+	var_flag_t zeroflag = 0;
+
+	char *var = NULL;
+	int rc = stmt_run(dwa, db_sql_insert_message, bitflag, &var, NULL);
+
+	if ((dwa->var[message_ref_variable] = var) != NULL)
+		bitflag |= 1 << message_ref_variable;
+
+	/*
+	* For each domain:
+	* Query it.  If not found, insert it, and possibly query it again so as to
+	* have a reference.  If found, update it.
+	* With the retrieved reference, insert a msg_ref.
+	*/
+	if (rc >= 0 && info->domain_head != NULL)
+	{
+		// author,spf,spf_helo,dkim,vbr
+		// 1234567890123456789012345678
+		char authbuf[32];
+		dwa->var[auth_type_variable] = authbuf;
+		var_flag_t bit2 = 1 << auth_type_variable | 1 << domain_variable;
+		bitflag |= bit2;
+		zeroflag |= bit2;
+
+		var_flag_t vbr_bit = 1 << vbr_mv_variable;
+		if (info->vbr_result_resp)
+		{
+			vbr_bit |= 1 << vbr_response_variable;
+			dwa->var[vbr_response_variable] = info->vbr_result_resp;
+		}
+		zeroflag |= vbr_bit;
+
+		// constant bit for the loop
+		bit2 = 1 << domain_ref_variable;
+
+		for (domain_prescreen *dps = info->domain_head;
+			dps != NULL; dps = dps->next)
+		{
+			int comma = 0;
+			authbuf[0] = 0;
+			if (dps->u.f.is_from)
+				comma_copy(authbuf, "author", &comma);
+			if (dps->u.f.is_helo)
+				comma_copy(authbuf, "spf_helo", &comma);
+			if (dps->u.f.is_mfrom)
+				comma_copy(authbuf, "spf", &comma);
+			if (dps->u.f.sig_is_ok)
+				comma_copy(authbuf, "dkim", &comma);
+			if (dps->u.f.vbr_is_ok)
+			{
+				comma_copy(authbuf, "vbr", &comma);
+				dwa->var[vbr_mv_variable] = dps->vbr_mv;
+				bitflag |= vbr_bit;
+			}
+			else
+				bitflag &= ~vbr_bit;
+
+			dwa->var[domain_variable] = dps->name;
+			bitflag &= ~bit2;
+
+			int selected = 1;
+			char *domain_ref = NULL;
+			rc = stmt_run(dwa, db_sql_select_domain, bitflag, &domain_ref, NULL);
+			if (rc < 0)
+				continue;
+
+			if (domain_ref == NULL)
+			{
+				selected = 0;
+				rc = stmt_run(dwa, db_sql_insert_domain, bitflag, &domain_ref, NULL);
+				if (rc < 0)
+					continue;
+
+				if (domain_ref == NULL)
+					stmt_run(dwa, db_sql_select_domain, bitflag, &domain_ref, NULL);
+			}
+
+			if (domain_ref)
+			{
+				free(dwa->var[domain_ref_variable]);
+				dwa->var[domain_ref_variable] = domain_ref;
+				bitflag |= bit2;
+			}
+
+			if (selected)
+				stmt_run(dwa, db_sql_update_domain, bitflag, NULL, NULL);
+
+			stmt_run(dwa, db_sql_insert_msg_ref, bitflag, NULL, NULL);
+		}
+	}
+	return zeroflag;
+}
+
+static var_flag_t
+out_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
+{
+	assert(dwa);
+	assert(info);
+
+	var_flag_t zeroflag = 1 << domain_variable;
+
+	bitflag |= 1 << local_part_variable | 1 << domain_variable;
+	dwa->var[domain_variable] = dwa->user_domain;
+	char *var = NULL;
+	int rc = stmt_run(dwa, db_sql_select_user, bitflag, &var, NULL);
+
+	if ((dwa->var[user_ref_variable] = var) != NULL)
+		bitflag |= 1 << user_ref_variable;
+
+	/*
+	* For each target domain:
+	* Query it.  If not found, insert it, and possibly query it again so as to
+	* have a reference.  If found, update it.
+	* With the retrieved reference, insert a target_ref.
+	*/
+	if (info->domain_head != NULL)
+	{
+		// constant bits for the loop
+		var_flag_t bit2 = 1 << domain_ref_variable;
+		
+		for (domain_prescreen *dps = info->domain_head;
+			dps != NULL; dps = dps->next)
+		{
+			dwa->var[domain_variable] = dps->name;
+			bitflag &= ~bit2;
+
+			int selected = 1;
+			char *domain_ref = NULL;
+			rc = stmt_run(dwa, db_sql_select_target, bitflag, &domain_ref, NULL);
+			if (rc < 0)
+				continue;
+
+			if (domain_ref == NULL)
+			{
+				selected = 0;
+				rc = stmt_run(dwa, db_sql_insert_target, bitflag, &domain_ref, NULL);
+				if (rc < 0)
+					continue;
+
+				if (domain_ref == NULL)
+					stmt_run(dwa, db_sql_select_target, bitflag, &domain_ref, NULL);
+			}
+
+			if (domain_ref)
+			{
+				free(dwa->var[domain_ref_variable]);
+				dwa->var[domain_ref_variable] = domain_ref;
+				bitflag |= bit2;
+			}
+
+			if (selected)
+				stmt_run(dwa, db_sql_update_target, bitflag, NULL, NULL);
+
+			stmt_run(dwa, db_sql_insert_target_ref, bitflag, NULL, NULL);
+		}
+	}
+
+	return zeroflag;
+}
+
+void db_set_stats_info(db_work_area* dwa, stats_info *info)
 {
 	assert(dwa);
 	assert(info);
 #if !defined NDEBUG
 	for (int i = 0; i < DB_SQL_VAR_SIZE; ++i)
-		assert(dwa->var[i] == NULL || i == ip_variable);
+		assert(dwa->var[i] == NULL ||
+			i == ip_variable || i == local_part_variable);
 #endif
 
 	if (info == NULL || info->domain_head == NULL)
@@ -1101,105 +1316,66 @@ void db_set_stats_info(db_work_area* dwa, stats_info const*info)
 	if (dwa->var[ip_variable] != NULL) // this may have been set in its own call
 		bitflag |= 1 << ip_variable;
 
-#define SET_STRING(N) \
-	if ((dwa->var[N##_variable] = strdup(info->N)) != NULL) \
-		bitflag |= 1 << N##_variable; else (void)0
-	SET_STRING(date);
-	SET_STRING(message_id);
-	SET_STRING(content_type);
-	SET_STRING(content_encoding);
+#define PICK_STRING(N) \
+	if ((dwa->var[N##_variable] = info->N) != NULL) { \
+		info->N = NULL; \
+		bitflag |= 1 << N##_variable; \
+	} else (void)0
+	PICK_STRING(date);
+	PICK_STRING(message_id);
+	PICK_STRING(content_type);
+	PICK_STRING(content_encoding);
 #undef SET_STRING
 
 	// these must be zeroed from dwa->var before they are freed:
 	// that's what zeroflag is for.
 	// we assume no number takes more than 10 chars to print.
-	char buf[40], *p = buf, *safe_stop = &buf[sizeof buf - 10];
+	// safe_stop accounts for "discardable,fail,whitelisted"
+	char buf[80], *p = buf, *safe_stop = &buf[sizeof buf - 30];
 #define SET_NUMBER(N) \
 	if (p < safe_stop) { \
 		p += 1 + sprintf(dwa->var[N##_variable] = p, "%u", info->N); \
 		var_flag_t bit = 1 << N##_variable; \
 		bitflag |= bit; zeroflag |= bit; } else (void)0
-	SET_NUMBER(received_count);
-	SET_NUMBER(signatures_count);
+	if (info->outgoing == 0)
+	{
+		SET_NUMBER(received_count);
+		SET_NUMBER(signatures_count);
+		if (p < safe_stop)
+		{
+			char *msg_st = info->reject? "reject": info->drop? "drop": "accept";
+			size_t len = strlen(msg_st) + 1;
+			strcpy(dwa->var[message_status_variable] = p, msg_st);
+			p += len;
+			var_flag_t bit = 1 << message_status_variable;
+			bitflag |= bit;
+			zeroflag |= bit;
+		}
+		if (p < safe_stop)
+		{
+			char *adsp_st = info->adsp_all? "all":
+				info->adsp_discardable? "discardable": "unknown";
+			strcpy(dwa->var[adsp_flags_variable] = p, adsp_st);
+			if (info->adsp_unknown && info->adsp_found)
+				strcat(p, ",found");
+			if (info->adsp_fail) strcat(p, ",fail");
+			if (info->adsp_whitelisted) strcat(p, ",whitelisted");
+			p += strlen(p) + 1;
+			var_flag_t bit = 1 << adsp_flags_variable;
+			bitflag |= bit;
+			zeroflag |= bit;
+		}
+	}
 	SET_NUMBER(mailing_list);
 #undef SET_NUMBER
 
 	/*
-	* With the message variables in place, we can insert the message.
+	* With the variables in place, run in/out series of statements
 	*/
-	char *var = NULL;
-	int rc = stmt_run(dwa, db_sql_insert_message, bitflag, &var, NULL);
-
-	if ((dwa->var[message_ref_variable] = var) != NULL)
-		bitflag |= 1 << message_ref_variable;
-
-	/*
-	* Now for each domain, we try to query it, otherwise we insert it.
-	* With the retrieved reference, we insert a msg_ref for each domain
-	*/
-	if (rc >= 0 && info->domain_head != NULL)
-	{
-		// author,spf,spf_helo,dkim,vbr
-		// 1234567890123456789012345678
-		char authbuf[32];
-		dwa->var[auth_type_variable] = authbuf;
-		var_flag_t bit2 = 1 << auth_type_variable | 1 << domain_variable;
-		bitflag |= bit2;
-		zeroflag |= bit2;
-
-		bit2 = 1 << domain_ref_variable; // const during the loop
-		for (domain_prescreen *dps = info->domain_head;
-			dps != NULL; dps = dps->next)
-		{
-			int comma = 0;
-			authbuf[0] = 0;
-			if (dps->u.f.is_from)
-				comma_copy(authbuf, "author", &comma);
-			if (dps->u.f.is_helo)
-				comma_copy(authbuf, "spf_helo", &comma);
-			if (dps->u.f.is_mfrom)
-				comma_copy(authbuf, "spf", &comma);
-			if (dps->u.f.sig_is_ok)
-				comma_copy(authbuf, "dkim", &comma);
-			if (dps->u.f.vbr_is_ok)
-			{
-				comma_copy(authbuf, "vbr", &comma);
-				dps->vbr_mv = "the_trusted_voucher.example";
-			}
-
-			dwa->var[domain_variable] = dps->name;
-			bitflag &= ~bit2;
-
-			int selected = 1;
-			char *domain_ref = NULL;
-			rc = stmt_run(dwa, db_sql_select_domain, bitflag, &domain_ref, NULL);
-			if (rc < 0)
-				continue;
-
-			if (domain_ref == NULL)
-			{
-				selected = 0;
-				rc = stmt_run(dwa, db_sql_insert_domain, bitflag, &domain_ref, NULL);
-				if (rc < 0)
-					continue;
-
-				if (domain_ref == NULL)
-					stmt_run(dwa, db_sql_select_domain, bitflag, &domain_ref, NULL);
-			}
-
-			if (domain_ref)
-			{
-				free(dwa->var[domain_ref_variable]);
-				dwa->var[domain_ref_variable] = domain_ref;
-				bitflag |= bit2;
-			}
-
-			if (selected)
-				stmt_run(dwa, db_sql_update_domain, bitflag, NULL, NULL);
-
-			stmt_run(dwa, db_sql_insert_msg_ref, bitflag, NULL, NULL);
-		}
-	}
+	if (info->outgoing == 0)
+		zeroflag |= in_stmt_run(dwa, bitflag, info);
+	else
+		zeroflag |= out_stmt_run(dwa, bitflag, info);
 
 	variable_id id = 0;
 	var_flag_t mask = 1;
@@ -1259,9 +1435,9 @@ int main(int argc, char*argv[])
 				"  --set-stats             insert new message\n"
 				"  --set-stats-domain      domains who sent the message\n"
 				"For set-stats, the following arguments are expected:\n"
-				" ino.mtime.pid, ip, date, message_id, content_type,\n"
+				" \"I\"/\"O\", ino.mtime.pid, date, message_id, content_type,\n"
 				" content_encoding, received_count, signatures_count,\n"
-				" and mailing_list.\n"
+				" mailing_list, and either ip or user, domain.\n"
 				"The domains must be given one per argument, using commas to\n"
 				"separate the tokens, which are the domain name, followed by\n"
 				"any of: author, spf, dkim, vbr\n",
@@ -1300,7 +1476,7 @@ int main(int argc, char*argv[])
 		return 1;
 	}
 
-	db_config_wrapup(dwa);
+	db_config_wrapup(dwa, NULL, NULL);
 	
 	if (config)
 		print_parm(parm_target);
@@ -1342,7 +1518,10 @@ int main(int argc, char*argv[])
 					else if (strncmp(arg, "dkim", 4) == 0)
 						stats.domain_head[m].u.f.sig_is_ok = 1;
 					else if (strncmp(arg, "vbr", 3) == 0)
+					{
 						stats.domain_head[m].u.f.vbr_is_ok = 1;
+						stats.domain_head[m].vbr_mv = "the_trusted_voucher.example";
+					}
 					else if (*arg)
 						printf("invalid domain token \"%s\"\n", arg);
 				}
@@ -1354,6 +1533,8 @@ int main(int argc, char*argv[])
 				stats.domain_head[m-1].next = NULL;
 
 			int n = 0;
+			char *arg9 = NULL;
+			char *arg10 = NULL;
 			for (int i = set_stats; i < argc; ++i)
 			{
 				char *arg = argv[i];
@@ -1362,26 +1543,42 @@ int main(int argc, char*argv[])
 				if (arg[0] == 0)
 					continue;
 
-				switch(n)
+				switch(i - set_stats)
 				{
-					case 0: stats.ino_mtime_pid = arg; break;
-					case 1: db_set_client_ip(dwa, arg); break;
-					case 2: stats.date = arg; break;
-					case 3: stats.message_id = arg; break;
-					case 4: stats.content_type = arg; break;
-					case 5: stats.content_encoding = arg; break;
+					case 0:
+					{
+						if (strcasecmp(arg, "I") == 0)
+							stats.outgoing = 0;
+						else if (strcasecmp(arg, "O") == 0)
+							stats.outgoing = 1;
+						else
+							printf("I/O must be I or O, not %s\n", arg);
+						break;
+					}
+					case 1: stats.ino_mtime_pid = arg; break;
+					case 2: stats.date = strdup(arg); break;
+					case 3: stats.message_id = strdup(arg); break;
+					case 4: stats.content_type = strdup(arg); break;
+					case 5: stats.content_encoding = strdup(arg); break;
 					case 6: stats.received_count = atoi(arg); break;
 					case 7: stats.signatures_count = atoi(arg); break;
 					case 8: stats.mailing_list = atoi(arg); break;
+					case 9: arg9 = arg; break;
+					case 10: arg10 = arg; break;
 					default:
-						printf("extra set-stats argument \"%s\" ignored\n",
-							arg);
+						printf("extra set-stats argument \"%s\" ignored\n", arg);
 						break;
 				}
 				++n;
 			}
 			if (n && m && stats.domain_head)
+			{
+				if (stats.outgoing)
+					db_set_authenticated_user(dwa, arg9, arg10);
+				else
+					db_set_client_ip(dwa, arg9);
 				db_set_stats_info(dwa, &stats);
+			}
 			free(stats.domain_head);
 		}
 	}
