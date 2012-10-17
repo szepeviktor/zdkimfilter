@@ -46,6 +46,8 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include <errno.h>
 #include <assert.h>
 
+#include "parm.h"
+
 static volatile int
 	signal_child = 0,
 	signal_timed_out = 0,
@@ -263,16 +265,45 @@ static int run_zdkimfilter(char *argv[])
 	return rtc;
 }
 
-static char *create_ctlfile(char const *domain)
+static char *create_ctlfile(char const *config_file, char const *domain)
 {
-	char fname[] = "/tmp/dkimsign_ctlfileXXXXXX";
+	/*
+	* Read the tmp directory and, if not given, the default domain
+	*/
+	static char const *names[] = {"tmp", "default_domain"};
+	char *out[2] = { NULL, NULL};
+	int rtc = read_single_values(config_file, domain? 1: 2, names, out);
+	if (rtc < 0)
+	{
+		syslog(LOG_CRIT, "error reading %s: %s\n",
+			config_file? config_file: "default config file",
+			strerror(errno));
+		return NULL;
+	}
+
+	static char const fname_templ[] = "dkimsign_ctlfileXXXXXX";
+	int dlen = out[0]? strlen(out[0]): 4;
+	char *fname = malloc(sizeof fname_templ + dlen + 1);
+	if (fname == NULL)
+	{
+		syslog(LOG_ALERT, "MEMORY FAULT");
+		return NULL;
+	}
+
+	strcpy(fname, out[0]? out[0]: "/tmp");
+	if (fname[dlen - 1] != '/')
+		strcat(fname, "/");
+	strcat(fname, fname_templ);
+	
 	int const fd = mkstemp(fname);
 	if (fd < 0)
 	{
 		syslog(LOG_CRIT, "mkstemp failure: %s\n", strerror(errno));
 		return NULL;
 	}
-	
+
+#if 0	
+	// What if the message-files are not readable by MAILUID?
 	if (geteuid() == 0 && fchown(fd, MAILUID, MAILGID))
 	{
 		syslog(LOG_CRIT, "fchown failure: %s\n", strerror(errno));
@@ -280,64 +311,90 @@ static char *create_ctlfile(char const *domain)
 		unlink(fname);
 		return NULL;
 	}
+#endif
 	
 	FILE *fp = fdopen(fd, "w+");
-	fprintf(fp, "uauthsmtp\nipostmaster@%s\nMdkimsign\n", domain);
-	int rtc = ferror(fp) | fclose(fp);
-	char *const fnamedup = rtc? NULL: strdup(fname);
-	if (fnamedup == NULL)
-	{
-		syslog(LOG_CRIT, "cannot write ctlfile %s: %s\n",
-			fname, strerror(errno));
-		unlink(fname);
-	}
-
-	return fnamedup;
+	fputs("uauthsmtp\nipostmaster", fp);
+	if (domain == NULL)
+		domain = out[1];
+	if (domain)
+		fprintf(fp, "@%s", domain);
+	fputs("\nMdkimsign\n", fp);
+	fclose(fp);
+	free(out[0]);
+	free(out[1]);
+	return fname;
 }
 
 int main(int argc, char *argv[])
 {
-	int rtc = 0;
-	char *xargv[32];
-	size_t xargc = 0;
-	
-//	xargv[xargc++] = ZDKIMFILTER_EXECUTABLE;
-	xargv[xargc++] = "/home/ale/sw/zdkimfilter/src/zdkimfilter";
-	
-	/*
-	* TODO: what options are to be passed to zdkimfilter?  Perhaps -f conf-file?
-	* and shouldn't I read the default domain from such file?
-	*/
-	xargv[xargc] = NULL;
-	if (argc < 3)
+	int rtc = 0, file_arg = 0;
+	char *config_file = NULL;
+	char *domain = NULL;
+
+	for (int i = 1; i < argc; ++i)
 	{
-		fprintf(stderr, "usage: %s <domain> <message-file>\n", argv[0]);
-		return 1;
+		char const *const arg = argv[i];
+		
+		if (strcmp(arg, "-f") == 0)
+		{
+			config_file = ++i < argc ? argv[i] : NULL;
+		}
+		else if (strcmp(arg, "--domain") == 0)
+		{
+			domain = ++i < argc ? argv[i] : NULL;
+		}
+		else if (strcmp(arg, "--version") == 0)
+		{
+			puts(PACKAGE_NAME ", version " PACKAGE_VERSION "\n");
+			return 0;
+		}
+		else if (strcmp(arg, "--help") == 0)
+		{
+			printf("Usage:\n"
+				"           dkimsign [opts] message-file...\n"
+				"with opts:\n"
+				"  -f config-filename  override %s\n"
+				"  --domain domain     domain used for signing\n"
+				"  --help              print this stuff and exit\n"
+				"  --version           print version string and exit\n",
+					default_config_file);
+			return 0;
+		}
+		else // message files
+		{
+			file_arg = i;
+			break;
+		}
 	}
 
-	openlog("dkimsign", LOG_PID, LOG_MAIL);
-	char *domain = argv[1];
-	char *fname = argv[2];
-	char *ctlfile = create_ctlfile(domain);
-	
-	if (ctlfile == NULL)
-		return 1;	
+	if (file_arg == 0)
+		return 1;
 
+	char *ctlfile = create_ctlfile(config_file, domain);
+	if (ctlfile == NULL)
+		return 1;
+
+	char *xargv[argc - file_arg + 7];
+	size_t xargc = 0;
+
+	xargv[xargc++] = ZDKIMFILTER_EXECUTABLE;
+	if (config_file)
+	{
+		xargv[xargc++] = "-f";
+		xargv[xargc++] = config_file;
+	}
+	xargv[xargc++] = "--no-db";
 	xargv[xargc++] = "-t1,dkimsign";
 	xargv[xargc++] = ctlfile;
-	xargv[xargc++] = fname; // can add more fnames here...
+	for (int i = file_arg; i < argc; ++i)
+		xargv[xargc++] = argv[i];
+
 	xargv[xargc] = NULL;
 
-/* What if the file is not readable by MAILUID?
+	openlog("dkimsign", LOG_PID, LOG_MAIL);
+	set_parm_logfun(&syslog);
 
-	struct stat buf;
-
-	if (geteuid() == 0)
-	{
-		setgid(MAILGID);
-		setuid(MAILUID);
-	}
-*/
 	set_signal();
 
 	rtc = run_zdkimfilter(xargv);

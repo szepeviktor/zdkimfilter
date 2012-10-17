@@ -286,19 +286,18 @@ static inline int do_get_password(char *config_file, char**password)
 	if (*password)
 		return 0;
 
-	char const *const pname = "redact_received_auth";
-	char* p = read_single_value(pname, config_file);
-	if (p == NULL)
+	char const *const pname[1] = {"redact_received_auth"};
+	int rtc = read_single_values(config_file, 1, pname, password);
+	if (rtc != 1 || *password == NULL)
 	{
 		char const *const dfname = config_file? config_file: "config file";
-		if (errno)
+		if (rtc < 0)
 			perror(dfname);
 		else
-			fprintf(stderr, "%s not found in %s\n", pname, dfname);
+			fprintf(stderr, "%s not found in %s\n", pname[0], dfname);
 		return -1;
 	}
-	
-	*password = p;
+
 	return 1;
 }
 

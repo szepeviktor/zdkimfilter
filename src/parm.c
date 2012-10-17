@@ -467,33 +467,38 @@ int read_all_values(void *parm_target[PARM_TARGET_SIZE], char const *fname)
 	return errs;
 }
 
-char* read_single_value(char const *pname, char const *fname)
-// read a single value from parameter file
-// return malloced string or NULL
-// errno == 0 for undefined parameter, otherwise fname/memory problem
+int read_single_values(char const *fname, int n,
+	char const *const *names, char **out)
+// Read a few values from parameter file and set malloced string in out.
+// return -1 for fname problem, memory fault, invalid parameter;
+// otherwise return a flag of the values set, where bit 0 corresponds to out[0],
+// bit 1 to out[1], and so forth.
 {
-	char *value = NULL;
+	if (n <= 0 || n > 8)
+		return -1;
+
+	int value_flags = 0;
+	int const all_bits = (1 << n) - 1;
+	
 	if (fname == NULL)
 		fname = default_config_file;
 
-	errno = 0;
-
 	FILE *fp = fopen(fname, "r");
 	if (fp == NULL)
-		return NULL;
-	
+		return -1;
+
 	var_buf vb;
 	if (vb_init(&vb))
 	{
 		fclose(fp);
-		errno = ENOBUFS;
-		return NULL;
+		return -1;
 	}
 
 	size_t keep = 0;
 	char *p;
 
-	while ((p = vb_fgets(&vb, keep, fp)) != NULL)
+	while (value_flags >= 0 && value_flags < all_bits &&
+		(p = vb_fgets(&vb, keep, fp)) != NULL)
 	{
 		char *eol = p + strlen(p) - 1;
 		int ch = 0;
@@ -523,20 +528,25 @@ char* read_single_value(char const *pname, char const *fname)
 		while (isalnum(ch = *(unsigned char*)s) || ch == '_')
 			++s;
 
-		if (strncasecmp(pname, name, s - name) == 0)
+		int mask = 1;
+		for (int i = 0; i < n; ++i, mask <<= 1)
 		{
-			while (isspace(ch = *(unsigned char*)s) || ch == '=')
-				++s;
-	
-			if ((value = strdup(s)) == NULL)
-				errno = ENOBUFS;
+			if (strncasecmp(names[i], name, s - name) == 0)
+			{
+				while (isspace(ch = *(unsigned char*)s) || ch == '=')
+					++s;
 
-			break;
+				value_flags |= mask;
+				if ((out[i] = strdup(s)) == NULL)
+					value_flags = -1; // oops, previously allocated stuff is lost
+
+				break;
+			}
 		}
 	}
 
 	vb_clean(&vb);
 	fclose(fp);
 
-	return value;
+	return value_flags;
 }

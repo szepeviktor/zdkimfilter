@@ -108,7 +108,7 @@ logfun_t set_parm_logfun(logfun_t);
 const char* set_program_name(const char * new_name);
 void stderrlog(int severity, char const* fmt, ...);
 int read_all_values(void *parm_target[PARM_TARGET_SIZE], char const *fname);
-char* read_single_value(char const *pname, char const *fname);
+int read_single_values(char const *fname, int, char const *const*, char **out);
 void print_parm(void *parm_target[PARM_TARGET_SIZE]);
 void clear_parm(void *parm_target[PARM_TARGET_SIZE]);
 

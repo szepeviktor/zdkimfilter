@@ -285,13 +285,14 @@ static void some_cleanup(dkimfl_parm *parm) // parent
 		db_clear(parm->dwa);
 }
 
-static int parm_config(dkimfl_parm *parm, char const *fname)
+static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
 // initialization, 0 on success
 {
 	set_parm_logfun(&fl_report);
 
 	config_default(parm);
-	parm->dwa = db_init();
+	if (!no_db)
+		parm->dwa = db_init();
 
 	if (fname == NULL)
 	{
@@ -321,21 +322,24 @@ static int parm_config(dkimfl_parm *parm, char const *fname)
 	if (errs == 0)
 	{
 		config_wrapup(parm);
-		int in = 0, out = 0;
-		int rtc = db_config_wrapup(parm->dwa, &in, &out);
-		if (rtc < 0)
-			errs = 1;
-		else if (in <= 0 && out <= 0) // no statements compiled: reset
+		if (parm->dwa)
 		{
-			parm_target[parm_t_id] = NULL;
-			clear_parm(parm_target);
-			db_clear(parm->dwa);
-			parm->dwa = NULL;
-		}
-		else
-		{
-			parm->use_dwa_after_sign = out > 0;
-			parm->use_dwa_verifying = in > 0;
+			int in = 0, out = 0;
+			int rtc = db_config_wrapup(parm->dwa, &in, &out);
+			if (rtc < 0)
+				errs = 1;
+			else if (in <= 0 && out <= 0) // no statements compiled: reset
+			{
+				parm_target[parm_t_id] = NULL;
+				clear_parm(parm_target);
+				db_clear(parm->dwa);
+				parm->dwa = NULL;
+			}
+			else
+			{
+				parm->use_dwa_after_sign = out > 0;
+				parm->use_dwa_verifying = in > 0;
+			}
 		}
 	}
 
@@ -388,7 +392,7 @@ static void collect_stats(dkimfl_parm *parm, char const *start)
 	{
 		// trim left
 		int ch;
-		while ((ch = *(unsigned char const*)s) != 0 && !isspace(ch))
+		while ((ch = *(unsigned char const*)s) != 0 && isspace(ch))
 			++s;
 
 		if (ch)
@@ -2967,7 +2971,7 @@ static fl_init_parm functions =
 
 int main(int argc, char *argv[])
 {
-	int rtc = 0, i;
+	int rtc = 0, i, no_db = 0;
 	char *config_file = NULL;
 
 	for (i = 1; i < argc; ++i)
@@ -2977,6 +2981,10 @@ int main(int argc, char *argv[])
 		if (strcmp(arg, "-f") == 0)
 		{
 			config_file = ++i < argc ? argv[i] : NULL;
+		}
+		else if (strcmp(arg, "--no-db") == 0)
+		{
+			no_db = 1;
 		}
 		else if (strcmp(arg, "--version") == 0)
 		{
@@ -3005,6 +3013,7 @@ int main(int argc, char *argv[])
 			printf("zdkimfilter command line args:\n"
 			/*  12345678901234567890123456 */
 				"  -f config-filename      override %s\n"
+				"  --no-db                 omit database processing\n"
 				"  --help                  print this stuff and exit\n"
 				"  --version               print version string and exit\n",
 					default_config_file);
@@ -3018,7 +3027,7 @@ int main(int argc, char *argv[])
 	dkimfl_parm parm;
 	memset(&parm, 0, sizeof parm);
 	// parm.fl = fl;
-	if (parm_config(&parm, config_file))
+	if (parm_config(&parm, config_file, no_db))
 	{
 		rtc = 2;
 		fl_report(LOG_ERR, "Unable to read config file");

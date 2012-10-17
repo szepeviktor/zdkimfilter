@@ -69,6 +69,17 @@ m4_define([ZF_SIGSENDER],
 	 zd6a1TVrz5nYJU3fF6QW7lLPtAcg2v05+UE38Ios=
 ])
 
+m4_define([ZF_SIGSENDER2],
+[DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=sender.example; s=x2;
+	t=1350490237; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301;
+	h=Message-ID:Date:From:MIME-Version:To:Subject:Content-Type:
+	 Content-Transfer-Encoding;
+	b=mDCtHhur76zwYTOuYoKaBF7WUbx6STaV2hiDSrF1rnGsIwShaopm1gHymPcr9ykHG
+	 ilz/gCrdtNlr7SbKfI3z2j7ipXjwMwCrEV8ZkV83r1H5gELVmw+0k1QwUeOkZIPB3Z
+	 I1yQbxcXWma6Wq45J0bEscYqHrS2FMHWcb0BXhCs=
+])
+
 m4_define([ZF_SIGOTHER],
 [DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=other.example; s=x3;
 	t=1267197617; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
@@ -111,7 +122,7 @@ Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
 Received-SPF: pass SPF=HELO sender=server.sender.example;
 Authentication-Results: (with a (nested) comment) mail.example.com; none
 $2Received: from mail.example.com by server.example with ESMTPA
-$3][ZF_MESSAGE_BODY])
+$3$4][ZF_MESSAGE_BODY])
 
 # message with up to 3 signatures and SPF none
 m4_define([ZF_MESSAGE_NOSPF],
@@ -664,6 +675,10 @@ head -n 4 mail, 0,
 ], [])
 AT_CLEANUP
 
+# test only valid with opendbx
+m4_define([ZF_REQUIRE_OPENDBX], [AT_CHECK([$HAVE_OPENDBX || exit 77])])
+
+
 AT_SETUP([Whitelisted but not authenticated From: domain])
 ZF_CONFIG(3, [reject_on_nxdomain
 save_from_anyway
@@ -686,6 +701,7 @@ ZF_RUN,
 ],
 [INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, no VBR and no whitelist
 ])
+ZF_REQUIRE_OPENDBX
 AT_CHECK(
 grep 'domain: author.example' database_dump, 0,
 [domain: author.example
@@ -1261,13 +1277,16 @@ ZF_DATA_DYN([ZF_MESSAGE_DYN([another.example],
 ZF_EXPECT([example.com])
 AT_CLEANUP
 
-# ZF_SIGREPORT(configlines)
+# ZF_SIGREPORT(configlines, alt-message)
 m4_define([ZF_SIGREPORT],
 [ZF_KEYFILE([author.example X
 ])
 ZF_CONFIG(2, [no_reputation
+db_backend test
+db_sql_insert_message dummy
 $1])
-AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_DATA([mail],
+	[m4_default([$2], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])])
 AT_DATA([ctl], [Mverifymsg
 usmtp
 ])
@@ -1363,6 +1382,34 @@ DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
 ], [])
 AT_CLEANUP
 
+#
+AT_SETUP([Report all sigs with header.b])
+ZF_SIGREPORT([trusted_vouchers sender-cert.example
+report_all_sigs
+], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER, ZF_SIGSENDER2)])
+AT_CHECK(
+head -n 10 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim=pass (vbr) header.i=@sender.example
+    header.b=d6AyU6LW;
+  dkim=pass (vbr) header.i=@sender.example
+    header.b=mDCtHhur;
+  dkim=pass header.i=@other.example;
+  vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'vbr_mv: ' database_dump, 0,
+[vbr_mv: sender-cert.example
+vbr_mv: sender-cert.example
+vbr_mv: sender-cert.example
+vbr_mv: sender-cert.example
+],[])
+AT_CLEANUP
+
 AT_SETUP([Reject too many signatures])
 ZF_KEYFILE([author.example X
 ])
@@ -1435,4 +1482,43 @@ AT_CHECK(
 [redact -f zftest.conf --decode Xr@LC], 0, [user
 ], [])
 AT_CLEANUP
+
+#
+AT_SETUP([Retrieve target domains])
+ZF_CONFIG(6, [no_reputation
+default_domain example.com
+db_backend test
+db_sql_select_target dummy
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+rsomeone@example.org
+rmyself@example.com
+rsomeone-else@example.org
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'example.org' database_dump, 0,
+[domain: example.org
+domain: example.org
+domain: example.org
+domain: example.org
+],[])
+AT_CLEANUP
+
 

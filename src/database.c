@@ -384,11 +384,12 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 			*in = count;
 		count = 0;
 
-		const var_flag_t outgoing_variables = common_variables |
-			1 << local_part_variable | 1 << domain_variable;
+		const var_flag_t outgoing_variables =
+			common_variables | 1 << domain_variable;
 
 		// $(domain) is the local domain when selecting the user
-		STMT_ALLOC(db_sql_select_user, outgoing_variables);
+		STMT_ALLOC(db_sql_select_user,
+			outgoing_variables | 1 << local_part_variable);
 
 		const var_flag_t target_variables = outgoing_variables |
 			1 << user_ref_variable;
@@ -472,9 +473,7 @@ static int dump_vars(db_work_area* dwa, stmt_id sid, var_flag_t bitflag)
 		var_flag_t mask = 1, bit;
 		for (bit = bitflag; bit; bit &= ~mask, mask <<= 1, ++id)
 		{
-			assert((bitflag & mask) == 0 || dwa->var[id] != NULL);
-
-			if (bitflag & mask)
+			if ((bitflag & mask) != 0 && dwa->var[id] != NULL)
 				fprintf(fp, "%s: %s\n", variable_name[id], dwa->var[id]);
 		}
 		fputc('\n', fp);
@@ -489,7 +488,7 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 * Build a statement assembling snippets and arguments, then run it.
 * count is the number of pairs of arguments that follow.
 *
-* Whitelits queries should just return a numeric result within [-1000, 1000]
+* Whitelist queries should just return a numeric result within [-1000, 1000]
 *
 * After inserting a message, or after querying or inserting domain, a reference
 * variable can be returned.  Those queries must be conceived so as to return a
@@ -522,11 +521,12 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 	var_flag_t mask = 1, bit;
 	for (bit = bitflag; bit; bit &= ~mask, mask <<= 1, ++id)
 	{
-		assert((bitflag & mask) == 0 || dwa->var[id] != NULL);
+		if (dwa->var[id] == NULL)
+			bitflag &= ~mask;
 
 		// arglen[id] remains 0 for variables that are not actually given,
 		// albeit allowed and used.  They are replaced with an empty string.
-		if (bitflag & mask)
+		else if (bitflag & mask)
 		{
 			int const use = var_is_used(&stmt->flags, id);
 			if (use)
