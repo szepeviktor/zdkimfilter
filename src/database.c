@@ -49,7 +49,9 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #include <assert.h>
 
 static logfun_t do_report = &syslog;
-
+#if defined TEST_MAIN
+static int verbose = 0;
+#endif
 
 #if defined HAVE_OPENDBX
 /*
@@ -103,9 +105,11 @@ static const char * const variable_name[] =
 // rest: number of uses in a statement (max 127 times)
 typedef struct flags_var
 {
+	stmt_id sid;
 	unsigned char var[FLAG_VAR_SIZE];
 } flags_var;
 
+static inline stmt_id var_stmt_id(flags_var const *flags) { return flags->sid; }
 static inline int var_is_allowed(flags_var const *flags, variable_id id)
 { return (flags->var[id] & 0x80U) != 0; }
 static inline int var_is_used(flags_var const *flags, variable_id id)
@@ -119,9 +123,10 @@ typedef int
 compile_time_check_that_FLAG_VAR_SIZE_lt_32[FLAG_VAR_SIZE < 32? 1: -1];
 typedef uint32_t var_flag_t;
 
-static void set_var_allowed(flags_var *flags, var_flag_t bitflag)
+static void set_var_allowed(flags_var *flags, var_flag_t bitflag, stmt_id sid)
 {
-	memset(flags, 0, DB_SQL_VAR_SIZE);
+	memset(flags, 0, sizeof *flags);
+	flags->sid = sid;
 	variable_id id = 0;
 	var_flag_t mask = 1;
 	for (; bitflag; bitflag &= ~mask, mask <<= 1, ++id)
@@ -165,9 +170,14 @@ search_var(char *p, flags_var *flags, char **q, size_t *sz, stmt_part *part)
 
 		if (id >= DB_SQL_VAR_SIZE || !var_is_allowed(flags, id))
 		{
-			(*do_report)(LOG_ERR,
-				"Malformed or invalid variable near: %.*s",
-					(int)(e - p), p);
+			if (id >= DB_SQL_VAR_SIZE)
+				(*do_report)(LOG_ERR,
+					"Malformed or unknown variable near: %.*s",
+						(int)(e - p), p);
+			else
+				(*do_report)(LOG_ERR,
+					"Variable %s cannot be used in %s",
+						variable_name[id], stmt_name[var_stmt_id(flags)]);
 			return -1;
 		}
 
@@ -345,7 +355,7 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 #define STMT_ALLOC(STMT, BITFLAG) \
 		if (dwa->z.STMT) { ++count; \
 			flags_var flags; \
-			set_var_allowed(&flags, BITFLAG); \
+			set_var_allowed(&flags, BITFLAG, STMT); \
 			if ((dwa->stmt[STMT] = stmt_alloc(&flags, dwa->z.STMT)) == NULL) \
 				fatal = -1; \
 		} else (void)0
@@ -498,20 +508,27 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 * with an empty string when used.
 *
 * Return 1 if a result is found (and returned in any of wantchar and wantint),
-* 0 if no result was found.  If an error is found (and logged)
-* return OTHER_ERROR.
+* 0 if no result was found or if the statement is not defined.
+* If an error is found (and logged) return OTHER_ERROR.
 */
 {
 	assert(dwa);
 	assert(sid < total_statements);
 
+	stmt_compose const *const stmt = dwa->stmt[sid];
+	if (stmt == NULL)
+		return 0;
+
 	if (dwa->is_test)
 		return dump_vars(dwa, sid, bitflag);
 
 	odbx_t *const handle = dwa->handle;
-	stmt_compose const *const stmt = dwa->stmt[sid];
-	if (handle == NULL || stmt == NULL || clear_pending_result(dwa))
+	if (handle == NULL || clear_pending_result(dwa))
+	{
+		if (handle == NULL)
+			(*do_report)(LOG_CRIT, "Internal error: not connected");
 		return OTHER_ERROR;
+	}
 
 	size_t arglen[DB_SQL_VAR_SIZE];
 	memset(arglen, 0, sizeof arglen);
@@ -618,8 +635,9 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 
 		int err = odbx_result(handle, &result, &timeout, 0 /* chunk */);
 #if defined TEST_MAIN
-		(*do_report)(LOG_DEBUG, "part #%d: rc=%d, result=%sNULL",
-			r_set, err, result == NULL? "": "non-");
+		if (verbose > 2)
+			(*do_report)(LOG_DEBUG, "part #%d: rc=%d, result=%sNULL",
+				r_set, err, result == NULL? "": "non-");
 #endif
 
 		if (err == ODBX_RES_DONE)
@@ -628,10 +646,17 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 		if (err == ODBX_RES_NOROWS)
 		{
 			uint64_t rows = odbx_rows_affected(result);
+#if defined TEST_MAIN
+			if (verbose > 2)
+				(*do_report)(rows > 1? LOG_WARNING: LOG_DEBUG,
+					"part #%d of the query affected %ld rows",
+						r_set, rows);
+#else
 			if (rows > 1)
 				(*do_report)(LOG_WARNING,
 					"part #%d of the query affected %ld rows (query: %s)",
 						r_set, rows, sql);
+#endif
 			odbx_result_finish(result);
 		}
 
@@ -663,14 +688,17 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 							else
 							{
 								*wantint = *field != 0;
+#if !defined TEST_MAIN
 								(*do_report)(LOG_WARNING,
 									"part #%d of the query returned a non-number %s"
 									" converted to %d (query: %s)",
 									r_set, field, *wantint, sql);
+#endif
 							}
 						}
 #if defined TEST_MAIN
-						(*do_report)(LOG_DEBUG, "row#%ld: %s", seen, field);
+						if (verbose)
+							(*do_report)(LOG_DEBUG, "row#%ld: %s", seen, field);
 #endif
 					}
 				}
@@ -1196,7 +1224,7 @@ out_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 	bitflag |= 1 << local_part_variable | 1 << domain_variable;
 	dwa->var[domain_variable] = dwa->user_domain;
 	char *var = NULL;
-	int rc = stmt_run(dwa, db_sql_select_user, bitflag, &var, NULL);
+	stmt_run(dwa, db_sql_select_user, bitflag, &var, NULL);
 
 	if ((dwa->var[user_ref_variable] = var) != NULL)
 		bitflag |= 1 << user_ref_variable;
@@ -1220,7 +1248,8 @@ out_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 
 			int selected = 1;
 			char *domain_ref = NULL;
-			rc = stmt_run(dwa, db_sql_select_target, bitflag, &domain_ref, NULL);
+			int rc =
+				stmt_run(dwa, db_sql_select_target, bitflag, &domain_ref, NULL);
 			if (rc < 0)
 				continue;
 
@@ -1386,6 +1415,85 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 
 #if defined TEST_MAIN
 
+// the probability that rand() > RAND_MAX/2 is 50%, etcetera.
+#define PERC_50 (RAND_MAX/2)
+#define PERC_90 (RAND_MAX/10)
+#define PERC_10 (RAND_MAX - RAND_MAX/10)
+#define PERC_20 (RAND_MAX - RAND_MAX/5)
+
+#include <unistd.h>
+static void autoarg(db_work_area *dwa, stats_info *stats, int i)
+{
+	char buf[100];
+	switch(i)
+	{
+		case 1:
+		{
+			if (stats->outgoing)
+			{
+				db_set_authenticated_user(dwa, "user",
+					rand() > PERC_50? "user.example" : NULL);
+			}
+			else
+			{
+				sprintf(buf, "192.0.2.%d", (int)(rand() & 255));
+				db_set_client_ip(dwa, buf);
+			}
+
+			break;
+		}
+		case 2:
+		{
+			struct tm tm;
+			time_t snd = time(NULL) - drand48()*1800;
+			localtime_r(&snd, &tm);
+			strftime(buf, sizeof buf, "%a, %d %b %Y %T %z", &tm);
+			stats->date = strdup(buf);
+			break;
+		}
+		case 3:
+		{
+			sprintf(buf, "<%x@example.com>", rand());
+			stats->message_id = strdup(buf);
+			break;
+		}
+		case 4:
+		{
+			char *ct = rand() > PERC_50? "text/plain": "multipart/mixed";
+			stats->content_type = strdup(ct);
+			break;
+		}
+		case 5:
+		{
+			if (stats->content_type != NULL &&
+				strstr(stats->content_type, "ultipa") == 0)
+					stats->content_encoding = strdup(rand() > PERC_50? "7bit": "8bit");
+			break;
+		}
+		case 6:
+		{
+			stats->received_count = 2 + (int)(4.0 * drand48());
+			break;
+		}
+		case 7:
+		{
+			stats->signatures_count = 3;
+			break;
+		}
+		case 8:
+		{
+			stats->mailing_list = rand() > PERC_50? 1: 0;
+			break;
+		}
+		case 9:
+		{
+			sprintf(buf, "%x.%lx.%x", rand(), time(NULL), getpid());
+			stats->ino_mtime_pid = strdup(buf);
+			break;
+		}
+	}
+}
+
 int main(int argc, char*argv[])
 {
 	size_t maxarglen = strlen(argv[0]);
@@ -1406,9 +1514,24 @@ int main(int argc, char*argv[])
 		if (arg[0] != '-')
 			continue;
 
-		if (strcmp(arg, "-f") == 0)
+		if (arg[1] != '-')
 		{
-			config_file = ++i < argc ? argv[i] : NULL;
+			for (char const *o = &arg[1]; *o != 0; ++o)
+			{
+				if (*o == 'f')
+				{
+					config_file = ++i < argc ? argv[i] : NULL;
+				}
+				else if (*o == 'v')
+				{
+					++verbose;
+				}
+				else
+				{
+					printf("Invalid short option %c in %s\n", *o, arg);
+					break;
+				}
+			}	
 		}
 		else if (strcmp(arg, "--config") == 0)
 		{
@@ -1426,22 +1549,35 @@ int main(int argc, char*argv[])
 		}
 		else if (strcmp(arg, "--help") == 0)
 		{
-			printf("TESTdb command line args:\n"
-				"  -f config-filename      override %s\n"
-				"  --config                report configuration\n"
-				"  --help                  print this stuff and exit\n"
-				"  --version               print version string and exit\n"
-				"  --db-sql-whitelisted    query remaining args\n"
-				"  --set-stats             insert new message\n"
-				"  --set-stats-domain      domains who sent the message\n"
-				"For set-stats, the following arguments are expected:\n"
-				" \"I\"/\"O\", ino.mtime.pid, date, message_id, content_type,\n"
-				" content_encoding, received_count, signatures_count,\n"
-				" mailing_list, and either ip or user, domain.\n"
-				"The domains must be given one per argument, using commas to\n"
-				"separate the tokens, which are the domain name, followed by\n"
-				"any of: author, spf, dkim, vbr\n",
-					default_config_file);
+			printf("zfilter_db is for testing / querying the db configuration.\n"
+			"\n"
+			"Command line args:\n"
+			"\n"
+			"  -v                                   increase verbosity\n"
+			"  -f config-filename                   override %s\n"
+			"  --config                             report configuration\n"
+			"  --help                               print this and exit\n"
+			"  --version                            print version string and exit\n"
+			"  --db-sql-whitelisted domain ...      query domains\n"
+			"  --set-stats <d>[@ | msg data]        insert new data (see below)\n"
+			" [--set-stats-domain] domain[,key] ... domains related to the message\n"
+			"\n"
+			"For set-stats, the <d> (direction) must be either I (incoming) or\n"
+			"O (outgoing).  If it is immediately followed by @, then message\n"
+			"data and domains' keys are automatically generated at random.\n"
+			"Otherwise some of the following nine arguments are expected:\n"
+			"\n"
+			"  either ip or user@domain, date, message_id, content_type,\n"
+			"  content_encoding, received_count, signatures_count,\n"
+			"  mailing_list, and ino.mtime.pid.\n"
+			"\n"
+			"The set-stats-domain option marks the end of message data and the\n"
+			"beginning of the domain list.  It is not necessary when using @.\n"
+			"Domains must be given one per argument, using commas to separate\n"
+			"the tokens, which are the domain name, followed by any of the keys:\n"
+			"author, spf_helo, spf, dkim, vbr.  If using @, keys are generated at\n"
+			"random, provided no comma appear at the end of the domain name.\n",
+				default_config_file);
 			return 0;
 		}
 		else if (strcmp(arg, "--db-sql-whitelisted") == 0)
@@ -1485,101 +1621,148 @@ int main(int argc, char*argv[])
 	{
 		stats_info stats;
 		memset(&stats, 0, sizeof stats);
-		stats.domain_head = calloc(argc, sizeof(domain_prescreen) + maxarglen + 1);
+
 		for (int i = query_whitelisted; i < argc; ++i)
 		{
 			if (argv[i][0] == '-')
 				break;
 			printf("%s: %d\n", argv[i], db_is_whitelisted(dwa, argv[i]));
 		}
-		if (stats.domain_head)
+
+		if (set_stats < argc)
 		{
-			int m = 0;
+			unsigned char const dir = toupper((unsigned char)argv[set_stats][0]);
+			unsigned char const atauto = argv[set_stats][1];
+			
+			if (atauto != 0 && atauto != '@' || strchr("IO", dir) == NULL)
+			{
+				printf("invalid set-stats argument: %s\n", argv[set_stats]);
+			}
+			else
+			{
+				int auto_from = 99; // to be determined
+				stats.outgoing = dir == 'O';
+				if (atauto)
+				{
+					if (set_stats_domain >= argc)
+					{
+						set_stats_domain = set_stats + 1;
+						auto_from = 1;
+					}
+
+					srand((unsigned int)time(NULL));
+				}
+
+				if (auto_from > 9)
+				{
+					for (int i = set_stats + 1; i < argc; ++i)
+					{
+						auto_from = i - set_stats;
+
+						char *arg = argv[i];
+						if (arg[0] == '-')
+							break;
+
+						if (arg[0] == 0)
+							continue;
+
+						if (arg[0] == '@' && arg[1] == '0')
+						{
+							autoarg(dwa, &stats, auto_from);
+							continue;
+						}
+
+						switch(auto_from)
+						{
+							case 1:
+							{
+								if (stats.outgoing)
+								{
+									char *at = strchr(arg + 1, '@');
+									char *u_dom = at? at + 1: NULL;
+									if (at) *at = 0;
+									db_set_authenticated_user(dwa, arg, u_dom);
+									if (at) *at = '@';
+								}
+								else
+									db_set_client_ip(dwa, arg);
+
+								break;
+							}
+							case 2: stats.date = strdup(arg); break;
+							case 3: stats.message_id = strdup(arg); break;
+							case 4: stats.content_type = strdup(arg); break;
+							case 5: stats.content_encoding = strdup(arg); break;
+							case 6: stats.received_count = atoi(arg); break;
+							case 7: stats.signatures_count = atoi(arg); break;
+							case 8: stats.mailing_list = atoi(arg); break;
+							case 9: stats.ino_mtime_pid = strdup(arg); break;
+							default:
+								printf("extra set-stats argument \"%s\" ignored\n", arg);
+								break;
+						}
+					}
+				}
+
+				for (int i = auto_from; i <= 9; ++i)
+					autoarg(dwa, &stats, i);
+			}
+
+			domain_prescreen **pdps = &stats.domain_head;
+			size_t prelength = sizeof(domain_prescreen) + maxarglen + 1;
 			for (int i = set_stats_domain; i < argc; ++i)
 			{
 				char *arg = argv[i];
 				if (arg[0] == '-')
 					break;
 
-				strcpy(stats.domain_head[m].name, arg);
-				char *comma = strchr(stats.domain_head[m].name, ',');
-				if (comma)
-					*comma = 0;
+				domain_prescreen *dps = *pdps = calloc(1, prelength);
+				if (dps == NULL)
+					break;
 
-				while ((arg = strchr(arg, ',')) != NULL)
+				pdps = &dps->next;
+				strcpy(dps->name, strtok(arg, ","));
+
+				int m = 0;
+				while ((arg = strtok(NULL, ",")) != NULL)
 				{
-					*arg++ = 0;
-					if (strncmp(arg, "author", 6) == 0)
-						stats.domain_head[m].u.f.is_from = 1;
-					else if (strncmp(arg, "spf", 3) == 0)
-						stats.domain_head[m].u.f.is_mfrom = 1;
-					else if (strncmp(arg, "spf_helo", 8) == 0)
-						stats.domain_head[m].u.f.is_helo = 1;
-					else if (strncmp(arg, "dkim", 4) == 0)
-						stats.domain_head[m].u.f.sig_is_ok = 1;
-					else if (strncmp(arg, "vbr", 3) == 0)
+					++m;
+					if (strcmp(arg, "author") == 0)
+						dps->u.f.is_from = 1;
+					else if (strcmp(arg, "spf") == 0)
+						dps->u.f.is_mfrom = 1;
+					else if (strcmp(arg, "spf_helo") == 0)
+						dps->u.f.is_helo = 1;
+					else if (strcmp(arg, "dkim") == 0)
+						dps->u.f.sig_is_ok = 1;
+					else if (strcmp(arg, "vbr") == 0)
 					{
-						stats.domain_head[m].u.f.vbr_is_ok = 1;
-						stats.domain_head[m].vbr_mv = "the_trusted_voucher.example";
+						dps->u.f.vbr_is_ok = 1;
+						dps->vbr_mv = "the_trusted_voucher.example";
 					}
 					else if (*arg)
-						printf("invalid domain token \"%s\"\n", arg);
+						printf("invalid domain token \"%s\" for %s\n", arg, dps->name);
 				}
-				stats.domain_head[m].next = &stats.domain_head[m+1];
-				++m;
-			}
 
-			if (m > 0)
-				stats.domain_head[m-1].next = NULL;
-
-			int n = 0;
-			char *arg9 = NULL;
-			char *arg10 = NULL;
-			for (int i = set_stats; i < argc; ++i)
-			{
-				char *arg = argv[i];
-				if (arg[0] == '-')
-					break;
-				if (arg[0] == 0)
-					continue;
-
-				switch(i - set_stats)
+				if (atauto && m == 0)
 				{
-					case 0:
-					{
-						if (strcasecmp(arg, "I") == 0)
-							stats.outgoing = 0;
-						else if (strcasecmp(arg, "O") == 0)
-							stats.outgoing = 1;
-						else
-							printf("I/O must be I or O, not %s\n", arg);
-						break;
-					}
-					case 1: stats.ino_mtime_pid = arg; break;
-					case 2: stats.date = strdup(arg); break;
-					case 3: stats.message_id = strdup(arg); break;
-					case 4: stats.content_type = strdup(arg); break;
-					case 5: stats.content_encoding = strdup(arg); break;
-					case 6: stats.received_count = atoi(arg); break;
-					case 7: stats.signatures_count = atoi(arg); break;
-					case 8: stats.mailing_list = atoi(arg); break;
-					case 9: arg9 = arg; break;
-					case 10: arg10 = arg; break;
-					default:
-						printf("extra set-stats argument \"%s\" ignored\n", arg);
-						break;
+					dps->u.f.is_from = rand() >
+						(i == set_stats_domain? PERC_90: PERC_10);
+					dps->u.f.is_mfrom = rand() > PERC_20;
+					dps->u.f.is_helo = dps->u.f.is_mfrom && rand() > PERC_20;
+					dps->u.f.sig_is_ok = rand() > PERC_20;
 				}
-				++n;
 			}
-			if (n && m && stats.domain_head)
+
+			db_set_stats_info(dwa, &stats);
+
+			free(stats.ino_mtime_pid);
+			for (domain_prescreen *dps = stats.domain_head; dps;)
 			{
-				if (stats.outgoing)
-					db_set_authenticated_user(dwa, arg9, arg10);
-				else
-					db_set_client_ip(dwa, arg9);
-				db_set_stats_info(dwa, &stats);
+				domain_prescreen *next = dps->next;
+				free(dps);
+				dps = next;
 			}
-			free(stats.domain_head);
 		}
 	}
 

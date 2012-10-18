@@ -358,6 +358,41 @@ static void clear_prescreen(domain_prescreen* dps)
 	}
 }
 
+static domain_prescreen*
+get_prescreen(domain_prescreen** dps_head, char const *domain)
+{
+	assert(dps_head);
+	assert(domain);
+
+	domain_prescreen**dps = dps_head;
+	while (*dps != NULL)
+	{
+		int const cmp = stricmp(domain, (*dps)->name);
+		if (cmp < 0)
+		{
+			dps = &(*dps)->next;
+			continue;
+		}
+		if (cmp == 0)
+			return *dps;
+
+		break;
+	}
+
+	size_t const len = sizeof(domain_prescreen);
+	size_t const len2 = strlen(domain) + 1;
+	domain_prescreen *new_dps = malloc(len + len2);
+	if (new_dps)
+	{
+		memset(new_dps, 0, len);
+		new_dps->next = *dps;
+		*dps = new_dps;
+		memcpy(&new_dps->name[0], domain, len2);
+	}
+
+	return new_dps;
+}
+
 static void clean_stats(dkimfl_parm *parm)
 {
 	assert(parm);
@@ -454,41 +489,6 @@ static void collect_stats(dkimfl_parm *parm, char const *start)
 	
 	else if (hdrval(start, "Mailing-List"))
 		parm->dyn.stats->mailing_list = 1;
-}
-
-static domain_prescreen*
-get_prescreen(domain_prescreen** dps_head, char const *domain)
-{
-	assert(dps_head);
-	assert(domain);
-
-	domain_prescreen**dps = dps_head;
-	while (*dps != NULL)
-	{
-		int const cmp = stricmp(domain, (*dps)->name);
-		if (cmp < 0)
-		{
-			dps = &(*dps)->next;
-			continue;
-		}
-		if (cmp == 0)
-			return *dps;
-
-		break;
-	}
-
-	size_t const len = sizeof(domain_prescreen);
-	size_t const len2 = strlen(domain) + 1;
-	domain_prescreen *new_dps = malloc(len + len2);
-	if (new_dps)
-	{
-		memset(new_dps, 0, len);
-		new_dps->next = *dps;
-		*dps = new_dps;
-		memcpy(&new_dps->name[0], domain, len2);
-	}
-
-	return new_dps;
 }
 
 // outgoing

@@ -22,15 +22,12 @@ dkimsign_SOURCES = dkimsign.c parm.c parm.h
 redact_SOURCES = redact.c parm.c
 redact_CPPFLAGS = -DMAIN
 redact_LDADD = @NETTLE_LIB@
-zfilter_db_SOURCES = zfilter_db.c database.c ip_to_hex.c parm.c
-zfilter_db_CPPFLAGS = @OPENDBX_CFLAGS@
+zfilter_db_SOURCES = database.c ip_to_hex.c parm.c
+zfilter_db_CPPFLAGS = @OPENDBX_CFLAGS@ -DTEST_MAIN
 zfilter_db_LDADD = @OPENDBX_LIB@
 
-check_PROGRAMS = TESTmyvbr TESTdb
+check_PROGRAMS = TESTmyvbr
 TESTmyvbr_SOURCES = myvbr.c myvbr.h
 TESTmyvbr_CPPFLAGS = -DTEST_MAIN
 TESTmyvbr_LDADD = @RESOLVER_LIB@
-TESTdb_SOURCES = database.c ip_to_hex.c parm.c
-TESTdb_CPPFLAGS = -DTEST_MAIN
-TESTdb_LDADD = @OPENDBX_LIB@
 
