@@ -321,7 +321,7 @@ void db_clear(db_work_area* dwa)
 
 db_work_area *db_init(void)
 /*
-* this must be the first function called.  Parse SQL statements.
+* this must be the first function called.  Do config_default as well.
 */
 {
 	do_report = set_parm_logfun(NULL);  // use that logging function
@@ -341,7 +341,8 @@ db_work_area *db_init(void)
 
 int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 /*
-* set the counters to the total number of db_sql_* statements configured
+* Parse SQL statements.
+* Set the counters to the total number of db_sql_* statements configured
 * for incoming (verified) and outgoing (signed) messages.
 * return 0 if ok, -1 for fatal error;
 */
@@ -356,8 +357,9 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 		if (dwa->z.STMT) { ++count; \
 			flags_var flags; \
 			set_var_allowed(&flags, BITFLAG, STMT); \
-			if ((dwa->stmt[STMT] = stmt_alloc(&flags, dwa->z.STMT)) == NULL) \
-				fatal = -1; \
+			if (dwa->z.STMT != NULL && *dwa->z.STMT != 0 && \
+				(dwa->stmt[STMT] = stmt_alloc(&flags, dwa->z.STMT)) == NULL) \
+					fatal = -1; \
 		} else (void)0
 
 		STMT_ALLOC(db_sql_whitelisted,
@@ -378,7 +380,8 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 
 		const var_flag_t domain_variables = message_variables |
 			1 << domain_variable | 1 << auth_type_variable |
-			1 << vbr_mv_variable | 1 << vbr_response_variable;
+			1 << vbr_mv_variable | 1 << vbr_response_variable |
+			1 << reputation_variable;
 
 		STMT_ALLOC(db_sql_select_domain, domain_variables);
 
@@ -404,7 +407,7 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 		const var_flag_t target_variables = outgoing_variables |
 			1 << user_ref_variable;
 
-		// $(domain) is the target domain when selecting the domain
+		// $(domain) is the target domain when selecting the target domain
 		STMT_ALLOC(db_sql_select_target, target_variables);
 
 		STMT_ALLOC(db_sql_insert_target, target_variables);
@@ -1136,9 +1139,9 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 	*/
 	if (rc >= 0 && info->domain_head != NULL)
 	{
-		// author,spf,spf_helo,dkim,vbr
-		// 1234567890123456789012345678
-		char authbuf[32];
+		// author,spf,spf_helo,dkim,vbr,rep,rep_s
+		// 12345678901234567890123456789012345678
+		char authbuf[40];
 		dwa->var[auth_type_variable] = authbuf;
 		var_flag_t bit2 = 1 << auth_type_variable | 1 << domain_variable;
 		bitflag |= bit2;
@@ -1152,6 +1155,11 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 		}
 		zeroflag |= vbr_bit;
 
+		// reputation (usually 0) available for domain and message_ref
+		bit2 = 1 << reputation_variable;
+		bitflag |= bit2;
+		zeroflag |= bit2;
+		
 		// constant bit for the loop
 		bit2 = 1 << domain_ref_variable;
 
@@ -1176,6 +1184,14 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 			}
 			else
 				bitflag &= ~vbr_bit;
+			if (dps->u.f.is_reputed)
+				comma_copy(authbuf, "rep", &comma);
+			if (dps->u.f.is_reputed_signer)
+				comma_copy(authbuf, "rep_s", &comma);
+
+			char rep_buf[8*sizeof(int)/3 + 3];
+			sprintf(rep_buf, "%d", dps->reputation);
+			dwa->var[reputation_variable] = rep_buf;
 
 			dwa->var[domain_variable] = dps->name;
 			bitflag &= ~bit2;
@@ -1497,7 +1513,7 @@ static void autoarg(db_work_area *dwa, stats_info *stats, int i)
 int main(int argc, char*argv[])
 {
 	size_t maxarglen = strlen(argv[0]);
-	int rtc = 0, config = 0,
+	int rtc = 0, errs = 0, config = 0,
 		query_whitelisted = argc,
 		set_stats = argc,
 		set_stats_domain = argc;
@@ -1529,6 +1545,7 @@ int main(int argc, char*argv[])
 				else
 				{
 					printf("Invalid short option %c in %s\n", *o, arg);
+					++errs;
 					break;
 				}
 			}	
@@ -1592,7 +1609,15 @@ int main(int argc, char*argv[])
 		{
 			set_stats_domain = i + 1;
 		}
+		else
+		{
+			printf("Invalid option %s\n", arg);
+			++errs;
+		}
 	}
+	if (errs)
+		return 1;
+
 	set_parm_logfun(&stderrlog);
 	db_work_area *dwa = db_init();
 	if (dwa == NULL)
@@ -1740,17 +1765,27 @@ int main(int argc, char*argv[])
 						dps->u.f.vbr_is_ok = 1;
 						dps->vbr_mv = "the_trusted_voucher.example";
 					}
+					else if (strcmp(arg, "rep") == 0)
+						dps->u.f.is_reputed = 1;
+					else if (strcmp(arg, "rep_s") == 0)
+						dps->u.f.is_reputed_signer = 1;
 					else if (*arg)
 						printf("invalid domain token \"%s\" for %s\n", arg, dps->name);
 				}
 
-				if (atauto && m == 0)
+				if (atauto && m == 0 && stats.outgoing == 0)
 				{
 					dps->u.f.is_from = rand() >
 						(i == set_stats_domain? PERC_90: PERC_10);
 					dps->u.f.is_mfrom = rand() > PERC_20;
 					dps->u.f.is_helo = dps->u.f.is_mfrom && rand() > PERC_20;
 					dps->u.f.sig_is_ok = rand() > PERC_20;
+					dps->u.f.is_reputed  = rand() > PERC_10;
+					if (dps->u.f.is_reputed)
+					{
+						dps->reputation = (rand() - RAND_MAX/2) / (RAND_MAX/1000);
+						dps->u.f.is_reputed_signer  = rand() > PERC_90;
+					}
 				}
 			}
 

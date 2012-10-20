@@ -67,10 +67,14 @@ logfun_t set_parm_logfun(logfun_t new_report)
 	return rt;
 }
 
+#if !defined LOG_PRIMASK
+#define LOG_PRIMASK \
+(LOG_EMERG|LOG_ALERT|LOG_CRIT|LOG_ERR|LOG_WARNING|LOG_NOTICE|LOG_INFO|LOG_DEBUG)
+#endif
 void stderrlog(int severity, char const* fmt, ...)
 {
 	char const *logmsg;
-	switch (severity)
+	switch (severity & LOG_PRIMASK)
 	{
 		case LOG_EMERG:
 		//	logmsg = "EMERG";
@@ -254,6 +258,7 @@ static config_conf const conf[] =
 	CONFIG(parm_t, no_reputation, "Y=skip reputation lookup", assign_char),
 	CONFIG(parm_t, reputation_fail, "high int", assign_int),
 	CONFIG(parm_t, reputation_pass, "low int", assign_int),
+	CONFIG(parm_t, reputation_root, "lookup host", assign_ptr),
 	CONFIG(parm_t, trusted_vouchers, "space-separated, no colon", assign_array),
 	CONFIG(parm_t, dns_timeout, "secs", assign_int),
 

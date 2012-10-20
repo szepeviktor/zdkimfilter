@@ -115,7 +115,7 @@ Note that to distinguish the sender we need a valid
 SPF record. We relay on Courier's SPF checking for that.
 ])
 
-# message with up to 3 signatures and SPF pass
+# message with up to 4 signatures and SPF pass
 m4_define([ZF_MESSAGE],
 [$1Received: from server.example by test.example with ESMTP
 Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
@@ -181,6 +181,7 @@ reject_on_nxdomain       = N (Y=procrustean ADSP)
 no_reputation            = N (Y=skip reputation lookup)
 reputation_fail          = 32767 (high int)
 reputation_pass          = -32768 (low int)
+reputation_root          = host.dkim-reputation.example (lookup host)
 trusted_vouchers         = NULL (space-separated, no colon)
 dns_timeout              = 0 (secs)
 ])
@@ -195,7 +196,8 @@ m4_define([ZF_REQUIRE_22], [AT_CHECK([$HAVE_LIBOPENDKIM_220 || exit 77])])
 
 #
 AT_SETUP([test default parameters])
-ZF_CONFIG(0)
+ZF_CONFIG(0, [reputation_root host.dkim-reputation.example
+])
 ZF_BATCH([test1])
 AT_CHECK(
 ZF_RUN,
@@ -222,8 +224,8 @@ AT_CLEANUP
 
 #
 AT_SETUP([test backslash for parameter line continuation])
-ZF_CONFIG(0,
-[default_domain should be a domain name, but here we use it to test that\
+ZF_CONFIG(0, [reputation_root host.dkim-reputation.example
+default_domain should be a domain name, but here we use it to test that\
 a rather lengthy string can be put into that variable. In facts, it is\
 just a string variable...])
 ZF_BATCH([test1])
@@ -684,6 +686,7 @@ ZF_CONFIG(3, [reject_on_nxdomain
 save_from_anyway
 db_backend test
 db_sql_whitelisted author.example:2
+db_sql_select_domain dummy
 ])
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctl], [Mfraudmsg
@@ -705,8 +708,6 @@ ZF_REQUIRE_OPENDBX
 AT_CHECK(
 grep 'domain: author.example' database_dump, 0,
 [domain: author.example
-domain: author.example
-domain: author.example
 domain: author.example
 ],[])
 AT_CLEANUP
@@ -1107,7 +1108,44 @@ author.example X
 ])
 AT_DATA([POLICYFILE], [dkim=unknown
 ])
-ZF_CONFIG(0)
+ZF_CONFIG(0, [db_backend test
+db_sql_insert_msg_ref dummy
+])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+AT_DATA([database_dump], [])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 not filtered.
+],
+[])
+AT_CHECK(
+head -n 1 mail, 0,
+[Received: from server.example by test.example with ESMTP
+], [])
+AT_CHECK([cat database_dump], 0, [], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Save From: even with no authentication])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=unknown
+author.example X
+])
+AT_DATA([POLICYFILE], [dkim=unknown
+])
+ZF_CONFIG(0, [db_backend test
+db_sql_insert_msg_ref dummy
+save_from_anyway
+])
 AT_DATA([mail], [ZF_MESSAGE_NOSPF])
 AT_DATA([ctl], [Mpolicymsg
 usmtp
@@ -1125,10 +1163,61 @@ ZF_RUN,
 ],
 [])
 AT_CHECK(
-head -n 1 mail, 0,
+[head -n 1 mail], 0,
 [Received: from server.example by test.example with ESMTP
 ], [])
+ZF_REQUIRE_OPENDBX
+AT_CHECK([grep 'domain: ' database_dump], 0,
+[domain: author.example
+], [])
 AT_CLEANUP
+
+
+#
+AT_SETUP([Cannot write unauthenticated msg w/o From:])
+ZF_CONFIG(0, [db_backend test
+db_sql_insert_msg_ref dummy
+save_from_anyway
+])
+AT_DATA([mail],
+[Received: from server.example by test.example with ESMTP
+Received-SPF: none SPF=MAILFROM sender=someone@sender.example;
+Received-SPF: none SPF=HELO sender=server.sender.example;
+Message-ID: <123456@author.example>
+Date: Mon, 08 Feb 2010 13:12:55 +0100
+VBR-Info: mc=all; md=author.example; mv=author-cert.example
+VBR-Info: mc=all; md=sender.example; mv=sender-cert.example
+MIME-Version: 1.0
+To: (undisclosed recipients)
+Subject: Message without From:
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+Cannot write this message on the DB, because it wouldn't be
+attached to any domain.  Perhaps we could attach it to the
+IP address, looking it up in some number-whois server...
+])
+AT_DATA([ctl], [Manonymousmsg
+usmtp
+])
+AT_DATA([database_dump], [])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 not filtered.
+],
+[])
+AT_CHECK(
+[head -n 1 mail], 0,
+[Received: from server.example by test.example with ESMTP
+], [])
+AT_CHECK([cat database_dump], 0, [], [])
+AT_CLEANUP
+
 
 # common setup for dynamic signing domain determination
 
@@ -1284,6 +1373,7 @@ m4_define([ZF_SIGREPORT],
 ZF_CONFIG(2, [no_reputation
 db_backend test
 db_sql_insert_message dummy
+db_sql_select_domain dummy
 $1])
 AT_DATA([mail],
 	[m4_default([$2], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])])
@@ -1405,8 +1495,6 @@ AT_CHECK(
 grep 'vbr_mv: ' database_dump, 0,
 [vbr_mv: sender-cert.example
 vbr_mv: sender-cert.example
-vbr_mv: sender-cert.example
-vbr_mv: sender-cert.example
 ],[])
 AT_CLEANUP
 
@@ -1459,7 +1547,7 @@ ZF_RUN,
 ],
 [])
 AT_CHECK(
-[sed -n '9,11p' mail], 0, m4_join([],
+[sed -n '/^Received: from test/,+2p' mail], 0, m4_join([],
 [Received: from test.example
  (whatever is going to be written here AUTH: method ],
  m4_ifval([$HAVE_NETTLE], [Xr@LC], []),
@@ -1516,9 +1604,15 @@ AT_CHECK(
 grep 'example.org' database_dump, 0,
 [domain: example.org
 domain: example.org
-domain: example.org
-domain: example.org
 ],[])
 AT_CLEANUP
 
+#
+AT_SETUP([Check dkimsign finds the right executable])
+ZF_CONFIG(3, [no_reputation
+default_domain example.com
+redact_received_auth using this secret text
+])
+AT_CHECK([dkimsign -f zftest.conf --version], 0, [ignore], [ignore])
+AT_CLEANUP
 

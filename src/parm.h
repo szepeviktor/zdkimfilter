@@ -43,6 +43,7 @@ typedef struct parm_t
 	char *tmp;
 	char *stats_file;
 	char *redact_received_auth;
+	char *reputation_root;
 	const char **sign_hfields;
 	const char **skip_hfields;
 	const char **key_choice_header;

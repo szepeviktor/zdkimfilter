@@ -45,6 +45,10 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #define DKIM_PRESULT_AUTHOR DKIM_PRESULT_FOUND
 #define HAVE_LIBOPENDKIM_22 22
 #endif
+#if HAVE_DKIM_REP_DKIM_REP_H
+#include <dkim-rep/dkim-rep.h>
+#endif
+
 #include <stddef.h>
 #include <time.h>
 #include <stdbool.h>
@@ -207,17 +211,39 @@ typedef struct dkimfl_parm
 } dkimfl_parm;
 
 static inline const u_char **
-cast_u_char_parm_array(const char **a) {return (const u_char **)a;}
+cast_const_u_char_parm_array(const char **a) {return (const u_char **)a;}
+
+static inline u_char **
+cast_u_char_parm_array(char **a) {return (u_char **)a;}
+
+static char const parm_z_domain_keys[] = COURIER_SYSCONF_INSTALL "/filters/keys";
+static char const parm_z_reputation_root[] =
+#if defined DKIM_REP_ROOT
+	DKIM_REP_ROOT;
+#elif defined DKIM_REP_DEFROOT
+	DKIM_REP_DEFROOT;
+#else
+	NULL;
+#endif
 
 static void config_default(dkimfl_parm *parm) // only non-zero...
 {
-	static char const keys[] = COURIER_SYSCONF_INSTALL "/filters/keys";
-	parm->z.domain_keys = (char*) keys; // won't be freed
+	parm->z.domain_keys = (char*)parm_z_domain_keys;
+	parm->z.reputation_root = (char*)parm_z_reputation_root;
 	parm->z.reputation_fail = 32767;
 	parm->z.reputation_pass = -32768;
 	parm->z.verbose = 3;
 	parm->z.max_signatures = 128;
 }
+
+static void config_cleanup_default(dkimfl_parm *parm)
+{
+	if (parm->z.domain_keys == parm_z_domain_keys)
+		parm->z.domain_keys = NULL;
+	if (parm->z.reputation_root == parm_z_reputation_root)
+		parm->z.reputation_root = NULL;
+}
+
 
 static void no_trailing_slash(char *s)
 {
@@ -280,6 +306,7 @@ static void some_cleanup(dkimfl_parm *parm) // parent
 	parm_target[parm_t_id] = &parm->z;
 	parm_target[db_parm_t_id] = parm->dwa? db_parm_addr(parm->dwa): NULL;
 
+	config_cleanup_default(parm);
 	clear_parm(parm_target);
 	if (parm->dwa)
 		db_clear(parm->dwa);
@@ -290,9 +317,12 @@ static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
 {
 	set_parm_logfun(&fl_report);
 
+	int errs = 0;
+
 	config_default(parm);
-	if (!no_db)
-		parm->dwa = db_init();
+	if (!no_db &&
+		(parm->dwa = db_init()) == NULL)
+			errs = 1;
 
 	if (fname == NULL)
 	{
@@ -317,7 +347,7 @@ static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
 	parm_target[parm_t_id] = &parm->z;
 	parm_target[db_parm_t_id] = parm->dwa? db_parm_addr(parm->dwa): NULL;
 
-	int errs = read_all_values(parm_target, fname);
+	errs += read_all_values(parm_target, fname);
 
 	if (errs == 0)
 	{
@@ -889,7 +919,9 @@ static int read_key_choice(dkimfl_parm *parm)
 					if (val)
 					{
 						char *domain, *user;
-						if ((dkim_mail_parse(val, &user, &domain)) == 0)
+						if ((dkim_mail_parse(val,
+							cast_u_char_parm_array(&user),
+							cast_u_char_parm_array(&domain))) == 0)
 						{
 							rtc = read_key(parm, domain);
 							if (rtc)
@@ -1422,7 +1454,7 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 		check_db_connected(vh->parm) < 0)
 			ndoms = -1;
 
-	if (ndoms <= 0)
+	if (ndoms < 0)
 	{
 		free(domain_ptr);
 		free(sigs_mirror);
@@ -1661,10 +1693,19 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	}
 
 	vh->ndoms = ndoms;
-	vh->domain_ptr = realloc(domain_ptr, ndoms * sizeof(domain_prescreen*));
-	vh->domain_head = dps_head;
-	if (vh->parm->dyn.stats)
-		vh->parm->dyn.stats->signatures_count = nsigs;
+	if (ndoms)
+	{
+		vh->domain_ptr = realloc(domain_ptr, ndoms * sizeof(domain_prescreen*));
+		vh->domain_head = dps_head;
+		if (vh->parm->dyn.stats)
+			vh->parm->dyn.stats->signatures_count = nsigs;
+	}
+	else
+	{
+		assert(dps_head == NULL);
+		free(domain_ptr);
+		clean_stats(vh->parm);
+	}
 
 	return ndoms;
 }
@@ -2268,6 +2309,38 @@ static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
 	return 1;
 }
 
+static int
+my_get_reputation(DKIM* dkim, DKIM_SIGINFO* sig, char *root, int *rep)
+{
+#if defined DKIM_REP_ROOT
+	if (dkim_get_reputation(dkim, sig, root, rep) == DKIM_STAT_OK)
+		return 0;
+#elif defined DKIM_REP_DEFROOT
+	int rtc = -1;
+	DKIM_REP dr = dkim_rep_init(NULL, NULL, NULL);
+	if (dr)
+	{
+		void *qh = NULL;
+		dkim_rep_setdomain(dr, root);
+		DKIM_REP_STAT status = dkim_rep_query_start(dr,
+			dkim_getuser(dkim),
+			dkim_getdomain(dkim),
+			dkim_sig_getdomain(sig),
+			&qh);
+		if (status == DKIM_REP_STAT_OK && qh != NULL)
+		{
+			struct timeval tv; // doesn't seem to be used by dkim_rep_res_waitreply
+			tv.tv_sec = 1;
+			tv.tv_usec = 0;
+			if (dkim_rep_query_check(dr, qh, &tv, rep) == DKIM_REP_STAT_FOUND)
+				rtc = 0;
+		}
+		dkim_rep_close(dr);
+	}
+	return rtc;
+#endif
+}
+
 static void verify_message(dkimfl_parm *parm)
 /*
 * add/remove A-R records, set rtc 1 if ok, 2 if rejected, -1 if failed,
@@ -2380,7 +2453,11 @@ static void verify_message(dkimfl_parm *parm)
 	{
 		if ((vh.dkim_domain != NULL ||
 				(vh.dkim_domain = dkim_getdomain(dkim)) != NULL) &&
-			dkim_policy(dkim, &vh.policy, NULL) == DKIM_STAT_OK)
+			dkim_policy(dkim, &vh.policy,
+#if OPENDKIM_DKIM_POLICY_ARGS == 4
+			/* not doing ATSP (yet) */ NULL,
+#endif
+													NULL) == DKIM_STAT_OK)
 		{
 			vh.presult = dkim_getpresult(dkim);
 			bool const adsp_fail =
@@ -2482,11 +2559,21 @@ static void verify_message(dkimfl_parm *parm)
 		/*
 		* (don't) reject on passing configured value
 		*/
-		if (dkim_get_reputation(dkim, vh.sig, DKIM_REP_ROOT, &rep) ==
-			DKIM_STAT_OK)
+		if (my_get_reputation(dkim, vh.sig, parm->z.reputation_root, &rep) == 0)
 		{
 			vh.dkim_reputation = rep;
 			vh.dkim_reputation_flag = 1;
+			if (vh.author_dps)
+			{
+				vh.author_dps->u.f.is_reputed = 1;
+				vh.author_dps->reputation = rep;
+			}
+
+			if (vh.dps)
+			{
+				vh.dps->u.f.is_reputed_signer = 1;
+				vh.dps->reputation = rep;
+			}
 #if 0				
 			if (rep > parm->reputation_reject)
 			{
@@ -2496,7 +2583,6 @@ static void verify_message(dkimfl_parm *parm)
 #endif
 		}
 	}
-
 
 	/*
 	* prepare ADSP results
@@ -2660,7 +2746,7 @@ static void verify_message(dkimfl_parm *parm)
 			fprintf(fp, ";\n  x-dkim-rep=%s (%d from %s) header.d=%s",
 				vh.dkim_reputation >= parm->z.reputation_fail? "fail":
 				vh.dkim_reputation <= parm->z.reputation_pass? "pass": "neutral",
-					vh.dkim_reputation, DKIM_REP_ROOT, vh.dps->name);
+					vh.dkim_reputation, parm->z.reputation_root, vh.dps->name);
 			++auth_given;
 		}
 
@@ -2805,6 +2891,8 @@ static void dkimfilter(fl_parm *fl)
 
 	if (parm->dyn.stats)
 		fl_set_after_filter(parm->fl, after_filter_stats);
+	else if (parm->dwa)
+		db_clear(parm->dwa);
 
 	assert(fl_get_passed_message(fl) != NULL);
 
@@ -3001,9 +3089,9 @@ int main(int argc, char *argv[])
 				"Reported SSL/TLS version: %#lX\n",
 				(long)(OPENDKIM_LIB_VERSION),
 #if defined HAVE_LIBOPENDKIM_22
-				dkim_libversion(),
-				dkim_libversion() ==	(unsigned long)(OPENDKIM_LIB_VERSION)? "":
-					"DO NOT ",
+				(unsigned long)dkim_libversion(),
+				(unsigned long)dkim_libversion() ==
+					(unsigned long)(OPENDKIM_LIB_VERSION)? "": "DO NOT ",
 #endif
 				dkim_ssl_version());
 			return 0;
@@ -3041,11 +3129,11 @@ int main(int argc, char *argv[])
 
 #if defined HAVE_LIBOPENDKIM_22
 	if (parm.z.verbose >= 2 &&
-		dkim_libversion() !=	(unsigned long)(OPENDKIM_LIB_VERSION))
+		(unsigned long)dkim_libversion() !=	(unsigned long)(OPENDKIM_LIB_VERSION))
 			fl_report(LOG_WARNING,
 				"Mismatched library versions: compile=%#lX link=%#lX",
 				(unsigned long)(OPENDKIM_LIB_VERSION),
-				dkim_libversion());
+				(unsigned long)dkim_libversion());
 #endif
 
 	parm.dklib = dkim_init(NULL, NULL);
@@ -3087,13 +3175,13 @@ int main(int argc, char *argv[])
 		nok |= dkim_set_final(parm.dklib, dkim_sig_final) != DKIM_STAT_OK;
 		nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_SIGNHDRS,
 			parm.z.sign_hfields?
-				cast_u_char_parm_array(parm.z.sign_hfields):
+				cast_const_u_char_parm_array(parm.z.sign_hfields):
 				dkim_should_signhdrs,
 					sizeof parm.z.sign_hfields) != DKIM_STAT_OK;
 
 		nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_SKIPHDRS,
 			parm.z.skip_hfields?
-				cast_u_char_parm_array(parm.z.skip_hfields):
+				cast_const_u_char_parm_array(parm.z.skip_hfields):
 				dkim_should_not_signhdrs,
 					sizeof parm.z.skip_hfields) != DKIM_STAT_OK;
 

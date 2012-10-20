@@ -232,3 +232,6 @@ all_mode = @zdkimfilter_mode@
 # negative values for whitelisting. Their range is thus -1000 <= rep <= 1000.
 # Default: reputation_pass = -32768
 
+# reputation_root (string)
+# The host to be queried for reputation.  See www.dkim-reputation.org.
+

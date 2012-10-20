@@ -1,6 +1,6 @@
 /*
-* database_variables.h - written by ale in milano on 29sep2012
-* list of variables, included multiple times
+* database_statements.h - written by ale in milano on 16oct2012
+* list of statements, included multiple times
 
 Copyright (C) 2012 Alessandro Vesely
 
@@ -26,30 +26,19 @@ with OpenDKIM, containing parts covered by the applicable licence, the licensor
 or zdkimfilter grants you additional permission to convey the resulting work.
 */
 
-#if !defined DATABASE_VARIABLE
+#if !defined DATABASE_STATEMENT
 #error Must define the macro before inclusion
 #endif
 
-DATABASE_VARIABLE(domain)
-DATABASE_VARIABLE(local_part)
-DATABASE_VARIABLE(user_ref)
-DATABASE_VARIABLE(ino)
-DATABASE_VARIABLE(mtime)
-DATABASE_VARIABLE(pid)
-DATABASE_VARIABLE(domain_ref)
-DATABASE_VARIABLE(auth_type)
-DATABASE_VARIABLE(ip)
-DATABASE_VARIABLE(date)
-DATABASE_VARIABLE(message_id)
-DATABASE_VARIABLE(content_type)
-DATABASE_VARIABLE(content_encoding)
-DATABASE_VARIABLE(received_count)
-DATABASE_VARIABLE(signatures_count)
-DATABASE_VARIABLE(mailing_list)
-DATABASE_VARIABLE(adsp_flags)
-DATABASE_VARIABLE(message_status)
-DATABASE_VARIABLE(vbr_mv)
-DATABASE_VARIABLE(vbr_response)
-DATABASE_VARIABLE(reputation)
-DATABASE_VARIABLE(message_ref)
+DATABASE_STATEMENT(db_sql_whitelisted)
+DATABASE_STATEMENT(db_sql_select_domain)
+DATABASE_STATEMENT(db_sql_update_domain)
+DATABASE_STATEMENT(db_sql_insert_domain)
+DATABASE_STATEMENT(db_sql_insert_msg_ref)
+DATABASE_STATEMENT(db_sql_insert_message)
+DATABASE_STATEMENT(db_sql_select_user)
+DATABASE_STATEMENT(db_sql_select_target)
+DATABASE_STATEMENT(db_sql_update_target)
+DATABASE_STATEMENT(db_sql_insert_target)
+DATABASE_STATEMENT(db_sql_insert_target_ref)
 

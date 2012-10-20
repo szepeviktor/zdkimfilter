@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.67])
-AC_INIT([zdkimfilter for courier],[1.0],[vesely@tana.it],[zdkimfilter])
+AC_INIT([zdkimfilter for courier],[1.0b],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -236,7 +236,49 @@ else
 fi
 AC_SUBST([OPENDKIM_CFLAGS])
 
-OPENDKIM_LIB="`$PKG_CONFIG --libs-only-L opendkim` -lopendkim"
+AC_CACHE_CHECK([arguments for dkim_policy],
+	av_cv_opendkim_dkim_policy_args,
+	[
+	SAVE_CFLAGS="$CFLAGS"
+	CFLAGS="$OPENDKIM_CFLAGS $CFLAGS"
+	AC_COMPILE_IFELSE([
+		#include <opendkim/dkim.h>
+		int main(){return dkim_policy((DKIM*)0,(dkim_policy_t*)0,(DKIM_PSTATE*)0)
+		== DKIM_STAT_OK? 1: 0;}
+		],
+		[av_cv_opendkim_dkim_policy_args="three"],
+		[av_cv_opendkim_dkim_policy_args="fail"]
+		)
+	if test "$av_cv_opendkim_dkim_policy_args" = "fail"; then
+		AC_COMPILE_IFELSE([
+			#include <opendkim/dkim.h>
+			int main(){return
+			dkim_policy((DKIM*)0,(dkim_policy_t*)0,(unsigned int*)0,(DKIM_PSTATE*)0)
+			== DKIM_STAT_OK? 1: 0;}
+			],
+			[av_cv_opendkim_dkim_policy_args="four"],
+			[av_cv_opendkim_dkim_policy_args="fail"]
+			)
+	fi
+	CFLAGS="$SAVE_CFLAGS"
+	])
+
+if test "$av_cv_opendkim_dkim_policy_args" = "fail"; then
+	AC_MSG_ERROR([unable to use libopendkim])
+fi
+if test "$av_cv_opendkim_dkim_policy_args" = "four"; then
+	OPENDKIM_DKIM_POLICY_ARGS="4"
+else
+	OPENDKIM_DKIM_POLICY_ARGS="3"
+fi
+AC_DEFINE_UNQUOTED([OPENDKIM_DKIM_POLICY_ARGS], [$OPENDKIM_DKIM_POLICY_ARGS], [3 OR 4])
+
+AC_CHECK_HEADERS([dkim-rep/dkim-rep.h])
+if $PKG_CONFIG --exists dkim-rep; then
+	OPENDKIM_LIB="-ldkimrep"
+fi
+
+OPENDKIM_LIB="`$PKG_CONFIG --libs-only-L opendkim` -lopendkim $OPENDKIM_LIB"
 AC_MSG_CHECKING([flags for opendkim library])
 	av_cv_flags_library_opendkim="none"
 	SAVE_LIBS="$LIBS"

@@ -63,11 +63,14 @@ typedef struct domain_prescreen
 			unsigned int is_mfrom:1;       // spf authenticated
 			unsigned int is_helo:1;        // spf_helo auth
 			unsigned int looks_like_helo:1;
+			unsigned int is_reputed:1;
+			unsigned int is_reputed_signer:1;
 		} f;
 		unsigned int all;
 	} u;
 	char *vbr_mv;                  // trusted voucher (in parm->z) or NULL
 	struct domain_prescreen *next; // name, in alphabetic order
+	int reputation;                // if is_reputed*
 	char name[];
 } domain_prescreen;
 

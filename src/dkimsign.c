@@ -35,6 +35,7 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -105,32 +106,78 @@ static void set_signal(void)
 	sigaction(SIGCHLD, &act, NULL);
 }
 
-static int run_zdkimfilter(char *argv[])
+static logfun_t do_report = &stderrlog;
+
+static const int do_config = 1;
+static const int do_version = 2;
+static const int do_syslog = 4;
+static const int do_mail = 8;
+
+static int run_zdkimfilter(char *argv[], int do_what)
 {
 	int rtc = 0;
 	int worst_level = LOG_DEBUG;
-	int pipe_err[2];
-	if (pipe(pipe_err) < 0)
-		syslog(LOG_CRIT, "Cannot open pipe: %s\n", strerror(errno));
-	else
+
+	// for config parent writes to child on stdin;
+	// for version there is no communication
+	// otherwise child writes to parent on stderr
+	int io_pipe[2];
+	if (do_what & (do_config | do_mail))
 	{
-		pid_t const pid = fork();
-		if (pid < 0)
-			syslog(LOG_CRIT, "Cannot fork: %s\n", strerror(errno));
-		else if (pid)
+		if (pipe(io_pipe) < 0)
+		{
+			(*do_report)(LOG_CRIT, "Cannot open pipe: %s\n", strerror(errno));
+			return 1;
+		}
+	}
+
+	if (do_what & do_version)
+		printf("running %s\n", argv[0]);
+
+	pid_t const pid = fork();
+	if (pid < 0)
+		(*do_report)(LOG_CRIT, "Cannot fork: %s\n", strerror(errno));
+	else if (pid)
+	{
+		alarm(30);
+		if (do_what & do_config)
+		{
+			static char const test1[] = "test1\nexit\n", *out = test1;
+			size_t len = sizeof test1 - 1;
+			close(io_pipe[0]);
+			while (len > 0 &&
+				signal_timed_out == 0 &&
+				signal_break == 0 &&
+				signal_child == 0)
+			{
+				int wn = write(io_pipe[1], out, len);
+				if (wn > 0 && (size_t)wn <= len)
+				{
+					out += wn;
+					len -= wn;
+				}
+				else if (wn == 0 || errno != EINTR && errno != EAGAIN)
+				{
+					if (wn)
+						(*do_report)(LOG_CRIT, "Pipe broken: %s\n", strerror(errno));
+					break;
+				}
+			}
+
+		}
+		else if (do_what & do_mail)
 		{
 			char buf[2048], *next = &buf[0];
 			char *const first = &buf[0], *const last = &buf[sizeof buf - 2];
-			
-			close(pipe_err[1]);
-			alarm(30);
+
+			close(io_pipe[1]);
 			last[1] = 0; // terminator on forced newline
 			while (signal_timed_out == 0 &&
 				signal_break == 0 &&
 				signal_child == 0)
 			{
 
-				int rd = read(pipe_err[0], next, last - next);
+				int rd = read(io_pipe[0], next, last - next);
 #if !defined NDEBUG
 	printf("rd=%2d, next=%2ld\n", rd, next - first);
 #endif
@@ -138,7 +185,7 @@ static int run_zdkimfilter(char *argv[])
 				{
 					char *p = first, *br;
 					next += rd;
-				
+			
 					*next = next == last? '\n': 0; // force newline if full
 
 					while ((br = strchr(p, '\n')) != NULL)
@@ -179,12 +226,12 @@ static int run_zdkimfilter(char *argv[])
 
 						while (*p == ' ')
 							++p;
-					
-						if (*p) syslog(level, "%s\n", p);
+				
+						if (*p) (*do_report)(level, "%s\n", p);
 						p = br + (br < last);     // +1 if not forced newline
 						assert(first <= p && p <= next);
 					}
-				
+			
 					memmove(first, p, next - p);
 					next -= p - first;
 					assert(first <= next && next < last);
@@ -192,76 +239,90 @@ static int run_zdkimfilter(char *argv[])
 				else if (rd == 0 || errno != EINTR && errno != EAGAIN)
 				{
 					if (rd)
-						syslog(LOG_CRIT, "Pipe broken: %s\n", strerror(errno));
-					break;
-				}
-			}
-			alarm(0);
-			if (signal_timed_out || signal_break)
-			{
-				kill(pid, SIGTERM);
-			}
-			close(pipe_err[0]);
-			
-			for (;;)
-			{
-				int status;
-				pid_t wpid = wait(&status);
-				if (wpid < 0 && errno != EAGAIN && errno != EINTR)
-				{
-					syslog(LOG_CRIT,
-						"Cannot wait %s[%u]: %s\n",
-						argv[0], (unsigned)wpid, strerror(errno));
-					break;
-				}
-				else if (wpid == pid)
-				{
-					if (WIFEXITED(status))
-					{
-						int level, s_rtc = WEXITSTATUS(status);
-						switch (s_rtc)
-						{
-							case 0: level = worst_level; break;
-							default: level = LOG_CRIT; break;
-						}
-						
-						/*
-						* we never give 99 for examining content: just 0 or 1
-						*/
-						rtc = s_rtc? s_rtc: (level <= LOG_ERR);
-						syslog(level,
-							"zdkimfilter exited %d, rtc=%d\n", s_rtc, rtc);
-					}
-					else if (WIFSIGNALED(status))
-					{
-						rtc = 2;
-						syslog(LOG_CRIT,
-							"zdkimfilter terminated with signal %d, rtc=%d\n",
-							WTERMSIG(status), rtc);
-					}
-					else continue; // stopped?
-					
+						(*do_report)(LOG_CRIT, "Pipe broken: %s\n", strerror(errno));
 					break;
 				}
 			}
 		}
-		else // child process
+
+		alarm(0);
+		if (signal_timed_out || signal_break)
 		{
-			close(0);
+			kill(pid, SIGTERM);
+		}
+		if (do_what & do_config)
+			close(io_pipe[1]);
+		else if (do_what & do_mail)
+			close(io_pipe[0]);
+
+		for (;;)
+		{
+			int status;
+			pid_t wpid = wait(&status);
+			if (wpid < 0 && errno != EAGAIN && errno != EINTR)
+			{
+				(*do_report)(LOG_CRIT,
+					"Cannot wait %s[%u]: %s\n",
+					argv[0], (unsigned)wpid, strerror(errno));
+				break;
+			}
+			else if (wpid == pid)
+			{
+				if (WIFEXITED(status))
+				{
+					int level, s_rtc = WEXITSTATUS(status);
+					switch (s_rtc)
+					{
+						case 0: level = worst_level; break;
+						default: level = LOG_CRIT; break;
+					}
+
+					// rtc = 0 if all clear
+					rtc = s_rtc? s_rtc: (level <= LOG_ERR);
+					if (rtc)
+						(*do_report)(level,
+							"zdkimfilter exited %d, rtc=%d\n", s_rtc, rtc);
+				}
+				else if (WIFSIGNALED(status))
+				{
+					rtc = 2;
+					(*do_report)(LOG_CRIT,
+						"zdkimfilter terminated with signal %d, rtc=%d\n",
+						WTERMSIG(status), rtc);
+				}
+				else continue; // stopped?
+				
+				break;
+			}
+		}
+	}
+	else // child process
+	{
+		close(0);
+		if (do_what & do_config)
+			dup(io_pipe[0]);
+		else
 			open("/dev/null", O_RDONLY);
+		if (do_what & do_mail)
+		{
 			close(1);
 			open("/dev/null", O_WRONLY);
 			close(2);
-			dup(pipe_err[1]);
-			close(pipe_err[0]);
-			close(pipe_err[1]);
-			closelog();
-			execv(argv[0], argv);
-			syslog(LOG_MAIL|LOG_CRIT, "dkimsign: cannot execv: %s\n",
-				strerror(errno));
-			exit(0);
+			dup(io_pipe[1]);
 		}
+		if (do_what & (do_config | do_mail))
+		{
+			close(io_pipe[0]);
+			close(io_pipe[1]);
+		}
+		if (do_what & do_syslog)
+			closelog();
+		execv(argv[0], argv);
+		(*do_report)(LOG_MAIL|LOG_CRIT, "dkimsign: cannot execv: %s\n",
+			strerror(errno));
+		exit(0);
 	}
+
 	return rtc;
 }
 
@@ -326,11 +387,87 @@ static char *create_ctlfile(char const *config_file, char const *domain)
 	return fname;
 }
 
+static const char zdkimfilter_executable[] = ZDKIMFILTER_EXECUTABLE;
+
+static char* get_executable(char *argv0)
+{
+	static const char zdkimfilter[] = "zdkimfilter";
+	struct stat a, e, me;
+
+	char *alt = NULL;
+	char *slash = strrchr(argv0, '/');
+	if (slash == NULL)
+	// assume this happens because we were found in PATH.
+	{
+		char *path = getenv("PATH");
+		if (path)
+		{
+			size_t len = strlen(argv0);
+			if (len < sizeof zdkimfilter)
+				len = sizeof zdkimfilter;
+			len += 2 + strlen(path);
+
+			char buf[len];
+			for (;;)
+			{
+				char *const next = strchr(path, ':');
+				len = next? (size_t)(next - path): strlen(path);
+				memcpy(buf, path, len);
+				buf[len++] = '/';
+				strcpy(&buf[len], argv0);
+				if (stat(buf, &me) == 0)
+				{
+					strcpy(&buf[len], zdkimfilter);
+					if (stat(buf, &a) == 0)
+					{
+						alt = strdup(buf);
+						break;  // found
+					}
+				}
+				else if (next == NULL)
+					break; // not found
+
+				path = next + 1;
+			}			
+		}
+	}
+	else if (stat(argv0, &me) == 0)
+	{
+		size_t len = slash - argv0 + 1;
+		char buf[len + 1 + sizeof zdkimfilter];
+		memcpy(buf, argv0, len);
+		strcpy(&buf[len], zdkimfilter);
+		if (stat(buf, &a) == 0)
+			alt = strdup(buf);
+	}
+
+	if (stat(zdkimfilter_executable, &e))
+		return alt; // possibly NULL
+
+	if (alt)
+	/*
+	* If there is a freshly installed executable, return that,
+	* unless we're a much older thing, of about the same time
+	* as the alternative.
+	*/
+	{
+		if (!(e.st_mtime > a.st_mtime &&
+			labs(me.st_mtime - a.st_mtime) < labs(e.st_mtime - a.st_mtime)/16L))
+				return alt;
+
+		free(alt);
+	}
+
+	return (char*)zdkimfilter_executable;
+}
+
 int main(int argc, char *argv[])
 {
-	int rtc = 0, file_arg = 0;
+	int rtc = 0, file_arg = 0, do_what = 0;
 	char *config_file = NULL;
 	char *domain = NULL;
+
+	set_parm_logfun(&stderrlog);
 
 	for (int i = 1; i < argc; ++i)
 	{
@@ -340,24 +477,34 @@ int main(int argc, char *argv[])
 		{
 			config_file = ++i < argc ? argv[i] : NULL;
 		}
+		else if (strcmp(arg, "--syslog") == 0)
+		{
+			do_what |= do_syslog;
+		}
 		else if (strcmp(arg, "--domain") == 0)
 		{
 			domain = ++i < argc ? argv[i] : NULL;
 		}
+		else if (strcmp(arg, "--config") == 0)
+		{
+			do_what |= do_config;
+		}
 		else if (strcmp(arg, "--version") == 0)
 		{
-			puts(PACKAGE_NAME ", version " PACKAGE_VERSION "\n");
-			return 0;
+			do_what |= do_version;
 		}
 		else if (strcmp(arg, "--help") == 0)
 		{
-			printf("Usage:\n"
+			printf("This is a wrapper around the zdkimfilter executable.\n"
+				"Usage:\n"
 				"           dkimsign [opts] message-file...\n"
 				"with opts:\n"
 				"  -f config-filename  override %s\n"
+				"  --syslog            log to syslog (MAIL) rather than stderr\n"
 				"  --domain domain     domain used for signing\n"
+				"  --config            have the exec check and print config\n"
 				"  --help              print this stuff and exit\n"
-				"  --version           print version string and exit\n",
+				"  --version           have the exec print version and exit\n",
 					default_config_file);
 			return 0;
 		}
@@ -368,38 +515,78 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (file_arg == 0)
+	if (file_arg == 0 && do_what == 0)
 		return 1;
 
-	char *ctlfile = create_ctlfile(config_file, domain);
-	if (ctlfile == NULL)
-		return 1;
+	if (do_what & do_syslog)
+	{
+		openlog("dkimsign", LOG_PID, LOG_MAIL);
+		set_parm_logfun(do_report = &syslog);
+	}
 
 	char *xargv[argc - file_arg + 7];
 	size_t xargc = 0;
 
-	xargv[xargc++] = ZDKIMFILTER_EXECUTABLE;
+	char *ctlfile = NULL;
+	char *execfile = get_executable(argv[0]);
+	if (execfile == NULL)
+	{
+		(*do_report)(LOG_CRIT, "Cannot find the zdkimfilter executable");
+		rtc = 1;
+	}
+	else
+		xargv[xargc++] = execfile;
+
 	if (config_file)
 	{
 		xargv[xargc++] = "-f";
 		xargv[xargc++] = config_file;
 	}
-	xargv[xargc++] = "--no-db";
-	xargv[xargc++] = "-t1,dkimsign";
-	xargv[xargc++] = ctlfile;
-	for (int i = file_arg; i < argc; ++i)
-		xargv[xargc++] = argv[i];
 
-	xargv[xargc] = NULL;
+	if (do_what & do_version)
+	{
+		do_what &= ~do_config;
+		xargv[xargc++] = "--version";
+	}
+	else if (do_what & do_config)
+	{
+		xargv[xargc++] = "--batch-test";
+	}
+	else if (file_arg && rtc == 0)
+	{
+		do_what |= do_mail;
+		ctlfile = create_ctlfile(config_file, domain);
+		if (ctlfile == NULL)
+			rtc = 1;
+		else
+		{
+			xargv[xargc++] = "--no-db";
+			xargv[xargc++] = "-t1,dkimsign";
+			xargv[xargc++] = ctlfile;
+			for (int i = file_arg; i < argc; ++i)
+				xargv[xargc++] = argv[i];
+		}
+	}
 
-	openlog("dkimsign", LOG_PID, LOG_MAIL);
-	set_parm_logfun(&syslog);
+	if (rtc == 0)
+	{
+		xargv[xargc] = NULL;
+		set_signal();
 
-	set_signal();
+		rtc = run_zdkimfilter(xargv, do_what);
+	}
 
-	rtc = run_zdkimfilter(xargv);
-	closelog();
-	unlink(ctlfile);
-	free(ctlfile);
+	if (do_what & do_syslog)
+		closelog();
+
+	if (ctlfile)
+	{
+		unlink(ctlfile);
+		free(ctlfile);
+	}
+
+	if (execfile && execfile != zdkimfilter_executable)
+		free(execfile);
+
 	return rtc;
 }
