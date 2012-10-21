@@ -373,7 +373,7 @@ db_sql_insert_msg_ref dummy
 m4_define([ZF_CTLBATCH],
 [AT_DATA([ctl], [Mverifymsg
 usmtp
-[fdns; [192.0.2.123] (server.example [192.0.2.158])]
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
 ])
 ZF_POLICYFILE
 ZF_BATCH([test2
@@ -490,6 +490,25 @@ ZF_KEYCONFIG
 AT_DATA([mail], [ZF_MESSAGE(ZF_SIGOTHER, ZF_SIGSENDER, ZF_FAILAUTHOR)])
 ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
 AT_CLEANUP
+
+# test only valid with opendbx
+m4_define([ZF_REQUIRE_OPENDBX], [AT_CHECK([$HAVE_OPENDBX || exit 77])])
+
+
+#
+AT_SETUP([Verify the IP address passed to database])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'ip: c0000201' database_dump, 0,
+[ip: c0000201
+ip: c0000201
+ip: c0000201
+],[])
+AT_CLEANUP
+
 
 #
 AT_SETUP([Reject message with non-existent From: domain])
@@ -676,10 +695,6 @@ head -n 4 mail, 0,
   dkim-adsp=nxdomain header.from=user@author.example
 ], [])
 AT_CLEANUP
-
-# test only valid with opendbx
-m4_define([ZF_REQUIRE_OPENDBX], [AT_CHECK([$HAVE_OPENDBX || exit 77])])
-
 
 AT_SETUP([Whitelisted but not authenticated From: domain])
 ZF_CONFIG(3, [reject_on_nxdomain

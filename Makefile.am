@@ -4,5 +4,5 @@
 
 ACLOCAL_AMFLAGS = -I m4
 SUBDIRS = src etc tests
-EXTRA_DISTS = odbx_example.sql odbx_example.conf
+EXTRA_DIST = odbx_example.sql odbx_example.conf etc/conf2man.pl
 

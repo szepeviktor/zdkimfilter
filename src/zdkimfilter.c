@@ -327,7 +327,7 @@ static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
 	if (fname == NULL)
 	{
 		struct stat st;
-		if (!stat(default_config_file, &st))
+		if (stat(default_config_file, &st))
 		{
 			if (errno == ENOENT)
 				return 0; // can do without it
@@ -1390,7 +1390,7 @@ static int check_db_connected(dkimfl_parm *parm)
 	parm->dyn.db_connected = 1;
 
 	char *s = NULL;
-	if ((s = parm->dyn.info.authsender) != NULL)
+	if ((s = parm->dyn.info.authsender) != NULL) // outgoing
 	{
 		char *dom = strchr(s, '@');
 		if (dom)
@@ -1401,21 +1401,34 @@ static int check_db_connected(dkimfl_parm *parm)
 	}
 	else if ((s = parm->dyn.info.frommta) != NULL &&
 		strincmp(s, "dns;", 4) == 0)
+/*
+for esmtp, this is done by courieresmtpd.c as:
+
+   if (!host)	host="";
+   argv[n]=buf=courier_malloc(strlen(host)+strlen(tcpremoteip)+strlen(
+      helobuf)+sizeof("dns;  ( [])"));
+
+   strcat(strcat(strcpy(buf, "dns; "), helobuf), " (");
+   if (*host)
+      strcat(strcat(buf, host), " ");
+   strcat(strcat(strcat(buf, "["), tcpremoteip), "])");
+
+and then conveyed to ctlfile 'f' (COMCTLFILE_FROMMTA).  E.g.
+
+   fdns; helobuf (rdns.host.example [192.0.2.1])
+*/
 	{
-		char *e = NULL;
-		s += 4;
-		int ch;
-		while ((ch = *(unsigned char*)s) != 0 && isspace(ch))
-			++s;
-		if (ch == '[')
+		s = strrchr(s + 4, '[');
+		if (s && *++s)
 		{
-			++s;
-			if ((e = strchr(s, ']')) != NULL)
+			char *e = strchr(s, ']');
+			if (e)
+			{
 				*e = 0;
+				db_set_client_ip(dwa, s);
+				*e = ']';
+			}
 		}
-		db_set_client_ip(dwa, s);
-		if (e)
-			*e = ']';
 	}
 
 	return 0;
@@ -1872,6 +1885,7 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	}
 
 	return DKIM_CBSTAT_CONTINUE;
+	(void)nsigs; // only used in assert
 }
 
 static int verify_headers(verify_parms *vh)
@@ -2187,7 +2201,7 @@ static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
 		((sig_flags = dkim_sig_getflags(sig)) & DKIM_SIGFLAG_IGNORE) != 0)
 			return 0;
 
-	char buf[80], *id = NULL, htype;
+	char buf[80], *id = NULL, htype = 0;
 	memset(buf, 0, sizeof buf);
 	if (dkim_sig_getidentity(NULL, sig, buf, sizeof buf) == DKIM_STAT_OK)
 	{
@@ -2215,7 +2229,7 @@ static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
 		id2 = NULL;
 	}
 
-	if (id == NULL) //useless to report an unidentifiable signature
+	if (id == NULL || htype == 0) //useless to report an unidentifiable signature
 		return 0;
 
 	int const is_test = (sig_flags & DKIM_SIGFLAG_TESTKEY) != 0;

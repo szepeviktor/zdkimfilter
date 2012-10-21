@@ -4,11 +4,11 @@
 
 man_MANS = zdkimfilter.conf.5
 
-EXTRA_DIST = conf2man.pl
+CLEANFILES = zdkimfilter.conf.5
 
 if BUILD_DOC
-zdkimfilter.conf.5: zdkimfilter.conf.dist conf2man.pl
-	perl conf2man.pl zdkimfilter.conf.dist
+zdkimfilter.conf.5: zdkimfilter.conf.dist $(srcdir)/conf2man.pl
+	perl $(srcdir)/conf2man.pl zdkimfilter.conf.dist
 
 endif
 
