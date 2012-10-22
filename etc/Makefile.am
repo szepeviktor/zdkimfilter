@@ -2,13 +2,27 @@
 
 @SET_MAKE@
 
-man_MANS = zdkimfilter.conf.5
+man_MANS = zdkimfilter.conf.5 zdkimfilter.8
 
 CLEANFILES = zdkimfilter.conf.5
 
 if BUILD_DOC
-zdkimfilter.conf.5: zdkimfilter.conf.dist $(srcdir)/conf2man.pl
-	perl $(srcdir)/conf2man.pl zdkimfilter.conf.dist
+zdkimfilter.conf.pod: $(srcdir)/zdkimfilter.conf.dist $(srcdir)/conf2pod.pl
+	$(PERL) $(srcdir)/conf2pod.pl $(srcdir)/zdkimfilter.conf.dist
+
+.pod.1:
+	$(POD2MAN) @POD2MAN_OPTIONS@ --section=1 --name=$* $< $@
+
+.pod.5:
+	$(POD2MAN) @POD2MAN_OPTIONS@ --section=5 --name=$* $< $@
+
+.pod.8:
+	$(POD2MAN) @POD2MAN_OPTIONS@ --section=8 --name=$* $< $@
+
+
+# zdkimfilter.conf.5: zdkimfilter.conf.pod
+#	pod2man --release="$(PACKAGE) $(VERSION)" --center=zdkimfilter --section=5 \
+#    --name=zdkimfilter.conf zdkimfilter.conf.pod zdkimfilter.conf.5
 
 endif
 

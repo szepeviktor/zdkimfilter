@@ -43,7 +43,8 @@ all_mode = @zdkimfilter_mode@
 # Canonicalization for header/body can be simple or relaxed.
 
 # sign_rsa_sha1 (bool)
-# The signing algorithm can be either rsa-sha1 or rsa-sha256.
+# The signing algorithm can be either rsa-sha1 or rsa-sha256.  RFC 6376 says
+# signers should use rsa-sha256, which is the default (sign_rsa_sha1 0).
 
 # key_choice_header (string)
 # Header fields from where to determine the signing domain.  This is an array
@@ -107,7 +108,9 @@ all_mode = @zdkimfilter_mode@
 #  skip_hfields = Return-Path Received Comments Keywords
 
 # no_signlen (bool)
-# Set this to avoid specifying the l= parameter of the body length.
+# Set this to avoid specifying the l= parameter of the body length.  Specifying
+# the length allows the addition of text at the bottom of messages, so it is
+# considered more permissive.
 
 # redact_received_auth (string)
 # Rewrite the value of AUTH: in Courier's Received: header field.  That value
@@ -136,40 +139,29 @@ all_mode = @zdkimfilter_mode@
 # it if it cannot stat it, on loading.
 
 # tempfail_on_error (bool)
-# On some errors, return 432; otherwise, just let the msg through.
+# On some errors, e.g. out of memory, return 432 to have the sender retry;
+# otherwise, just let the msg through unfiltered.
 
 # no_spf (bool)
 # If Courier sets Received-SPF: pass for sender or helo, that is reported in
 # A-R.  This option may prevent such behavior.
 
 # save_from_anyway (bool)
-# Use the From: header field even if it's not authenticated.  This implies
-# checking if it is whitelisted and inserting it in the database.
+# Use the From: header field even if it's not authenticated.  This allows to
+# insert more messages in the database.
 
 # add_a_r_anyway (bool)
-# Add an A-R field also if no signature or other result had been found.
+# Add an A-R field also if no signature nor other results had been found.
 
 # report_all_sigs (bool)
 # If multiple signatures are found, normally only the most important ones
 # are reported in the A-R field.  By enabling this option, all the signatures
 # are reported, in order of decreasing importance.
 
-# max_domains (int)
-# The maximum number of domains to try to authenticate by DKIM.  If there are
-# more than that many domains, only known domains, SPF-authenticated domains,
-# and domains claiming VBR will have their signatures checked.  Must be at
-# least 4.  The default value is 16.
-
 # max_signatures (int)
 # The abolutely maximum number of signatures.  Messages having more signatures
 # than that are considered denial of service (DoS) attacks and rejected
-# outright.  Must be at least max_domains * max_sigs_domain.  The default value
-# is 128.
-
-# max_sigs_domain (int)
-# The maximum number of signatures for each domain.  When there are more than
-# max_signatures/4 signatures, only the topmost signatures of some domain are
-# tried.  Must be at least 2.  The default value is 4.
+# outright.  The default value is 128.
 
 # honor_author_domain
 # reject_on_nxdomain
@@ -204,18 +196,6 @@ all_mode = @zdkimfilter_mode@
 # publish an ADSP policy different from "unknown".  (Publishing "unknown"
 # results in better caching, though.)
 
-# trusted_vouchers (array)
-# A space-separated list of trusted vouchers.  If a message has VBR-Info
-# header fields with trusted vouchers (mv) and the domain is authenticated by
-# DKIM or SPF (md), then the vouchers are queried to confirm the vouch and
-# "pass" of "fail" results are written for the "vbr" method of A-R.  See
-# RFC 5518 and RFC 6212.  The default is an empty string, which skips VBR-Info
-# processing altogether (in previous version:  no_dwl = Y.)
-#
-# For example, to enable Spamhaus' Domain White List add their mv value here:
-#  trusted_vouchers = dwl.spamhaus.org
-# See http://www.spamhauswhitelist.com/en/about.html for more info.
-
 # no_reputation (bool)
 # skip a query to dkim-reputation.org for the signer. The result is reported in
 # A-R for method "x-dkim-rep" according to the next two options.
@@ -233,5 +213,18 @@ all_mode = @zdkimfilter_mode@
 # Default: reputation_pass = -32768
 
 # reputation_root (string)
-# The host to be queried for reputation.  See www.dkim-reputation.org.
+# The host to be queried for reputation.  See http://www.dkim-reputation.org.
+
+# trusted_vouchers (array)
+# A space-separated list of trusted vouchers.  If a message has VBR-Info
+# header fields with trusted vouchers (mv) and the domain is authenticated by
+# DKIM or SPF (md), then the vouchers are queried to confirm the vouch and
+# "pass" of "fail" results are written for the "vbr" method of A-R.  See
+# RFC 5518 and RFC 6212.  The default is an empty string, which skips VBR-Info
+# processing altogether (in previous version:  no_dwl = Y.)
+#
+# For example, to enable Spamhaus' Domain White List add their mv value here:
+#  trusted_vouchers = dwl.spamhaus.org
+# See http://www.spamhauswhitelist.com/en/about.html for more info.
+
 

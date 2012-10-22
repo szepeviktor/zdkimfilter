@@ -1164,6 +1164,7 @@ static void sign_message(dkimfl_parm *parm)
 				parm->dyn.info.id,
 				parm->dyn.info.authsender,
 				parm->dyn.domain? "key": "domain");
+		clean_stats(parm);
 	}
 	else
 	{
@@ -2344,7 +2345,7 @@ my_get_reputation(DKIM* dkim, DKIM_SIGINFO* sig, char *root, int *rep)
 		if (status == DKIM_REP_STAT_OK && qh != NULL)
 		{
 			struct timeval tv; // doesn't seem to be used by dkim_rep_res_waitreply
-			tv.tv_sec = 1;
+			tv.tv_sec = 1;     // should use parm.z.dns_timeout, in case
 			tv.tv_usec = 0;
 			if (dkim_rep_query_check(dr, qh, &tv, rep) == DKIM_REP_STAT_FOUND)
 				rtc = 0;

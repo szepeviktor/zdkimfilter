@@ -29,6 +29,7 @@ LT_INIT
 AC_CHECK_PROG([PERL], [perl], [perl])
 AC_CHECK_PROG([POD2MAN], [pod2man], [pod2man])
 AM_CONDITIONAL([BUILD_DOC], [test "$PERL" = perl -a "$POD2MAN" = pod2man])
+AC_SUBST([POD2MAN_OPTIONS], ['--release="$(PACKAGE) $(VERSION)" --center=zdkimfilter'])
 
 # check debugging
 ZDKIMFILTER_DEBUG="0"
@@ -493,6 +494,7 @@ AC_CONFIG_FILES([Makefile
                  src/filedefs.h
                  etc/Makefile
                  etc/zdkimfilter.conf.dist
+                 etc/zdkimfilter.pod
                  tests/atlocal
                  tests/Makefile
                 ])

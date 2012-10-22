@@ -240,13 +240,13 @@ static config_conf const conf[] =
 	CONFIG(parm_t, body_canon_relaxed, "Y/N, N for simple", assign_char),
 	CONFIG(parm_t, sign_rsa_sha1, "Y/N, N for rsa-sha256", assign_char),
 	CONFIG(parm_t, key_choice_header, "key choice header", assign_array),
-	CONFIG(parm_t, default_domain, "dns", assign_ptr),
+	CONFIG(parm_t, default_domain, "dns", assign_ptr), // used by dkimsign.c
 	CONFIG(parm_t, selector, "global", assign_ptr),
 	CONFIG(parm_t, sign_hfields, "space-separated, no colon", assign_array),
 	CONFIG(parm_t, skip_hfields, "space-separated, no colon", assign_array),
 	CONFIG(parm_t, no_signlen, "Y/N", assign_char),
-	CONFIG(parm_t, redact_received_auth, "any text", assign_ptr), // used by redact.c
-	CONFIG(parm_t, tmp, "temp directory", assign_ptr), // to be used by dkimsign.c
+	CONFIG(parm_t, redact_received_auth, "any text", assign_ptr), // by redact.c
+	CONFIG(parm_t, tmp, "temp directory", assign_ptr), // by dkimsign.c
 	CONFIG(parm_t, tempfail_on_error, "Y/N", assign_char),
 	CONFIG(parm_t, no_spf, "Y/N", assign_char),
 	CONFIG(parm_t, save_from_anyway, "Y/N", assign_char),
