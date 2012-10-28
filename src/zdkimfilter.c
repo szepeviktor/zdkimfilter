@@ -3095,6 +3095,9 @@ static fl_init_parm functions =
 int main(int argc, char *argv[])
 {
 	int rtc = 0, i, no_db = 0;
+#if !HAVE_OPENDBX
+	no_db = 1;
+#endif
 	char *config_file = NULL;
 
 	for (i = 1; i < argc; ++i)

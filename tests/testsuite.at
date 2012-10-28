@@ -620,6 +620,7 @@ mail
 ctl
 
 ])
+ZF_REQUIRE_OPENDBX
 AT_CHECK(
 ZF_RUN,
 0,
@@ -642,6 +643,7 @@ ZF_CONFIG(3, [reject_on_nxdomain
 db_backend test
 db_sql_whitelisted sender.example:2
 ])
+ZF_REQUIRE_OPENDBX
 ZF_KEYFILE
 AT_DATA([mail], [ZF_MESSAGE_NOSPF(, ZF_SIGSENDER, ZF_SIGOTHER)])
 AT_DATA([ctl], [Musenetmsg
@@ -676,6 +678,7 @@ ZF_CONFIG(3, [reject_on_nxdomain
 db_backend test
 db_sql_whitelisted other.example:2 sender.example:2
 ])
+ZF_REQUIRE_OPENDBX
 ZF_KEYFILE
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
 AT_DATA([ctl], [Musenetmsg
@@ -711,6 +714,7 @@ ZF_CONFIG(3, [reject_on_nxdomain
 db_backend test
 db_sql_whitelisted other.example:2
 ])
+ZF_REQUIRE_OPENDBX
 ZF_KEYFILE
 AT_DATA([mail], [ZF_MESSAGE(, ZF_SIGSENDER, ZF_SIGOTHER)])
 AT_DATA([ctl], [Musenetmsg
@@ -930,6 +934,7 @@ ZF_CONFIG(3, [honor_author_domain
 db_backend test
 db_sql_whitelisted sender.example:2
 ])
+ZF_REQUIRE_OPENDBX
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
 AT_DATA([ctl], [Mpolicymsg
 usmtp
@@ -1279,6 +1284,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Logging specific header fields to the DB])
+ZF_REQUIRE_OPENDBX
 ZF_CONFIG(0, [db_backend test
 db_sql_insert_msg_ref dummy
 ])
@@ -1522,6 +1528,7 @@ AT_SETUP([Whitelisted domain reported])
 ZF_SIGREPORT([db_backend test
 db_sql_whitelisted sender.example:2
 ])
+ZF_REQUIRE_OPENDBX
 AT_CHECK(
 head -n 5 mail, 0,
 [Authentication-Results: test.example;
@@ -1553,6 +1560,7 @@ ZF_SIGREPORT([trusted_vouchers sender-cert.example
 db_backend test
 db_sql_whitelisted sender.example:2
 ])
+ZF_REQUIRE_OPENDBX
 AT_CHECK(
 head -n 6 mail, 0,
 [Authentication-Results: test.example;

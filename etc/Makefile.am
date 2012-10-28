@@ -4,11 +4,12 @@
 
 man_MANS = zdkimfilter.conf.5 zdkimfilter.8 zfilter_db.1 dkimsign.1 redact.1
 
-CLEANFILES = zdkimfilter.conf.5
+CLEANFILES = zdkimfilter.conf.pod zdkimfilter.conf.5 zdkimfilter.8 \
+ zfilter_db.1 dkimsign.1 redact.1
 
 if BUILD_DOC
-zdkimfilter.conf.pod: $(srcdir)/zdkimfilter.conf.dist $(srcdir)/conf2pod.pl
-	$(PERL) $(srcdir)/conf2pod.pl $(srcdir)/zdkimfilter.conf.dist
+zdkimfilter.conf.pod: zdkimfilter.conf.dist $(srcdir)/conf2pod.pl
+	$(PERL) $(srcdir)/conf2pod.pl zdkimfilter.conf.dist
 
 .pod.1:
 	$(POD2MAN) @POD2MAN_OPTIONS@ --section=1 --name=$* $< $@

@@ -1954,9 +1954,9 @@ int main(int argc, char*argv[])
 #endif // TEST_MAIN
 #else // HAVE_OPENDBX
 // dummy functions.  Warnings that they don't use arguments are appreciated...
-db_work_area *db_init(void);
+db_work_area *db_init(void) {return NULL;}
 void db_clear(db_work_area* dwa) {}
-db_parm_t* db_parm_addr(db_work_area *dwa) { return dwa; }
+db_parm_t* db_parm_addr(db_work_area *dwa) {return NULL;}
 int db_config_wrapup(db_work_area* dwa, int *in, int *out)
 {
 	if (in) *in = 0;
@@ -1970,5 +1970,11 @@ void db_set_authenticated_user(db_work_area *dwa,
 	char const *local_part, char const *domain) {}
 void db_set_client_ip(db_work_area *dwa, char const *ip) {}
 void db_set_stats_info(db_work_area* dwa, stats_info *info) {}
-
+#if defined TEST_MAIN
+int main()
+{
+	puts("This program does nothing!\nPlease install OpenDBX then reconfigure");
+	return 0;
+}
+#endif // TEST_MAIN
 #endif // HAVE_OPENDBX
