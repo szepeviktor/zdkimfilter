@@ -1,5 +1,8 @@
 # Process this file with autom4te to create testsuite. -*- Autotest -*-
 
+# why wouldn't this be allowed?
+m4_pattern_allow([m4_ifblank])
+
 # config file, accept extra lines as a parameter
 m4_define([ZF_CONFIG],
 [cat >zftest.conf <<'_ZEOF'
@@ -178,7 +181,7 @@ report_all_sigs          = N (Y/N)
 max_signatures           = 128 (int)
 honor_author_domain      = N (Y=enable ADSP)
 reject_on_nxdomain       = N (Y=procrustean ADSP)
-no_reputation            = N (Y=skip reputation lookup)
+do_reputation            = N (Y=do reputation lookup)
 reputation_fail          = 32767 (high int)
 reputation_pass          = -32768 (low int)
 reputation_root          = host.dkim-reputation.example (lookup host)
@@ -237,8 +240,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign and verify my signature])
-ZF_CONFIG(6, [no_reputation
-])
+ZF_CONFIG(6)
 ZF_PRIVATEKEY([example.com])
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctls], [Msignmsg
@@ -283,8 +285,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign with default domain])
-ZF_CONFIG(6, [no_reputation
-default_domain example.com
+ZF_CONFIG(6, [default_domain example.com
 ])
 ZF_PRIVATEKEY([example.com])
 AT_DATA([mail], [ZF_MESSAGE])
@@ -308,8 +309,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign with default domain, selector given])
-ZF_CONFIG(6, [no_reputation
-default_domain example.com
+ZF_CONFIG(6, [default_domain example.com
 selector given
 ])
 ZF_PRIVATEKEY([example.com])
@@ -334,8 +334,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign with default domain, selector linked])
-ZF_CONFIG(6, [no_reputation
-default_domain example.com
+ZF_CONFIG(6, [default_domain example.com
 selector given
 ])
 ZF_PRIVATEKEY([linked], [example.com])
@@ -365,13 +364,13 @@ AT_CLEANUP
 #
 m4_define([ZF_KEYCONFIG],
 [ZF_KEYFILE
-ZF_CONFIG(3, [no_reputation
-db_backend test
+ZF_CONFIG(3, [db_backend test
 db_sql_insert_msg_ref dummy
 ])])
 
 m4_define([ZF_CTLBATCH],
-[AT_DATA([ctl], [Mverifymsg
+[AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
 usmtp
 [fdns; [192.0.2.254] (server.example [192.0.2.1])]
 ])
@@ -387,8 +386,11 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=$1 rep=0
-])])
+[m4_join([ ],
+	[INFO:zdkimfilter[0]:id=verifymsg: verified:],
+	m4_ifblank([$2], [[spf=pass,]]),
+	[dkim=$1 rep=0
+])])])
 
 #
 AT_SETUP([Verify simple author signature])
@@ -498,17 +500,59 @@ m4_define([ZF_REQUIRE_OPENDBX], [AT_CHECK([$HAVE_OPENDBX || exit 77])])
 #
 AT_SETUP([Verify the IP address passed to database])
 ZF_KEYCONFIG
-AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR)])
-ZF_CTLBATCH([pass (id=@author.example, stat=0)])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(ZF_SIGAUTHOR)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)], [nospf])
 ZF_REQUIRE_OPENDBX
 AT_CHECK(
 grep 'ip: c0000201' database_dump, 0,
 [ip: c0000201
-ip: c0000201
-ip: c0000201
 ],[])
 AT_CLEANUP
 
+#
+AT_SETUP([Verify the bounce address passed to database])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(ZF_SIGAUTHOR)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)], [nospf])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'envelope_sender:' database_dump, 0,
+[envelope_sender: bounces@server.example
+],[])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify bounce address after signing])
+ZF_CONFIG(6, [default_domain example.com
+db_backend test
+db_sql_insert_target_ref dummy
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [suser-bounce@example.com
+Msignmsg
+uauthsmtp
+iuser
+rrecipient@example.org
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'envelope_sender:' database_dump, 0,
+[envelope_sender: user-bounce@example.com
+],[])
+AT_CLEANUP
 
 #
 AT_SETUP([Reject message with non-existent From: domain])
@@ -1233,6 +1277,66 @@ AT_CHECK(
 AT_CHECK([cat database_dump], 0, [], [])
 AT_CLEANUP
 
+#
+AT_SETUP([Logging specific header fields to the DB])
+ZF_CONFIG(0, [db_backend test
+db_sql_insert_msg_ref dummy
+])
+AT_DATA([mail],
+[Received: from server.example by test.example with ESMTP
+Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
+Received-SPF: none SPF=HELO sender=server.sender.example;
+Message-ID: <123456@author.example>
+Date: Mon, 08 Feb 2010 13:12:55 +0100
+VBR-Info: mc=all; md=author.example; mv=author-cert.example
+VBR-Info: mc=all; md=sender.example; mv=sender-cert.example
+MIME-Version: 1.0
+From:     The (sender)
+	<author@author.example>
+To: (undisclosed recipients)
+Subject: This continues to the next line;
+		 		after the                    semicolon
+Content-Type: text/plain; charset=us-ascii
+
+hi there!
+])
+AT_DATA([ctl], [sauthor-bounce@author.example
+Mloggedmsg
+usmtp
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+AT_CHECK([grep 'content_type:' database_dump], 0,
+[content_type: text/plain
+], [])
+AT_CHECK([grep 'content_encoding:' database_dump], 0,
+[content_encoding: -- not given --
+], [])
+AT_CHECK([grep 'date:' database_dump], 0,
+[date: Mon, 08 Feb 2010 13:12:55 +0100
+], [])
+AT_CHECK([grep 'message_id:' database_dump], 0,
+[message_id: <123456@author.example>
+], [])
+AT_CHECK([grep 'from:' database_dump], 0,
+[from: The (sender) <author@author.example>
+], [])
+AT_CHECK([grep 'subject:' database_dump], 0,
+[subject: This continues to the next line; after the semicolon
+], [])
+AT_CHECK([grep 'envelope_sender:' database_dump], 0,
+[envelope_sender: author-bounce@author.example
+], [])
+AT_CLEANUP
+
 
 # common setup for dynamic signing domain determination
 
@@ -1286,8 +1390,7 @@ INFO:zdkimfilter[0]:id=dyndom: response: 250 Ok.
 
 # one field, given
 AT_SETUP([Signing after the From field])
-ZF_CONFIG(6, [no_reputation
-default_domain example.com
+ZF_CONFIG(6, [default_domain example.com
 key_choice_header from
 ])
 ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
@@ -1297,8 +1400,7 @@ AT_CLEANUP
 
 # one field, not given
 AT_SETUP([Not signing for missing choice field])
-ZF_CONFIG(6, [no_reputation
-default_domain example.com
+ZF_CONFIG(6, [default_domain example.com
 key_choice_header no-such-header-field
 ])
 ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
@@ -1308,8 +1410,7 @@ AT_CLEANUP
 
 # one field, given, but the key is missing
 AT_SETUP([Not signing for missing key])
-ZF_CONFIG(6, [no_reputation
-default_domain example.com
+ZF_CONFIG(6, [default_domain example.com
 selector given
 key_choice_header from
 ])
@@ -1320,8 +1421,7 @@ AT_CLEANUP
 
 # default default_domain
 AT_SETUP([Default domain even if login domain])
-ZF_CONFIG(6, [no_reputation
-default_domain example.org
+ZF_CONFIG(6, [default_domain example.org
 key_choice_header - *
 ])
 ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
@@ -1331,8 +1431,7 @@ AT_CLEANUP
 
 # default login domain
 AT_SETUP([Login domain preferred])
-ZF_CONFIG(6, [no_reputation
-default_domain example.org
+ZF_CONFIG(6, [default_domain example.org
 key_choice_header * -
 ])
 ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
@@ -1342,8 +1441,7 @@ AT_CLEANUP
 
 # from overrides default
 AT_SETUP([Login domain not preferred])
-ZF_CONFIG(6, [no_reputation
-default_domain example.org
+ZF_CONFIG(6, [default_domain example.org
 key_choice_header from *
 ])
 ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
@@ -1353,8 +1451,7 @@ AT_CLEANUP
 
 # repeated field overrides default
 AT_SETUP([Custom field, second instance overrides])
-ZF_CONFIG(6, [no_reputation
-default_domain example.com
+ZF_CONFIG(6, [default_domain example.com
 key_choice_header from x-repeated x-repeated *
 ])
 ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
@@ -1368,8 +1465,7 @@ AT_CLEANUP
 
 # repeated field does not override default
 AT_SETUP([Custom field, second instance does not override])
-ZF_CONFIG(6, [no_reputation
-default_domain example.com
+ZF_CONFIG(6, [default_domain example.com
 key_choice_header from x-repeated * x-repeated
 ])
 ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
@@ -1385,10 +1481,8 @@ AT_CLEANUP
 m4_define([ZF_SIGREPORT],
 [ZF_KEYFILE([author.example X
 ])
-ZF_CONFIG(2, [no_reputation
-db_backend test
-db_sql_insert_message dummy
-db_sql_select_domain dummy
+ZF_CONFIG(2, [db_backend test
+db_sql_insert_msg_ref dummy
 $1])
 AT_DATA([mail],
 	[m4_default([$2], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])])
@@ -1508,8 +1602,10 @@ DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
 ZF_REQUIRE_OPENDBX
 AT_CHECK(
 grep 'vbr_mv: ' database_dump, 0,
-[vbr_mv: sender-cert.example
+[vbr_mv: -- not given --
 vbr_mv: sender-cert.example
+vbr_mv: -- not given --
+vbr_mv: -- not given --
 ],[])
 AT_CLEANUP
 
@@ -1538,8 +1634,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Obfuscate userid])
-ZF_CONFIG(3, [no_reputation
-default_domain example.com
+ZF_CONFIG(3, [default_domain example.com
 redact_received_auth using this secret text
 ])
 ZF_PRIVATEKEY([example.com])
@@ -1576,8 +1671,7 @@ m4_define([ZF_REQUIRE_NETTLE], [AT_CHECK([$HAVE_NETTLE || exit 77])])
 
 #
 AT_SETUP([Retrieve obfuscated userid])
-ZF_CONFIG(3, [no_reputation
-default_domain example.com
+ZF_CONFIG(3, [default_domain example.com
 redact_received_auth using this secret text
 ])
 ZF_REQUIRE_NETTLE
@@ -1588,8 +1682,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Retrieve target domains])
-ZF_CONFIG(6, [no_reputation
-default_domain example.com
+ZF_CONFIG(6, [default_domain example.com
 db_backend test
 db_sql_select_target dummy
 ])
@@ -1624,8 +1717,7 @@ AT_CLEANUP
 
 #
 AT_SETUP([Check dkimsign finds the right executable])
-ZF_CONFIG(3, [no_reputation
-default_domain example.com
+ZF_CONFIG(3, [default_domain example.com
 redact_received_auth using this secret text
 ])
 AT_CHECK([dkimsign -f zftest.conf --version], 0, [ignore], [ignore])

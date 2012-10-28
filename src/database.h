@@ -81,6 +81,9 @@ typedef struct stats_info
 	char *content_type, *content_encoding;
 	char *date;
 	char *message_id;
+	char *from;
+	char *subject;
+	char *envelope_sender;
 
 	// actual response from vbr check
 	char *vbr_result_resp;

@@ -1,0 +1,98 @@
+=pod
+
+=head1 NAME
+
+dkimsign - a wrapper around zdkimfilter
+
+=head1 SYNOPSIS
+
+B<dkimsign> [I<option> [I<option-arg>] I<message-file> ...
+
+=head1 DESCRIPTION
+
+B<dkimsign> is a wrapper around the zdkimfilter executable.  It provides for
+offline signing of messages, and a few other utilities.  It searches for the
+zdkimfilter executable in the build-time configured path, and either in the
+directory used for calling it, if any, or in the PATH.  That way it can work
+when the package is built but not yet installed.
+
+To have zdkimfilter sign the files, it writes a minimal ctlfile in the tmp
+directory (either F</tmp> or the one given in the I<tmp> configuration option).
+It passes the I<--no-db> option to zdkimfilter, so as to avoid having the
+messages signed this way logged to the database.
+
+=head1 OPTIONS
+
+=over
+
+=item B<-f> I<config-filename>
+
+Specify a different configuration file.  That way it is possible to configure
+for signing different header fields, or using different keys.  B<dkimsign> only
+reads the I<tmp> and I<default_domain> configuration options, but forwards this
+command line option to the invoked zdkimfilter.
+
+=item B<--syslog>
+
+Log to syslog (LOG_MAIL facility) rather than stderr.
+
+=item B<--domain> I<domain>
+
+Use this as the signing domain.  The ctlfile will have
+E<lt>postmaster@I<domain>E<gt> as the authenticated user.  This may or may not
+result in a signature by such domain, according to the other configuration
+options.
+
+=item B<--config>
+
+Have zdkimfilter check and print the configuration file.
+
+=item B<--help>
+
+Print usage and exit.
+
+=item B<--version>
+
+Have zdkimfilter print the version.  B<dkimsign> just prints which executable
+it is about to run.
+
+=back
+
+=head1 FILES
+
+=over
+
+=item F<@COURIER_FILTER_INSTALL@/zdkimfilter>
+
+The build-time configured path of the zdkimfilter executable.
+
+=item F<@COURIER_SYSCONF_INSTALL@/filters/zdkimfilter.conf>
+
+Default configuration file.
+
+=back
+
+
+=head1 AUTHOR
+
+
+Alessandro Vesely E<lt>vesely@tana.itE<gt>
+
+
+=head1 SEE ALSO
+
+=over
+
+=item B<zdkimfilter>(8)
+
+Explains how to set up private keys for signing, and choice of domain.
+
+=item B<zdkimfilter.conf>(5)
+
+Explains configuration options, including I<key_choice_header> and
+I<default_domain>.
+
+=back
+
+=cut
+

@@ -1,0 +1,654 @@
+=pod
+
+=head1 NAME
+
+zfilter_db - zdkimfilter's database test tool
+
+=head1 SYNOPSIS
+
+B<zfilter_db> [I<option> [I<option-arg>... ]...
+
+
+=head1 DESCRIPTION
+
+Signing messages, as well as publishing SPF records that result in a C<pass>,
+implies claiming some responsibility for the messages thus associated to the
+pertinent domain.  Such associations aid abuse handling by providing natural
+targets for complaints, as specified by RFC 6650.  Mail admins have to use a
+database to keep track of feedback loops, both incoming and outgoing ones.
+Moreover, counting complaints and hard bounces may result in useful metrics.
+However, it is not straightforward to devise how to integrate zdkimfilter's
+logging capabilities with either an existing database or one designed anew:
+A test environment is in order, and that's what B<zfilter_db> provides.
+
+B<zfilter_db> connects to the database so as to exercise the database
+configuration options.  This man page first describes such options and
+gives an example.  Then, it describes how this tool can be used for testing.
+
+The database connection is done via OpenDBX.  See the documentation at
+http://www.linuxnetworks.de/doc/index.php/OpenDBX for how some options are
+mapped to specific backends.
+
+
+=head1 CONFIGURATION OPTIONS
+
+The database options in zdkimfilter configuration all start with C<db_>.
+There are three groups of them:  Connection, options proper, and queries.
+The first group controls the connection itself:
+
+=over
+
+=item B<db_backend>
+
+This is one of the DB engines supported bu OpenDBX, which include C<firebird>,
+C<mssql>, C<mysql>, C<oracle>, C<pgsql>, C<sqlite>, C<sqlite3>, and C<sybase>.
+The name C<test> is recognized internally and not passed to OpenDBX.
+
+=item B<db_host>
+
+Depending on database type and configuration, this can be a host name, an IP
+address, a path to a Unix socket, and more.  It is a string passed to
+I<odbx_init> as is.
+
+=item B<db_port>
+
+Ditto.
+
+=item B<db_user>, B<db_password>, B<db_database>
+
+These parameters are passed to I<odbx_bind> verbatim.
+
+=item B<db_timeout>
+
+This is a number of seconds.  Not all backends use it.  Defaults to 2.
+
+=back
+
+
+The second group are the options proper.  These have names starting with
+C<db_opt_> and are passed to I<odbx_set_option>, if given, before binding.
+
+
+=over
+
+=item B<db_opt_tls>
+
+Can be C<A> for always, C<N> for never, or C<T> for try.
+
+=item B<db_opt_multi_statements>
+
+Can be C<Y> or C<N>.
+
+=item B<db_opt_compress>
+
+Can be C<Y> or C<N>.
+
+=item B<db_opt_mode>
+
+Mode of operation.
+
+=item B<db_opt_paged_results>
+
+Number of result records to transfer; 0 means all.  Our queries get at most
+one, so it's not something to worry about.
+
+=back
+
+
+The third group, queries, is made of items whose names start with C<db_sql_>.
+Each query can use a number of variables whose values are collected while
+processing a mail message.  A variable is identified by the string
+B<$(>I<variable-name>B<)>.  Queries, in turn, can be subdivided into three
+groups:  Whitelist query, log of incoming messages, and of outgoing ones.
+
+=head2 Whitelist query
+
+This is the single item:
+
+=over
+
+=item B<db_sql_whitelisted>
+
+It can use two variables: C<domain>, an authenticated domain name; and
+C<ip>, the IP address of the client.
+
+=back
+
+
+Whitelist queries are issued while processing incoming messages.  They should
+return an integer.  A value of 1 or higher affects the order in which
+DKIM signatures verification is attempted.  A value of 2 or higher prevents
+a message from being rejected or dropped due to ADSP.  (A value of 3 or higher
+will be used in an upcoming version of zdkimfilter.)
+
+=head2 Common variables
+
+These are eleven variables that can be used in all of the following queries.
+They are: C<ino>, C<mtime>, and C<pid>, as used by Courier to identify a
+message; C<from>, C<date>, C<message_id>, C<subject>, C<content_type>, and
+C<content_encoding> from the corresponding header fields in the message;
+C<mailing_list>, which is 1 if the message has some header fields that are
+typical of mailing lists; and C<envelope_sender> for the bounce address.
+
+=head2 Log of incoming messages
+
+Incoming messages, after any valid DKIM signature or SPF authentication has
+been seen, can be logged to the database by defining some or all of these
+queries.  Besides common variables, the queries in this group can log two
+additional sets of variables.
+
+The first set consists of C<ip>, seen above; C<message_status>, which is one of
+the three values C<accept>, C<reject>, and C<drop>; C<adsp_flags>, which is a
+comma separated list of one of the three possible values of the policy,
+C<unknown>, C<all>, and C<discardable>, along with C<found>, in case C<unknown>
+was not inferred, and possibly C<fail> and C<whitelisted>; C<received_count>
+the number of C<Received:> header fields; and C<signatures_count> for the
+number of DKIM signatures.
+
+The second set of variables can be only used by all but one of the queries in
+this group.  It contains the domain-related variables C<domain> seen above;
+C<reputation>, the integer found via the DKIM-reputation query, see
+L<zdikimfilter.conf(5)>;  C<vbr_mv>, the one of the I<trusted_vouchers> that
+confirmed a VBR claim; C<vbr_response> the actual string returned by the VBR
+query; and C<auth_type>, a comma separated list of the following tokens:
+C<author> for author domain signature, C<spf>, C<spf_helo>, C<dkim>, and C<vbr>
+for the corresponding authentication methods, C<rep> and C<rep_s> for domains
+involved in DKIM reputation as subjects and/or signers respectively.
+
+=over
+
+=item B<db_sql_insert_message>
+
+This is the one query that cannot use the second set of variables.  It can
+return a value that will be made available to subsequent queries as a variable
+named C<message_ref>.  Since Courier's triplet C<ino>, C<mtime>, and C<pid> can
+be used as a unique key to the message database, it is not imperative that the
+key of the last inserted message be returned.
+
+If no SQL error occurs, successive queries will be called in sequence for each
+domain.
+
+=item B<db_sql_select_domain>
+
+This query can be used to check whether a domain name exists already.
+It can return the key --one row, one column-- which will be made available as
+C<domain_ref>.
+
+=item B<db_sql_insert_domain>
+
+This query is only issued if the previous query didn't return the key.  It can
+return the key too, if multi-statements are allowed.  If it doesn't, a second
+call to I<db_sql_select_domain> will be made.
+
+=item B<db_sql_update_domain>
+
+This query is issued in case the first call to I<db_sql_select_domain> returned
+a C<domain_ref>.  That way, it is possible to update the domain record even if
+it existed already.
+
+=item B<db_sql_insert_msg_ref>
+
+A message reference table links messages to domains.  As this is the last query
+in the sequence, it should receive both C<message_ref> and C<domain_ref>.  This
+might be the only query one needs to define in order to log all data.
+
+=back
+
+
+=head2 Log of outgoing messages
+
+These queries resemble the ones for incoming messages.  They can use the common
+variables defined above, and some additional ones as defined below.
+
+=over
+
+=item B<db_sql_select_user>
+
+This query can use C<local_part> and C<domain> of the authenticated user who
+sent the message.  It returns a C<user_ref>.  It occurs at most once per
+message.
+
+=item B<db_sql_select_target>
+
+This query selects a target C<domain> and returns a C<domain_ref>.  This and
+the following queries occur once per target domain; that is, for each of the
+domains that appear in one or more of the message's recipients.
+
+=item B<db_sql_insert_target>
+
+This inserts C<domain> and possibly returns a C<domain_ref> too.  If it
+returns nothing, then I<db_sql_select_target> is called again.
+
+
+=item B<db_sql_update_target>
+
+Called if C<domain_ref> was obtained by the first call to
+I<db_sql_select_target>.
+
+
+=item B<db_sql_insert_target_ref>
+
+Final query, with both C<domain_ref> and C<user_ref>.
+
+
+=back
+
+=head1 TEST DATABASE
+
+It is handy to create a new database, in order to avoid disturbing ongoing
+operations.  The following example code uses MySQL.  It is just to exemplify
+the procedures, so it doesn't reflect tough design issues on how to integrate
+it with scripts that handle bounces and complaints.  Please spend some time on
+such design.
+
+First, let's define some tables:
+
+  CREATE DATABASE IF NOT EXISTS zfilter_test;
+  USE zfilter_test;
+
+  DROP TABLE IF EXISTS domain;
+  CREATE TABLE domain (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    domain VARCHAR(63)  NOT NULL,
+    recv INT UNSIGNED NOT NULL DEFAULT 0,
+    sent INT UNSIGNED NOT NULL DEFAULT 0,
+    whitelisted TINYINT NOT NULL DEFAULT 0,
+    since TIMESTAMP NOT NULL DEFAULT NOW(),
+    last TIMESTAMP NOT NULL DEFAULT 0,
+    INDEX by_dom(domain(16))
+  )
+  ENGINE = MyISAM
+  CHARACTER SET ascii COLLATE ascii_general_ci;
+
+  DROP TABLE IF EXISTS msg_ref;
+  CREATE TABLE msg_ref (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    message_in INT UNSIGNED NOT NULL COMMENT 'Foreign key to message_in',
+    domain INT UNSIGNED NOT NULL COMMENT 'Foreign key to domain',
+    reputation INT NOT NULL,
+    auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s')
+      NOT NULL,
+    vbr ENUM ('spamhaus', 'who_else') NOT NULL,
+    INDEX by_dom_msg(domain, message_in)
+  )
+  ENGINE = MyISAM
+  CHARACTER SET ascii COLLATE ascii_general_ci;
+
+  DROP TABLE IF EXISTS message_in;
+  CREATE TABLE message_in (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    ino BIGINT UNSIGNED NOT NULL,
+    mtime BIGINT UNSIGNED NOT NULL,
+    pid  BIGINT UNSIGNED NOT NULL,
+    ip BINARY(4) NOT NULL COMMENT 'Ok for IPv4.  For IPv6 use VARBINARY(16)',
+    date VARCHAR(63),
+    message_id VARCHAR(63),
+    content_type VARCHAR(63) NOT NULL DEFAULT 'text/plain',
+    content_encoding VARCHAR(63) NOT NULL DEFAULT '7bit',
+    received_count SMALLINT UNSIGNED NOT NULL,
+    signatures_count SMALLINT UNSIGNED NOT NULL,
+    mailing_list TINYINT NOT NULL DEFAULT 0,
+    score SMALLINT DEFAULT NULL COMMENT 'NULL if not tested',
+    UNIQUE KEY (mtime, pid, ino)
+  )
+  ENGINE = MyISAM
+  CHARACTER SET ascii COLLATE ascii_general_ci;
+
+  DROP TABLE IF EXISTS user;
+  CREATE TABLE user (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    addr VARCHAR(63) NOT NULL,
+    INDEX by_addr(addr(16))
+  )
+  ENGINE = MyISAM
+  CHARACTER SET ascii COLLATE ascii_general_ci;
+
+  DROP TABLE IF EXISTS message_out;
+  CREATE TABLE message_out (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    ino BIGINT UNSIGNED NOT NULL,
+    mtime BIGINT UNSIGNED NOT NULL,
+    pid  BIGINT UNSIGNED NOT NULL,
+    user INT UNSIGNED NOT NULL COMMENT 'Foreign key to user',
+    date VARCHAR(63),
+    message_id VARCHAR(63),
+    content_type VARCHAR(63) NOT NULL DEFAULT 'text/plain',
+    content_encoding VARCHAR(63) NOT NULL DEFAULT '7bit',
+    UNIQUE KEY (mtime, pid, ino)
+  )
+  ENGINE = MyISAM
+  CHARACTER SET ascii COLLATE ascii_general_ci;
+
+  DROP TABLE IF EXISTS msg_out_ref;
+  CREATE TABLE msg_out_ref (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    message_out INT UNSIGNED NOT NULL COMMENT 'Foreign key to message_out',
+    domain INT UNSIGNED NOT NULL COMMENT 'Foreign key to domain',
+    INDEX by_dom_msg_out(domain, message_out)
+  )
+  ENGINE = MyISAM
+  CHARACTER SET ascii COLLATE ascii_general_ci;
+
+Next, we define procedures.  The following one inserts or updates domains and
+inserts msg_ref records.  We'll call it from I<db_sql_insert_msg_ref>.
+
+  DROP PROCEDURE IF EXISTS recv_from_domain;
+
+  delimiter //
+  CREATE PROCEDURE recv_from_domain (
+    IN m_ref INT UNSIGNED,
+    IN dname VARCHAR(255),
+    IN m_auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s'),
+    IN vbr_mv VARCHAR(255),
+    IN rep INT)
+    MODIFIES SQL DATA
+  BEGIN
+    DECLARE d_id INT UNSIGNED;
+    DECLARE d_whit TINYINT;
+    DECLARE Empty_set CONDITION FOR 1329;
+    DECLARE CONTINUE HANDLER FOR Empty_set
+      BEGIN
+        INSERT INTO domain SET domain = dname;
+        SELECT LAST_INSERT_ID() INTO d_id;
+        SET d_whit = 0;
+      END;
+    SELECT id, whitelisted INTO d_id, d_whit FROM domain WHERE domain = dname;
+    IF d_whit < 1 AND FIND_IN_SET('dkim', m_auth) THEN
+      # whitelisted=1 affects the order in which to try signature validation
+      UPDATE domain SET whitelisted = 1, recv = recv + 1, last = NOW()
+        WHERE id = d_id;
+    ELSE
+      UPDATE domain SET recv = recv + 1, last = NOW() WHERE id = d_id;
+    END IF;
+    INSERT INTO msg_ref SET message_in = m_ref, domain = d_id, auth = m_auth,
+      reputation = rep,
+      vbr = IF(STRCMP(vbr_mv, 'dwl.spamhaus.org') = 0, '(spamhaus)', '()');
+  END //
+
+Now for outgoing messages.  For simplicity, we repopulate the user table.  The
+following procedure will be called from I<db_sql_select_user>.  Note that it
+also inserts a new message_out.
+
+  DROP PROCEDURE IF EXISTS sent_message //
+
+  CREATE PROCEDURE sent_message (
+    IN u_addr VARCHAR(255),
+    IN m_ino BIGINT UNSIGNED,
+    IN m_mtime BIGINT UNSIGNED,
+    IN m_pid BIGINT UNSIGNED,
+    IN m_date VARCHAR(63),
+    IN m_id VARCHAR(63),
+    IN m_ct VARCHAR(63),
+    IN m_ce VARCHAR(63))
+    MODIFIES SQL DATA
+  BEGIN
+    DECLARE u_id INT UNSIGNED;
+    DECLARE Empty_set CONDITION FOR 1329;
+    DECLARE CONTINUE HANDLER FOR Empty_set
+      BEGIN
+        INSERT INTO user SET addr = u_addr;
+        SELECT LAST_INSERT_ID() INTO u_id;
+      END;
+    SELECT id INTO u_id FROM user WHERE addr = u_addr LIMIT 1;
+    INSERT INTO message_out SET ino = m_ino, mtime = m_mtime, pid = m_pid,
+      user = u_id, date = m_date, message_id = m_id,
+      content_type = m_ct, content_encoding = m_ce;
+    SELECT LAST_INSERT_ID(); # result, goes into u_ref
+  END //
+
+The domain table is obviously shared between incoming and outgoing messages.
+This example mimics the way some mail clients do whitelisting.  It will be
+called by I<db_sql_insert_target_ref>.
+
+  DROP PROCEDURE IF EXISTS sent_to_domain //
+
+  CREATE PROCEDURE sent_to_domain (
+    IN u_ref INT UNSIGNED,
+    IN dname VARCHAR(255))
+    MODIFIES SQL DATA
+  BEGIN
+    DECLARE d_id INT UNSIGNED;
+    DECLARE d_whit TINYINT;
+    DECLARE Empty_set CONDITION FOR 1329;
+    DECLARE CONTINUE HANDLER FOR Empty_set
+      BEGIN
+        INSERT INTO domain SET domain = dname;
+        SELECT LAST_INSERT_ID() INTO d_id;
+        SET d_whit = 0;
+      END;
+    SELECT id, whitelisted INTO d_id, d_whit FROM domain WHERE domain = dname;
+    IF d_whit < 2 THEN
+      # whitelisted=2 prevents ADSP discard; whitelisted=3 is not used yet
+      UPDATE domain SET whitelisted = 2, sent = sent + 1, last = NOW()
+        WHERE id = d_id;
+    ELSE
+      UPDATE domain SET sent = sent + 1, last = NOW() WHERE id = d_id;
+    END IF;
+    INSERT INTO msg_out_ref SET message_out = u_ref, domain = d_id;
+  END //
+
+  delimiter ;
+
+Don't forget you need a user to operate on the test database.  You may want to
+minimize changes and have the same user operate on both the test and the final
+databases, or you may prefer otherwise.  In any case, the user will need some
+access rights.  For example:
+
+  GRANT SELECT, INSERT, UPDATE, EXECUTE
+    ON zfilter_test.* TO 'zfilter'@'localhost'
+
+Finally, we'll write C<db_> options to a file named C<test.conf>:
+
+  db_backend mysql
+  db_host /some/path/to/mysqld/mysqld.sock
+
+  db_opt_multi_statements
+
+  db_database zfilter_test
+  db_user zfilter
+
+  db_sql_whitelisted SELECT whitelisted FROM domain WHERE domain = '$(domain)'
+
+  db_sql_insert_msg_ref CALL recv_from_domain(\
+    $(message_ref), '$(domain)', ('$(auth_type)'), '$(vbr_mv)', $(reputation))
+
+  db_sql_insert_message INSERT INTO message_in SET \
+   ino = 0x$(ino), mtime = 0x$(mtime), pid = 0x$(pid),\
+   ip = X'$(ip)', date = '$(date)', message_id = '$(message_id)',\
+   content_type = '$(content_type)', content_encoding = '$(content_encoding)',\
+   received_count = $(received_count), signatures_count = $(signatures_count),\
+   mailing_list = $(mailing_list); SELECT LAST_INSERT_ID()
+
+
+  db_sql_select_user CALL sent_message('$(local_part)@$(domain)',\
+    0x$(ino), 0x$(mtime), 0x$(pid), '$(date)', '$(message_id)',\
+    '$(content_type)', '$(content_encoding)')
+
+  db_sql_insert_target_ref CALL sent_to_domain($(user_ref), '$(domain)')
+
+Note that C<ino>, C<mtime>, and C<pid> are given as hex string, but without
+the leading C<0x>.  The same is true for the IP address.  Also note how comma
+separated lists match SET/ENUM types.
+
+=head1 COMMAND LINE OPTIONS
+
+The I<option> and I<option-arg> mentioned in the synopsis are command line
+arguments.  Any I<option-arg> cannot start with a minus.  They're as follows:
+
+=over
+
+=item B<-v>
+
+Increase verbosity during query processing.  Can be given two or three times to
+obtain further details.
+
+=item B<-f> I<config-filename>
+
+Specify the configuration file.
+
+=item B<--config>
+
+Report the C<db_> configuration options only.
+
+=item B<--help>
+
+Print usage and exit.
+
+=item B<--version>
+
+Report package version string and exit.
+
+=item B<--dry-run>
+
+Don't actually run queries, just print them out.  OpenDBX is used normally,
+including escaping arguments, but the I<odbx_query> call is skipped.
+
+=item B<--test>
+
+Force the C<test> backend.  OpenDBX is not used at all.  The list of allowed
+variables is printed along with their available values, if any.  Using this
+option is the same as setting I<db_backend> to C<test>.
+
+=item B<--db-sql-whitelisted> I<domain> ...
+
+Run the query for each domain.  Before displaying the result, the query itself
+is displayed, even with no I<-v> option.  An option --that is, an argument
+starting with C<->-- marks the end of the domains.
+
+=item B<--set-stats> I<dir> [I<message data>]
+
+Adds records to the database.  The first argument consists of a single
+character, either C<i> for incoming or C<o> for outgoing.  The I<option-arg>s
+after the first are the I<message data>, unless the next option is missing:  In
+that case, they are interpreted as I<domain>[,I<token>] (see next option).
+
+Up to 12 arguments are accepted for I<message data>.  The first one is the IP
+number for incoming messages, or the authenticated user-id for outgoing ones.
+The others are, in order, C<envelope_sender>, C<from>, C<date>, C<message_id>,
+C<subject>, C<content_type>, C<content_encoding>, C<received_count>,
+C<signatures_count>, C<mailing_list>, and finally the dot-separated joint of
+C<ino>, C<mtime>, and C<pid>.  Missing arguments are generated at random, so as
+to insert different records.  A C<@> can be used as a placeholder for a missing
+argument not at the end.  However, domain names have to be supplied explicitly,
+otherwise the call fails with a critical error.
+
+=item B<--set-stats-domain> I<domain>[,I<token>]
+
+Domain names are given one per argument either after this I<option> or after
+the previous one.  Each name can be followed, without interleaving spaces, by 
+any of C<author>, C<spf>, C<spf_helo>, C<dkim>, C<vbr>, C<rep>, and C<rep_s>,
+as seen for incoming messages.  For C<rep> and C<rep_s>, the token can be
+followed by a colon (C<:>) and the numeric value of C<reputation>.  For C<vbr>,
+the sequence C<vbr[:I<vbr_mv>[:I<vbr_response>]]> is recognized.
+
+A lone C<@> instead of I<domain>[,I<token>] enables the addition of random
+tokens to the following domains that have none.
+
+=back
+
+When using the --test or --dry-run options, the calling function won't get
+any result from queries.  Hence, it will call select statements multiple times.
+
+
+=head1 EXAMPLES
+
+The database and configuration exemplified above can be exercised like so:
+
+  $ zfilter_db -f test.conf --set-stats i example.com
+  DEBUG: zfilter: query: INSERT INTO message_in SET   ino = 0x7ed6eb01, mtime
+   = 0x508bfc6a, pid = 0x1c01,   ip = X'c0000286', date = 'Sat, 27 Oct 2012 1
+  7:23:22 +0200', message_id = '<6f9d7557@example.com>',   content_type = 'te
+  xt/plain', content_encoding = '8bit',   received_count = 2, signatures_coun
+  t = 3,   mailing_list = 0; SELECT LAST_INSERT_ID()
+  DEBUG: zfilter: query: CALL recv_from_domain(  2444, 'example.com', (''), '
+  ', 0)
+
+We can set VBR:
+
+  $ zfilter_db -f test.conf \
+  > --set-stats i example.com,dkim,vbr:dwl.spamhause.org:all
+
+The second part of the output will change to
+
+  DEBUG: zfilter: query: CALL recv_from_domain(  2446, 'example.com', ('dkim,
+  vbr'), 'dwl.spamhause.org', 0)
+
+Was that handled correctly?  We can query the database using mysql client:
+
+  mysql> SELECT INET_NTOA(CONV(HEX(m.ip),16,10)) AS ip,
+      -> FROM_UNIXTIME(m.mtime), d.domain, r.auth
+      -> FROM msg_ref AS r, message_in AS m, domain AS d
+      -> WHERE r.domain=d.id AND r.message_in=m.id AND
+      -> FIND_IN_SET('vbr', r.auth);
+  +-------------+------------------------+-------------+----------+
+  | ip          | FROM_UNIXTIME(m.mtime) | domain      | auth     |
+  +-------------+------------------------+-------------+----------+
+  | 192.0.2.133 | 2012-10-27 17:32:59    | example.com | dkim,vbr |
+  +-------------+------------------------+-------------+----------+
+  1 row in set (0.00 sec)
+
+We can populate the test database as needed, in order to design and test our
+procedures and scripts.  But what columns can we use for that query?  Just ask:
+
+  $ zfilter_db -f test.conf --test \
+  > --set-stats i example.com,dkim,vbr:dwl.spamhause.org:all
+
+  Variables allowed for statement db_sql_insert_message:
+  ino: 5b5107e6
+  mtime: 508c016f
+  pid: 7d08
+  ip: c000029c
+  date: Sat, 27 Oct 2012 17:44:47 +0200
+  envelope_sender: bounce.address@example.com
+  from: sender@example.com
+  subject: Subject of the msg
+  message_id: <56154705@example.com>
+  content_type: multipart/mixed
+  content_encoding: -- not given --
+  received_count: 2
+  signatures_count: 3
+  mailing_list: 1
+  adsp_flags: unknown
+  message_status: accept
+
+You added C<envelope_sender>, didn't you?  Just checking if you were asleep...
+
+
+=head1 FILES
+
+=over
+
+=item F<@COURIER_SYSCONF_INSTALL@/filters/zdkimfilter.conf>
+
+Default configuration file.
+
+=back
+
+
+=head1 AUTHOR
+
+
+Alessandro Vesely E<lt>vesely@tana.itE<gt>
+
+
+=head1 SEE ALSO
+
+=over
+
+=item B<RFC 6376>
+
+DomainKeys Identified Mail (DKIM) signatures.
+
+=item B<RFC 6650>
+
+Creation and use of email feedback reports:  An applicability statement for the
+Abuse Reporting Format (ARF).
+
+=item B<OpenDBX>
+
+http://www.linuxnetworks.de/doc/index.php/OpenDBX
+
+=back
+
+=cut
+

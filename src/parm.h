@@ -62,7 +62,7 @@ typedef struct parm_t
 	char tempfail_on_error;
 	char honor_author_domain;
 	char reject_on_nxdomain;
-	char no_reputation;
+	char do_reputation;
 	char all_mode;
 	char sign_rsa_sha1;
 	char header_canon_relaxed;

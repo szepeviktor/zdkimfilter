@@ -178,6 +178,9 @@ static void clean_stats_info_content(stats_info *stats)
 		free(stats->content_encoding);
 		free(stats->date);
 		free(stats->message_id);
+		free(stats->from);
+		free(stats->subject);
+		free(stats->envelope_sender);
 		// don't free(stats->ino_mtime_pid); it is in dyn.info
 	}
 }
@@ -444,14 +447,22 @@ static void collect_stats(dkimfl_parm *parm, char const *start)
 
 	char **target = NULL;
 	char const *s;
+	int stop_at = 0;
 	if ((s = hdrval(start, "Content-Type")) != NULL)
+	{
 		target = &parm->dyn.stats->content_type;
+		stop_at = ';';
+	}
 	else if ((s = hdrval(start, "Content-Transfer-Encoding")) != NULL)
 		target = &parm->dyn.stats->content_encoding;
 	else if ((s = hdrval(start, "Date")) != NULL)
 		target = &parm->dyn.stats->date;
 	else if ((s = hdrval(start, "Message-Id")) != NULL)
 		target = &parm->dyn.stats->message_id;
+	else if ((s = hdrval(start, "From")) != NULL)
+		target = &parm->dyn.stats->from;
+	else if ((s = hdrval(start, "Subject")) != NULL)
+		target = &parm->dyn.stats->subject;
 
 	if (target && *target == NULL)
 	{
@@ -464,7 +475,7 @@ static void collect_stats(dkimfl_parm *parm, char const *start)
 		{
 			// find terminator
 			char const *t = s;
-			while ((ch = *(unsigned char const*)t) != 0 && ch != ';')
+			while ((ch = *(unsigned char const*)t) != 0 && ch != stop_at)
 				++t;
 			// trim right
 			while (t > s && isspace(*(unsigned char const*)(t - 1)))
@@ -747,7 +758,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 
 	error_exit:
 		if (parm->z.verbose)
-			fl_report(LOG_ERR,
+			fl_report(LOG_ALERT,
 				"id=%s: error reading key %s: %s",
 				parm->dyn.info.id,
 				fname,
@@ -1135,6 +1146,12 @@ static domain_prescreen *recipient_s_domains(dkimfl_parm *parm)
 		}
 		fl_rcpt_clear(fre);
 	}
+
+	if (dps_head == NULL)
+		fl_report(LOG_ERR,
+			"id=%s: unable to collect recipients from ctl file",
+			parm->dyn.info.id);
+
 	return dps_head;
 }
 
@@ -1215,6 +1232,7 @@ static void sign_message(dkimfl_parm *parm)
 		{
 			parm->dyn.stats->outgoing = 1;
 			parm->dyn.stats->domain_head = recipient_s_domains(parm);
+			parm->dyn.stats->envelope_sender = fl_get_sender(parm->fl);
 		}
 
 		// (not)TODO: if parm.no_signlen, instead of copy_body, stop at either
@@ -2568,7 +2586,7 @@ static void verify_message(dkimfl_parm *parm)
 	* Reputation
 	*/
 	if (parm->dyn.rtc == 0 &&
-		!parm->z.no_reputation && status == DKIM_STAT_OK && vh.sig)
+		parm->z.do_reputation && status == DKIM_STAT_OK && vh.sig)
 	{
 		int rep;
 		/*
@@ -2803,6 +2821,8 @@ static void verify_message(dkimfl_parm *parm)
 		clean_stats(parm);
 	else if (parm->dyn.stats)
 	{
+		parm->dyn.stats->envelope_sender = fl_get_sender(parm->fl);
+
 		parm->dyn.stats->domain_head = vh.domain_head;
 		vh.domain_head = NULL;
 

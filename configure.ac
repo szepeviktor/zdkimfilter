@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.67])
-AC_INIT([zdkimfilter for courier],[1.0b],[vesely@tana.it],[zdkimfilter])
+AC_INIT([zdkimfilter for courier],[1.0],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -401,14 +401,6 @@ AC_MSG_RESULT([$RESOLVER_LIB])
 AC_SUBST([RESOLVER_LIB])
 
 
-# ssl
-AC_MSG_CHECKING([flags for ssl library])
-LIBSSL_CFLAGS="`$PKG_CONFIG --cflags libssl`"
-LIBSSL_LDADD="`$PKG_CONFIG --libs libssl`"
-AC_MSG_RESULT([$LIBSSL_CFLAGS $LIBSSL_LDADD])
-AC_SUBST([LIBSSL_CFLAGS])
-AC_SUBST([LIBSSL_LDADD])
-
 # Checks for other header files.
 AC_HEADER_STDC
 AC_CHECK_HEADERS([limits.h stdlib.h string.h unistd.h fcntl.h sys/time.h])
@@ -495,6 +487,9 @@ AC_CONFIG_FILES([Makefile
                  etc/Makefile
                  etc/zdkimfilter.conf.dist
                  etc/zdkimfilter.pod
+                 etc/dkimsign.pod
+                 etc/redact.pod
+                 etc/zfilter_db.pod
                  tests/atlocal
                  tests/Makefile
                 ])

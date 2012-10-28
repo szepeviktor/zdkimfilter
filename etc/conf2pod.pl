@@ -49,8 +49,15 @@ unshift @res, ("\n",
 	'I<logic line> = [ C<#> I<comment> ] | I<name> [ C<=> ] [ I<value> ]'."\n",
 	"\n",
 	"The file consists of zero or more lines. \n");
-pop @res; pop @res; # discard the bottom two lines of the intro.
+pop @res; pop @res; pop@res; # discard the bottom three lines of the intro.
 write_lines(@res);
+
+write_lines(("\n", "=head1 NOTE\n", "\n",
+	"For any change to the configuration file to take effect, zdkimfilter has\n",
+	"to be restarted.  It is currently unable to re-read the configuration,\n",
+	"hence it is necessary to do, for example, I<courierfilter stop> and then\n",
+	"I<courierfilter start>.  Use I<dkimsign>(1) to check the file is valid\n",
+	"\n"));
 
 write_lines(("\n", "=head1 OPTIONS\n", "\n",
 	"Valid names and their types are listed below.  All boolean values \n",
@@ -58,6 +65,10 @@ write_lines(("\n", "=head1 OPTIONS\n", "\n",
 	"value is omitted.  Most values default to NULL, but the program behaves \n",
 	"differently.  For other cases, the default values are mentioned after \n",
 	"the relevant description. \n",
+	"\n"));
+
+write_lines(("\n",
+	"The database options, C<db_*>, are documented in I<zfilter_db>(1).\n",
 	"\n"));
 
 write_lines(("=over\n", "\n"));

@@ -6,6 +6,7 @@
 # depending on the name.
 # Valid names (and types) are shown at the beginning of each comment; all
 # boolean values default to "N", and "Y" is assumed if the value is omitted.
+# NOTE: stop and reload zdkimfilter for any change to this file to take effect.
 
 # all_mode (bool)
 # Courier runs all-mode filters after non-all-mode ones, in alphabetical order.
@@ -72,25 +73,8 @@ all_mode = @zdkimfilter_mode@
 # ("-") specified in the previous option.  Empty by default.
 
 # selector (string)
-# Each key should be a softlink; the basename of the linked to file
-# contains the selector. If the basename starts with the same string as the
-# link, i.e. the domain name, then that initial part and an optional dot
-# are skipped. In addition, an extension of ".private" or ".pem" is discarded.
-# E.g., the following will all result in assigning selector "s" to the key for
-# "example.com":
-#
-#    example.com -> ../anywhere/example.com.s
-#    example.com -> ../anywhere/example.coms
-#    example.com -> ../anywhere/s
-#    example.com -> ../anywhere/example.com.s.private
-#    example.com -> ../anywhere/example.coms.private
-#    example.com -> ../anywhere/s.private
-#    example.com -> ../anywhere/example.com.s.pem
-#    example.com -> ../anywhere/example.coms.pem
-#    example.com -> ../anywhere/s.pem
-#
-# If a selector name cannot be determined that way, then the selector specified
-# here, if any, or the constant "s" will be used.
+# In case a selector cannot be determined following a soft link, then the
+# selector specified here, if any, or the constant "s" will be used.
 
 # sign_hfields (array)
 # header fields to be signed.
@@ -163,8 +147,8 @@ all_mode = @zdkimfilter_mode@
 # than that are considered denial of service (DoS) attacks and rejected
 # outright.  The default value is 128.
 
-# honor_author_domain
-# reject_on_nxdomain
+# honor_author_domain (bool)
+# reject_on_nxdomain (bool)
 # The filter may reject or drop messages according to ADSP.  The three
 # conditions that may cause this behavior are as follows:
 #
@@ -196,9 +180,10 @@ all_mode = @zdkimfilter_mode@
 # publish an ADSP policy different from "unknown".  (Publishing "unknown"
 # results in better caching, though.)
 
-# no_reputation (bool)
-# skip a query to dkim-reputation.org for the signer. The result is reported in
-# A-R for method "x-dkim-rep" according to the next two options.
+# do_reputation (bool)
+# make a query to dkim-reputation.org for the signer and author domain.  The
+# result is reported in A-R for method "x-dkim-rep" according to the next two
+# options.
 
 # reputation_fail (int)
 # Any values greater or equal than this are reported as "fail".
@@ -213,7 +198,8 @@ all_mode = @zdkimfilter_mode@
 # Default: reputation_pass = -32768
 
 # reputation_root (string)
-# The host to be queried for reputation.  See http://www.dkim-reputation.org.
+# The host to be queried for reputation.  Default as defined in libopendkim.
+# See http://www.dkim-reputation.org.
 
 # trusted_vouchers (array)
 # A space-separated list of trusted vouchers.  If a message has VBR-Info

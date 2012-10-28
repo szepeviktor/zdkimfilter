@@ -1,0 +1,93 @@
+=pod
+
+=head1 NAME
+
+redact - an obfuscation utility
+
+=head1 SYNOPSIS
+
+B<redact> (I<option> [I<option-arg>]) ...
+
+=head1 DESCRIPTION
+
+B<redact> can encode or decode strings.  It is not so much concerned in
+unbreakable security, as in providing an consistent way to obfuscate some
+tokens without losing the possibility to retrieve their original values.  The
+items that this tool is meant to obfuscate, such as authenticated user-id's,
+may be considered correct, even de rigueur, to divulge.  However, they can be
+abused by unethical people.  For example, knowing the user id may aid password
+cracking.
+
+The core function of this program is statically linked inside the zdkimfilter
+executable, and dynamically linked with I<libnettle>.
+
+=head1 OPTIONS
+
+=over
+
+=item B<-f> I<config-filename>
+
+Specify an alternative configuration file.  Only the I<redact_received_auth>
+configuration option is read from there.
+
+=item B<--password> I<password>
+
+Use this password instead of the one in the configuration file.
+
+=item B<--encode> I<clearstring>
+
+Produce an obfuscated version of I<clearstring>.
+
+=item B<--decode> I<obfuscated>
+
+Retrieve the clear string that this obfuscated token was derived from.
+
+=item B<--help>
+
+Display usage and exit.
+
+=item B<--version>
+
+Display package version string and exit.
+
+=back
+
+
+=head1 FILES
+
+=over
+
+=item F<@COURIER_SYSCONF_INSTALL@/filters/zdkimfilter.conf>
+
+Default configuration file.
+
+=back
+
+
+=head1 AUTHOR
+
+
+Alessandro Vesely E<lt>vesely@tana.itE<gt>
+
+
+=head1 SEE ALSO
+
+=over
+
+=item B<zdkimfilter.conf>(5)
+
+Explains configuration options, including I<redact_received_auth>.
+
+=item B<RFC 6590>
+
+Redaction of potentially sensitive data from mail abuse reports.
+
+=item B<Nettle>
+
+Nettle - a low-level cryptographic library
+http://www.lysator.liu.se/~nisse/nettle/
+
+=back
+
+=cut
+
