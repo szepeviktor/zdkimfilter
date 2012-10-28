@@ -307,6 +307,7 @@ AC_CACHE_CHECK([opendbx version],
 	])
 OPENDBX_CFLAGS=""
 OPENDBX_LIB=""
+HAVE_OPENDBX="false"
 if $PKG_CONFIG --atleast-version=1.4.5 opendbx; then
 	AC_CACHE_CHECK([cflags for opendbx],
 		av_cv_cflags_opendbx,
@@ -342,7 +343,6 @@ if $PKG_CONFIG --atleast-version=1.4.5 opendbx; then
 
 	# Check opendbx library
 	AC_MSG_CHECKING([whether opendbx is usable])
-	HAVE_OPENDBX="no"
 	OPENDBX_LIB=" `$PKG_CONFIG --libs-only-L opendbx` -lopendbx"
 	SAVE_LIBS="$LIBS"
 	LIBS="$SAVE_LIBS $OPENDBX_LIB"
@@ -351,11 +351,12 @@ if $PKG_CONFIG --atleast-version=1.4.5 opendbx; then
 	AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <opendbx/api.h>
 	], [odbx_t *h;
 	odbx_init(&h, "", "", "");
-	])], [HAVE_OPENDBX="yes"])
+	])], [HAVE_OPENDBX="true"])
 	ac_link="$save_ac_link"
 	LIBS="$SAVE_LIBS"
 	AC_MSG_RESULT([$HAVE_OPENDBX])
-	if test "$HAVE_OPENDBX" = "yes"; then
+	AC_SUBST([HAVE_OPENDBX])
+	if test "$HAVE_OPENDBX" = "true"; then
 		AC_DEFINE(HAVE_OPENDBX, 1, [Define if using opendbx])
 	else
 		OPENDBX_LIB=""
@@ -363,6 +364,7 @@ if $PKG_CONFIG --atleast-version=1.4.5 opendbx; then
 fi
 AC_SUBST([OPENDBX_CFLAGS])
 AC_SUBST([OPENDBX_LIB])
+AC_SUBST([HAVE_OPENDBX])
 
 AC_HEADER_RESOLV
 RESOLVER_LIB=
@@ -422,7 +424,7 @@ NETTLE_LIB=" -lnettle"
 AC_MSG_CHECKING([whether nettle is avalable])
 SAVE_LIBS="$LIBS"
 LIBS="$SAVE_LIBS $NETTLE_LIB"
-HAVE_NETTLE="no"
+HAVE_NETTLE="false"
 AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <nettle/arcfour.h>
 #include <nettle/base64.h>
 ], [struct arcfour_ctx c0;
@@ -431,10 +433,11 @@ struct base64_decode_ctx c2;
 arcfour_set_key(&c0, 0, "");
 base64_decode_init(&c1);
 base64_decode_init(&c2);
-])], [HAVE_NETTLE="yes"])
+])], [HAVE_NETTLE="true"])
 LIBS="$SAVE_LIBS"
+AC_SUBST([HAVE_NETTLE])
 AC_MSG_RESULT([$HAVE_NETTLE])
-if test "$HAVE_NETTLE" = "yes"; then
+if test "$HAVE_NETTLE" = "true"; then
 	AC_DEFINE(HAVE_NETTLE, 1, [Define if using nettle])
 else
 	NETTLE_LIB=""
