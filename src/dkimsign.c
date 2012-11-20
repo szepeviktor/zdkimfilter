@@ -379,7 +379,10 @@ static char *create_ctlfile(char const *config_file, char const *domain)
 	if (domain == NULL)
 		domain = out[1];
 	if (domain)
-		fprintf(fp, "@%s", domain);
+	{
+		char const* at = strchr(domain, '@');
+		fprintf(fp, "@%s", at? at + 1: domain);
+	}
 	fputs("\nMdkimsign\n", fp);
 	fclose(fp);
 	free(out[0]);

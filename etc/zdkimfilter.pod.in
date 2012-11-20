@@ -84,7 +84,7 @@ local user to get unsubscribed from such mailing list.  Promptly whitelisting
 senders is crucial if ADSP is enabled.  To whitelist a domain, have the
 I<db_sql_whitelisted> query return a value of 2 or higher for the relevant
 domain name.  The domain name has to be authenticated for that to work, though.
-The I<honor_author_domain> configuration option, enables rejecting or dropping
+The I<honor_author_domain> configuration option enables rejecting or dropping
 messages according to ADSP.  The I<reject_on_nxdomain> configuration option
 enables rejecting messages with an invalid C<From:> header field.
 

@@ -179,7 +179,53 @@ END //
 delimiter ;
 
 # example query, to see who signed what messages:
-# SELECT INET_NTOA(CONV(HEX(m.ip),16,10)), m.date, FROM_UNIXTIME(m.mtime), d.domain, r.auth
-# FROM msg_ref AS r, message_in AS m, domain AS d
-# WHERE r.domain=d.id AND r.message_in=m.id AND FIND_IN_SET('dkim', r.auth)
+SELECT INET_NTOA(CONV(HEX(m.ip),16,10)), m.date, FROM_UNIXTIME(m.mtime), d.domain, r.auth
+FROM msg_ref AS r, message_in AS m, domain AS d
+WHERE r.domain=d.id AND r.message_in=m.id AND FIND_IN_SET('dkim', r.auth)
+
+
+# how many new domains have been added today?
+SELECT COUNT(*) FROM domain WHERE since > NOW() - INTERVAL 1 DAY
+
+# how many messages did each of them send?
+SELECT d.id, d.domain, r.auth, COUNT(*) AS cnt
+FROM domain AS d, msg_ref AS r, message_in AS m
+WHERE d.id = r.domain AND r.message_in = m.id AND d.since > NOW() - INTERVAL 1 DAY
+GROUP BY d.id, r.auth ORDER BY cnt DESC LIMIT 10
+
+# how many messages did they send as a whole?
+SELECT count(*)
+FROM domain AS d, msg_ref AS r, message_in AS m
+WHERE d.id = r.domain AND r.message_in = m.id AND d.since > NOW() - INTERVAL 1 DAY
+
+
+# delete incoming messages older than 1 month
+DELETE r, m FROM msg_ref AS r, message_in AS m
+WHERE r.message_in = m.id AND m.mtime < UNIX_TIMESTAMP(NOW() - INTERVAL 1 MONTH)
+
+# find domains having been orphaned that way
+SELECT l.* FROM domain AS l LEFT JOIN msg_ref AS r ON r.domain = l.id
+WHERE r.domain IS NULL AND l.recv > 0
+
+
+# delete outgoing messages older than 1 month
+DELETE r, m FROM msg_out_ref AS r, message_out AS m
+WHERE r.message_out = m.id AND m.mtime < UNIX_TIMESTAMP(NOW() - INTERVAL 1 MONTH)
+
+# find domains having been orphaned that way
+SELECT l.* FROM domain AS l LEFT JOIN msg_out_ref AS r ON r.domain = l.id
+WHERE r.domain IS NULL AND l.sent > 0
+
+
+# find which users sent how many messages to a given list of domains
+SELECT d.domain, COUNT(*) AS cnt, u.addr
+FROM domain AS d, msg_out_ref AS r, message_out AS m, user AS u
+WHERE d.id = r.domain AND r.message_out = m.id AND m.user = u.id AND
+d.id IN (1,2,3,4,5) GROUP BY u.id
+
+SELECT d.domain, COUNT(*) AS cnt, u.addr
+FROM domain AS d, msg_out_ref AS r, message_out AS m, user AS u
+WHERE d.id = r.domain AND r.message_out = m.id AND m.user = u.id 
+GROUP BY d.id, u.id ORDER BY cnt DESC LIMIT 10
+
 
