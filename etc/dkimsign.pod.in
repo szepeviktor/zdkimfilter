@@ -36,12 +36,22 @@ command line option to the invoked zdkimfilter.
 
 Log to syslog (LOG_MAIL facility) rather than stderr.
 
+=item B<--filter>
+
+Use standard I/O, that is read a mail file on stdin and rewrite it to stdout.
+This option implies I<--syslog>, but the filter response is echoed on stderr in
+case of error.
+
+I/O behavior is obtained by passing the I<--no-fork> option to zdkimfilter.
+That way, the message-file arguments get silently ignored.
+
 =item B<--domain> I<domain>
 
 Use this as the signing domain.  The ctlfile will have
 E<lt>postmaster@I<domain>E<gt> as the authenticated user.  This may or may not
 result in a signature by such domain, according to the other configuration
-options.
+options.  If the I<domain> argument contains a C<@>, only the part after it is
+used.
 
 =item B<--config>
 

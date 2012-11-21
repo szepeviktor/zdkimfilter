@@ -4,7 +4,7 @@
 
 AM_CFLAGS = -I$(top_srcdir)
 AM_CPPFLAGS = -fno-strict-aliasing
-noinst_HEADERS = filterlib.h filedefs.h \
+noinst_HEADERS = filterlib.h filedefs.h filecopy.h \
  myvbr.h redact.h vb_fgets.h parm.h database.h database_variables.h database_statements.h
 
 filterexecdir = @COURIER_FILTER_INSTALL@

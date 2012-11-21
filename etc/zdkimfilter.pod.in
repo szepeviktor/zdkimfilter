@@ -131,6 +131,13 @@ Print usage and exit.
 
 Print version info, including versions of the underlying libopendkim, and exit.
 
+=item --no-fork
+
+Any following -t option will directly parse ctlfiles, rather than sending their
+names through a pipe to one child per mailfile.  Albeit read from stdin, the
+mail file must be a regular file.  It is copied to stdout even if not modified,
+unless errors occur.
+
 =item -tI<N>[,I<x>] I<file...>
 
 Scan the arguments that follow as N ctl and mail file(s).  With I<,x> behave

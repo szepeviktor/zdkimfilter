@@ -59,6 +59,7 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include "vb_fgets.h"
 #include "parm.h"
 #include "database.h"
+#include "filecopy.h"
 #include <assert.h>
 
 // utilities -----
@@ -155,16 +156,6 @@ static char *skip_cfws(char const *s)
 			s = NULL;
 	}
 	return (char*)s;
-}
-
-static int filecopy(FILE *in, FILE *out)
-{
-	char buf[8192];
-	size_t sz;
-	while ((sz = fread(buf, 1, sizeof buf, in)) > 0)
-		if (fwrite(buf, sz, 1, out) != 1)
-			return -1;
-	return ferror(in)? -1: 0;
 }
 
 // ----- end utilities
@@ -1335,9 +1326,6 @@ typedef struct verify_parms
 
 } verify_parms;
 
-// odd-aligned constant may replace vbr_sig or whitelisted_sig
-static DKIM_SIGINFO *const not_sig_but_spf = (DKIM_SIGINFO*)0xb16b00b5;
-
 static int is_trusted_voucher(char const **const tv, char const *const voucher)
 // return non-zero if voucher is in the trusted_voucher list
 // the returned value is 1 + the index of trust, for sorting
@@ -2216,7 +2204,7 @@ static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
 // Return 1 or 0, the number of resinfo's written.
 {
 	unsigned int sig_flags;
-	if (sig == NULL || sig == not_sig_but_spf ||
+	if (sig == NULL ||
 		((sig_flags = dkim_sig_getflags(sig)) & DKIM_SIGFLAG_IGNORE) != 0)
 			return 0;
 

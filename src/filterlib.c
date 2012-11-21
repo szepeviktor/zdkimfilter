@@ -11,7 +11,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010-2011 Alessandro Vesely
+Copyright (C) 2010-2012 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -61,6 +61,7 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include <limits.h>
 
 #include "filedefs.h"
+#include "filecopy.h"
 
 #if defined(FILTER_NAME)
 #define STRING2(P) #P
@@ -103,6 +104,8 @@ struct filter_lib_struct
 	unsigned int verbose:4;
 	unsigned int testing:4;
 	unsigned int batch_test:4;
+	unsigned int no_fork:2;
+	unsigned int write_file:2;
 };
 
 /* ----- sig handlers ----- */
@@ -280,6 +283,7 @@ FILE* fl_get_file(fl_parm*fl)
 
 FILE *fl_get_write_file(fl_parm *fl)
 {
+	fl->write_file = 1;
 	if (fl->write_fp == NULL)
 	{
 		if (fl->write_fname == NULL)
@@ -685,7 +689,7 @@ static int read_fname(fl_parm* fl)
 /*
 ** This reads data and ctl file names. A file name must be either
 ** an absolute path or relative to the current directory (as usual.)
-** When runnining as an installed filter, lf_init does chdir to
+** When running as an installed filter, lf_init does chdir to
 ** COURIER_HOME, which is what was configured as @prefix@: so this
 ** is consistent whith courierfilter.html which states that path
 ** names may be relative to that directory. (However, it looks as
@@ -838,142 +842,101 @@ void fl_init_signal(init_signal_arg arg)
 	sigaction(SIGUSR1, &act, NULL);
 }
 
-#if !defined(NDEBUG)
-static void fl_break(void)
+static void do_the_real_work(fl_parm* fl)
 {
-	fputs("execution resumed\n", stderr);
-}
-#endif
+	char const *resp = NULL;
 
-static void fl_runchild(fl_parm* fl)
-{
-	pid_t pid;
-	int retry = 2;
-	int const fd_out = fl->out;
-	
-	while ((pid = fork()) < 0 && --retry >= 0)
-		sleep(1);
-	
-	if (pid == 0) /* child */
+	if (fl->data_fp == NULL)
 	{
-		char const *resp = NULL;
-		unsigned w = 0, l;
-		int rtc = 0;
+		if ((fl->data_fp = fopen(fl->data_fname, "r")) == NULL)
+			fl_report(LOG_ALERT, "cannot open %s: %s\n",
+				fl->data_fname, strerror(errno));
+	}
+
+	if (fl->data_fp != NULL)
+	{
+		/* alarm will kill after resetting */
+		fl_reset_signal();
+		if (fl_get_test_mode(fl) != fl_testing)
+			alarm(900); // 15 minutes (ways too much)
+
+		fl->resp = NULL;
+		if (fl->filter_fn)
+			(*fl->filter_fn)(fl);
 		
-		if (fl->verbose >= 8)
-			fprintf(stderr, THE_FILTER "[%d]: started child\n",
-				my_getpid());
+		alarm(0);
+
+		fclose(fl->data_fp);
+		fl->data_fp = NULL;
+		
+		/*
+		* rename the temporary output file, fail on errors
+		*/
+		if (fl->write_fp && fl->write_fname)
+		{
+			int fail = ferror(fl->write_fp);
+			if (fail)
+				fprintf(stderr, "ALERT:"
+					THE_FILTER ": error writing %s: %s\n",
+					fl->write_fname, strerror(errno));
 			
-#if !defined(NDEBUG)
-		if (fl_get_test_mode(fl) == fl_testing)
-		{
-			char *debug = getenv("DEBUG_FILTER");
-			if (debug)
-			{
-				int nsec = atoi(debug);
-				if (nsec <= 0) nsec = 30;
-				
-				/* hallo! */
-				fprintf(stderr, "DEBUG_FILTER: %s\n"
-					"now you have %d secs to\n"
-					"%% gdb %s %d\n"
-					"(gdb) break fl_break\n"
-					"Breakpoint 1 at 0xxx: file %s, line %d.\n"
-					"(gdb) cont\n",
-						debug, nsec, fl->argv0, (int)getpid(),
-						__FILE__, __LINE__ -40);
-				nsec = sleep(nsec);
-				fl_break();
-			}
-			else if (fl->verbose >= 2)
-				fprintf(stderr,
-					"set DEBUG_FILTER to debug the child in gdb\n");
-		}
-#endif
-
-		if (read_fname(fl))
-			rtc = 1;
-		else
-		{
-			if ((fl->data_fp = fopen(fl->data_fname, "r")) != NULL)
-			{
-				/* alarm will kill after resetting */
-				fl_reset_signal();
-				if (fl_get_test_mode(fl) != fl_testing)
-					alarm(900); // 15 minutes (ways too much)
-
-				fl->resp = NULL;
-				if (fl->filter_fn)
-					(*fl->filter_fn)(fl);
-				
-				alarm(0);
-
-				fclose(fl->data_fp);
-				fl->data_fp = NULL;
-				
-				if (fl->write_fp)
-				{
-					int fail = ferror(fl->write_fp);
-					if (fail)
-						fprintf(stderr, "ALERT:"
-							THE_FILTER ": error writing %s: %s\n",
-							fl->write_fname, strerror(errno));
-					
-					if (fclose(fl->write_fp))
-					{
-						fprintf(stderr, "ALERT:"
-							THE_FILTER ": error closing %s: %s\n",
-							fl->write_fname, strerror(errno));
-						fail = 1;
-					}					
-					fl->write_fp = NULL;
-
-					if (fail == 0 && rename(fl->write_fname, fl->data_fname))
-					{
-						fprintf(stderr, "ALERT:"
-							THE_FILTER ": error renaming %s %s: %s\n",
-							fl->data_fname, fl->write_fname, strerror(errno));
-						fail = 1;
-					}
-					
-					if (fail)
-						unlink(fl->write_fname);
-					else
-						resp = fl->resp;
-				}
-				else
-					resp = fl->resp;
-				
-				while (fl->cfc)
-					free(cfc_shift(&fl->cfc));
-				if (fl->verbose && !fl_keep_running())
-					fl_report(LOG_ERR, "interrupted");
-			}
-			else
+			if (fclose(fl->write_fp))
 			{
 				fprintf(stderr, "ALERT:"
-					THE_FILTER ": cannot open %s: %s\n",
-					fl->data_fname, strerror(errno));
+					THE_FILTER ": error closing %s: %s\n",
+					fl->write_fname, strerror(errno));
+				fail = 1;
+			}					
+			fl->write_fp = NULL;
+
+			if (fail == 0 && rename(fl->write_fname, fl->data_fname))
+			{
+				fprintf(stderr, "ALERT:"
+					THE_FILTER ": error renaming %s %s: %s\n",
+					fl->data_fname, fl->write_fname, strerror(errno));
+				fail = 1;
 			}
-			free(fl->data_fname);
-			fl->data_fname = NULL;
-			free(fl->write_fname);
-			fl->write_fname = NULL;
+			
+			if (fail)
+				unlink(fl->write_fname);
+			else
+				resp = fl->resp;
 		}
-		
-		/* 
-		** give response --Courier (cdfilters.C) closes the connection when it
-		** gets the last line of the response, and proceeds accordingly.
-		*/
-		if (rtc == 0 && resp == NULL)
+		else
+			resp = fl->resp;
+
+		if (fl->verbose && !fl_keep_running())
+			fl_report(LOG_ERR, "interrupted");
+	}
+
+	// some cleanup here (should be in the calling function)
+	while (fl->cfc)
+		free(cfc_shift(&fl->cfc));
+	free(fl->data_fname);
+	fl->data_fname = NULL;
+	free(fl->write_fname);
+	fl->write_fname = NULL;
+	
+	/* 
+	** give response --Courier (cdfilters.C) closes the connection when it
+	** gets the last line of the response, and proceeds accordingly.
+	*/
+	if (resp == NULL)
+	{
+		resp = "432 Mail filter temporarily unavailable.\n";
+		if (fl->resp == NULL)
 		{
-			resp = "432 Mail filter temporarily unavailable.\n";
-			if (fl->resp == NULL)
-				fprintf(stderr, "ERR:"
-					THE_FILTER "[%d]: response was NULL!!\n",
-					my_getpid());
+			fprintf(stderr, "ERR:"
+				THE_FILTER "[%d]: response was NULL!!\n",
+				my_getpid());
+			fl->resp = resp;
 		}
-		l = rtc ? 0 : strlen(resp);
+	}
+
+	int const fd_out = fl->out;
+	if (fd_out >= 0)
+	{
+		unsigned w = 0, l = strlen(resp);
 		while (w < l && fl_keep_running())
 		{
 			unsigned p = write(fd_out, resp + w, l - w);
@@ -994,13 +957,71 @@ static void fl_runchild(fl_parm* fl)
 			}
 			w += p;
 		}
-		
-		if (fl->after_filter)
-		{
+	}
+	
+	if (fl->after_filter)
+	{
+		if (fd_out >= 0)
 			close(fd_out);
-			fl->in = fl->out = -1;
-			(*fl->after_filter)(fl);
+		fl->in = fl->out = -1;
+		(*fl->after_filter)(fl);
+	}
+}
+
+#if !defined(NDEBUG)
+static void fl_break(void)
+{
+	fputs("execution resumed\n", stderr);
+}
+#endif
+
+static void fl_runchild(fl_parm* fl)
+{
+	pid_t pid;
+	int retry = 2;
+	
+	while ((pid = fork()) < 0 && --retry >= 0)
+		sleep(1);
+	
+	if (pid == 0) /* child */
+	{
+		if (fl->verbose >= 8)
+			fprintf(stderr, THE_FILTER "[%d]: started child\n",
+				my_getpid());
+
+#if !defined(NDEBUG)
+		if (fl_get_test_mode(fl) == fl_testing)
+		{
+			char *debug = getenv("DEBUG_FILTER");
+			if (debug)
+			{
+				int nsec = atoi(debug);
+				if (nsec <= 1) nsec = 30;
+			
+				/* hallo! */
+				fprintf(stderr, "DEBUG_FILTER: %s\n"
+					"now you have %d secs to\n"
+					"%% gdb %s %d\n"
+					"(gdb) break fl_break\n"
+					"Breakpoint 1 at 0xxx: file %s, line %d.\n"
+					"(gdb) cont\n",
+						debug, nsec, fl->argv0, (int)getpid(),
+						__FILE__, __LINE__ -35);
+				nsec = sleep(nsec);
+				fl_break();
+			}
+			else if (fl->verbose >= 2)
+				fprintf(stderr,
+					"set DEBUG_FILTER to debug the child in gdb\n");
 		}
+#endif
+
+		int rtc = 0;
+		if (read_fname(fl))
+			rtc = 1;
+		else
+			do_the_real_work(fl);
+
 		exit(rtc);
 	}
 	else if (pid > 0) /* parent */
@@ -1103,6 +1124,49 @@ static int fl_runtest(fl_parm* fl, int ctlfiles, int argc, char *argv[])
 		}
 	}
 	return rtc;
+}
+
+static int fl_runstdio(fl_parm* fl, int ctlfiles, int argc, char *argv[])
+{
+	if (argc < ctlfiles)
+		ctlfiles = argc;
+	fl->ctl_count = ctlfiles;
+
+	if (ctlfiles <= 0)
+	{
+		fl_report(LOG_ERR, "no ctlfile, no filter");
+		return 1;
+	}
+
+	int i;
+	for (i = 0; i < ctlfiles; ++i)
+		if (cfc_unshift(&fl->cfc, argv[i], strlen(argv[i])))
+			break;
+
+	if (i < ctlfiles)
+	{
+		fl_report(LOG_ALERT, "MEMORY FAULT");
+		while (fl->cfc)
+			free(cfc_shift(&fl->cfc));
+		return 1;
+	}
+
+	fl->data_fp = stdin;
+	fl->write_fp = stdout;
+	fl->out = fl->in = -1;
+
+	do_the_real_work(fl);
+
+	if (fl->resp)
+	{
+		if (strchr("012", *fl->resp) != NULL &&
+			fl->write_file == 0) // 250 not filtered
+				filecopy(stdin, stdout);
+
+		fprintf(stderr, "\nFILTER-RESPONSE:%s", fl->resp);
+	}
+
+	return 0;
 }
 
 static void
@@ -1393,28 +1457,39 @@ int fl_main(fl_init_parm const*fn, void *parm,
 	for (i = 1; i < argc; ++i)
 	{
 		char const *const arg = argv[i];
+
+		if (strcmp(arg, "--no-fork") == 0)
+		{
+			fl.no_fork = 1;
+			continue;
+		}
+
 		if (arg[0] == '-' && arg[1] == 't')
 		{
 			char *t = NULL;
 			unsigned long l = strtoul(&arg[2], &t, 0);
+			unsigned const int ctl_max = argc - i - (fl.no_fork? 1: 2);
 			fl.testing = 1;
 			if (*t) fl.batch_test = 1;
-			if (l <= 0 || t == NULL || l > INT_MAX || (int)l >= argc - i - 1 ||
+			if (l <= 0 || t == NULL || l > INT_MAX || (int)l > ctl_max ||
 				(*t != 0 && *t != ','))
 			{
 				fprintf(stderr,
 					THE_FILTER ": bad parameter %s; t=%d, expected 1-%d ctlfiles\n",
-						arg, *t, argc - i - 2);
+						arg, *t, ctl_max);
 				rtc = 1;
 			}
 			else
 			{
 				fl_init_signal(init_signal_all);
+				int (*const fl_fn)(fl_parm*, int, int, char*[]) =
+					fl.no_fork? &fl_runstdio: &fl_runtest;
+
 				if (fl.verbose >= 4)
 					fprintf(stderr,
 						THE_FILTER ": running for %s on %d ctl + %d mail files\n",
 						*t == 0? "test": t + 1, (int)l, argc - i - 2);
-				rtc = fl_runtest(&fl, (int)l, argc - i - 1, argv + i + 1);
+				rtc = (*fl_fn)(&fl, (int)l, argc - i - 1, argv + i + 1);
 			}
 			break;
 		}
@@ -1429,11 +1504,12 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			rtc = fl_run_batchtest(fn, &fl);
 			break;
 		}
-		
+
 		if (strcmp(arg, "--help") == 0)
 		{
 			fputs(
 			/*  12345678901234567890123456 */
+				"  --no-fork               no children, implies stdI/O behavior\n"
 				"  -tN[,x] file...         scan rest of args as N ctl and mail file(s)\n"
 				"                          with \"x\" behave like batch test\n"
 				"  --batch-test            enter batch test mode\n",
