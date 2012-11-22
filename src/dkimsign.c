@@ -54,19 +54,23 @@ static volatile int
 	signal_timed_out = 0,
 	signal_break = 0;
 
+static int no_needless_logging = 0;
 static void sig_catcher(int sig)
 {
 #if !defined(NDEBUG)
-	char buf[80];
-	unsigned s = snprintf(buf, sizeof buf,
-		"dkimsign[%d]: received signal %s\n",
-		(int)getpid(), strsignal(sig));
-	if (s >= sizeof buf)
+	if (!no_needless_logging)
 	{
-		buf[sizeof buf - 1] = '\n';
-		s = sizeof buf;
+		char buf[80];
+		unsigned s = snprintf(buf, sizeof buf,
+			"dkimsign[%d]: received signal %s\n",
+			(int)getpid(), strsignal(sig));
+		if (s >= sizeof buf)
+		{
+			buf[sizeof buf - 1] = '\n';
+			s = sizeof buf;
+		}
+		write(2, buf, s);
 	}
-	write(2, buf, s);
 #endif
 	switch(sig)
 	{
@@ -185,7 +189,8 @@ static int run_zdkimfilter(char *argv[], int do_what)
 
 				int rd = read(io_pipe[0], next, last - next);
 #if !defined NDEBUG
-	printf("rd=%2d, next=%2ld\n", rd, next - first);
+	if (!no_needless_logging)
+		printf("rd=%2d, next=%2ld\n", rd, next - first);
 #endif
 				if (rd > 0)
 				{
@@ -247,8 +252,8 @@ static int run_zdkimfilter(char *argv[], int do_what)
 
 						while (*p == ' ')
 							++p;
-				
-						if (*p) (*do_report)(level, "%s\n", p);
+
+						if (*p) (*do_report)(level, p);
 						p = br + (br < last);     // +1 if not forced newline
 						assert(first <= p && p <= next);
 					}
@@ -442,7 +447,11 @@ static int create_tmpfiles(char const *config_file, char const *domain,
 
 		if (!S_ISREG(st.st_mode))
 		{
+#if defined NDEBUG
 			size_t const sizeofbuf = 8192;
+#else
+			size_t const sizeofbuf = 64;
+#endif
 			if ((buf = malloc(sizeofbuf)) == NULL)
 				goto error_exit;
 
@@ -463,13 +472,14 @@ static int create_tmpfiles(char const *config_file, char const *domain,
 					goto error_exit;
 				}
 
+				char *bw = buf;
 				while (nr > 0)
 				{
-					ssize_t nw = write(fd, buf, nr);
+					ssize_t nw = write(fd, bw, nr);
 					if (nw > 0)
 					{
 						nr -= nw;
-						buf += nw;
+						bw += nw;
 					}
 					else if (errno != EAGAIN && errno != EINTR)
 					{
@@ -631,6 +641,13 @@ int main(int argc, char *argv[])
 
 	if (file_arg == 0 && (do_what & ~do_syslog) == 0)
 		return 1;
+
+	// hack to ease auto tests
+	if (strcmp(argv[argc-1], "--batch-test") == 0)
+	{
+		do_what &= ~do_syslog;
+		no_needless_logging = 1;
+	}
 
 	if (do_what & do_syslog)
 	{

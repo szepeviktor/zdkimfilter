@@ -173,6 +173,7 @@ static void clean_stats_info_content(stats_info *stats)
 		free(stats->subject);
 		free(stats->envelope_sender);
 		// don't free(stats->ino_mtime_pid); it is in dyn.info
+		stats->ino_mtime_pid = NULL;
 	}
 }
 
@@ -2928,7 +2929,8 @@ static void dkimfilter(fl_parm *fl)
 			"id=%s: response: %.*s", parm->dyn.info.id, l, msg);
 	}
 
-	// TODO: free dyn allocated stuff (almost useless at this point)
+	if (parm->dyn.info.id == default_jobid)
+		parm->dyn.info.id = NULL;
 }
 
 /*

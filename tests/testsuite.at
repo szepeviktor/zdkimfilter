@@ -8,6 +8,7 @@ m4_define([ZF_CONFIG],
 [cat >zftest.conf <<'_ZEOF'
 verbose = $1
 domain_keys = .
+tmp = .
 
 $2
 _ZEOF
@@ -172,7 +173,7 @@ sign_hfields             = NULL (space-separated, no colon)
 skip_hfields             = NULL (space-separated, no colon)
 no_signlen               = N (Y/N)
 redact_received_auth     = NULL (any text)
-tmp                      = NULL (temp directory)
+tmp                      = . (temp directory)
 tempfail_on_error        = N (Y/N)
 no_spf                   = N (Y/N)
 save_from_anyway         = N (Y/N)
@@ -219,7 +220,7 @@ AT_CHECK(
 ZF_RUN,
 2,
 [],
-[ERR:zdkimfilter[[0]]:Invalid value 0x100000000 for dns_timeout at line 5 in zftest.conf
+[ERR:zdkimfilter[[0]]:Invalid value 0x100000000 for dns_timeout at line 6 in zftest.conf
 ERR:zdkimfilter[[0]]:Unable to read config file
 ])
 AT_CLEANUP
@@ -1730,4 +1731,104 @@ redact_received_auth using this secret text
 ])
 AT_CHECK([dkimsign -f zftest.conf --version], 0, [ignore], [ignore])
 AT_CLEANUP
+
+# batch invocation a-la dkimsign, with config file; adding --batch-test for fl_log_no_pid
+# (can use ./testsuite -d VALGRIND_AND_OPTS="valgrind -v --leak-check=full --trace-children=yes --log-file=valgrind%p.out")
+m4_define([ZF_NOFORK], [$VALGRIND_AND_OPTS zdkimfilter -f zftest.conf --no-db --no-fork [-t1,dkimsign] ctls $1 --batch-test <mail >mailsig ])
+m4_define([ZDKSIGN], [$VALGRIND_AND_OPTS dkimsign -f zftest.conf --filter $1 --batch-test >mailsig ])
+#
+AT_SETUP([Sign and verify with no-fork])
+ZF_CONFIG(6)
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctls], [Mdkimsign
+uauthsmtp
+ipostmaster@example.com
+])
+AT_CHECK(
+ZF_NOFORK,
+0,
+[],
+[zdkimfilter: running for dkimsign on 1 ctl + 1 mail files
+INFO:zdkimfilter[[0]]:id=dkimsign: signing for postmaster@example.com with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=dkimsign: response: 250 Ok.
+
+FILTER-RESPONSE:250 Ok.
+])
+AT_DATA([ctlv], [Mverifymsg
+usmtp
+])
+AT_DATA([KEYFILE],
+[s._domainkey.example.com v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mailsig
+ctlv
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@example.com, stat=0) rep=0
+INFO:zdkimfilter[[0]]:id=verifymsg: found Authentication-Results by mail.example.com
+INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Non filtered file copied to stdout if no-fork])
+ZF_CONFIG(6)
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctls], [Mdkimsign
+uauthsmtp
+ipostmaster@example.com
+])
+AT_CHECK(
+ZF_NOFORK,
+0,
+[],
+[zdkimfilter: running for dkimsign on 1 ctl + 1 mail files
+INFO:zdkimfilter[[0]]:id=dkimsign: not signing for postmaster@example.com: no key
+INFO:zdkimfilter[[0]]:id=dkimsign: response: 250 not filtered.
+
+FILTER-RESPONSE:250 not filtered.
+])
+AT_CHECK(cmp mail mailsig, 0, [], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Dkimsign copies pipe to tmp])
+ZF_CONFIG(6)
+AT_DATA([mail], [ZF_MESSAGE])
+AT_CHECK([cat mail | ZDKSIGN(--domain example.com)],
+0,
+[], [INFO: zfilter: zdkimfilter: running for dkimsign on 1 ctl + 1 mail files
+INFO: zfilter: zdkimfilter[[0]]:id=dkimsign: not signing for postmaster@example.com: no key
+INFO: zfilter: zdkimfilter[[0]]:id=dkimsign: response: 250 not filtered.
+INFO: zfilter: 250 not filtered.
+])
+AT_CHECK(cmp mail mailsig, 0, [], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Dkimsign reads default domain])
+ZF_CONFIG(6, [
+#this is the default domain
+default_domain = example.com
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_CHECK([ZDKSIGN(--domain example.com) <mail],
+0,
+[], [INFO: zfilter: zdkimfilter: running for dkimsign on 1 ctl + 1 mail files
+INFO: zfilter: zdkimfilter[[0]]:id=dkimsign: not signing for postmaster@example.com: no key
+INFO: zfilter: zdkimfilter[[0]]:id=dkimsign: response: 250 not filtered.
+INFO: zfilter: 250 not filtered.
+])
+AT_CHECK(cmp mail mailsig, 0, [], [])
+AT_CLEANUP
+
 

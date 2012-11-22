@@ -96,6 +96,7 @@ struct filter_lib_struct
 	FILE *data_fp, *write_fp;
 	ctl_fname_chain *cfc;
 	char *argv0;
+	fl_msg_info *info_to_free;
 
 	fl_callback filter_fn;
 	fl_callback after_filter;
@@ -472,9 +473,15 @@ static int msg_info_cb(char *s, void *arg)
 }
 
 int fl_get_msg_info(fl_parm *fl, fl_msg_info *info)
+/*
+* this should only be called once.  anyway, the first call
+* gets the info structure registered to be cleaned after execution.
+*/
 {
 	memset(info, 0, sizeof *info);
 	read_ctlfile(fl, "uMif", &msg_info_cb, info);
+	if (fl->info_to_free == NULL)
+		fl->info_to_free = info;
 	return info->count != 4;
 }
 
@@ -866,8 +873,14 @@ static void do_the_real_work(fl_parm* fl)
 		
 		alarm(0);
 
-		fclose(fl->data_fp);
-		fl->data_fp = NULL;
+		/*
+		* close input (if not stdin)
+		*/
+		if (fl->data_fp && fl->data_fname)
+		{
+			fclose(fl->data_fp);
+			fl->data_fp = NULL;
+		}
 		
 		/*
 		* rename the temporary output file, fail on errors
@@ -965,6 +978,13 @@ static void do_the_real_work(fl_parm* fl)
 			close(fd_out);
 		fl->in = fl->out = -1;
 		(*fl->after_filter)(fl);
+	}
+
+	if (fl->info_to_free)
+	{
+		free(fl->info_to_free->id);
+		free(fl->info_to_free->authsender);
+		free(fl->info_to_free->frommta);
 	}
 }
 
@@ -1157,16 +1177,23 @@ static int fl_runstdio(fl_parm* fl, int ctlfiles, int argc, char *argv[])
 
 	do_the_real_work(fl);
 
+	int bad = 0;
 	if (fl->resp)
 	{
 		if (strchr("012", *fl->resp) != NULL &&
 			fl->write_file == 0) // 250 not filtered
-				filecopy(stdin, stdout);
+		{
+			bad = fseek(stdin, 0, SEEK_SET) != 0 ||
+				filecopy(stdin, stdout) != 0;
+			if (bad)
+				fl_report(LOG_CRIT, "cannot copy mailfile: %s", strerror(errno));
+		}
 
-		fprintf(stderr, "\nFILTER-RESPONSE:%s", fl->resp);
+		if (!bad)
+			fprintf(stderr, "\nFILTER-RESPONSE:%s", fl->resp);
 	}
 
-	return 0;
+	return bad;
 }
 
 static void
@@ -1471,7 +1498,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			unsigned const int ctl_max = argc - i - (fl.no_fork? 1: 2);
 			fl.testing = 1;
 			if (*t) fl.batch_test = 1;
-			if (l <= 0 || t == NULL || l > INT_MAX || (int)l > ctl_max ||
+			if (l <= 0 || t == NULL || l > INT_MAX || l > ctl_max ||
 				(*t != 0 && *t != ','))
 			{
 				fprintf(stderr,

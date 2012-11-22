@@ -1408,7 +1408,7 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 	PICK_STRING(envelope_sender);
 	PICK_STRING(content_type);
 	PICK_STRING(content_encoding);
-#undef SET_STRING
+#undef PICK_STRING
 
 	// these must be zeroed from dwa->var before they are freed:
 	// that's what zeroflag is for.
