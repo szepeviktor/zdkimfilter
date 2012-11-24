@@ -400,7 +400,7 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 		count = 0;
 
 		const var_flag_t outgoing_variables =
-			common_variables | 1 << domain_variable;
+			common_variables | 1 << domain_variable | 1 << rcpt_count_variable;
 
 		// $(domain) is the local domain when selecting the user
 		STMT_ALLOC(db_sql_select_user,
@@ -961,7 +961,7 @@ static int test_whitelisted(db_work_area* dwa, char const* domain)
 	return 0;
 }
 
-int db_is_whitelisted(db_work_area* dwa, char const* domain)
+int db_is_whitelisted(db_work_area* dwa, char *domain)
 /*
 * Run db_sql_whitelisted query for domain.  If the query is a statement,
 * return 0 if it affected no rows, 1 otherwise (log a warning if > 1 rows).
@@ -985,7 +985,7 @@ int db_is_whitelisted(db_work_area* dwa, char const* domain)
 	int rtc = 0;
 
 	assert(dwa->var[domain_variable] == NULL);
-	dwa->var[domain_variable] = (char*)domain;  // cast away const
+	dwa->var[domain_variable] = domain;
 
 	if (dwa->is_test) // need our own rtc for testsuite
 	{
@@ -1545,7 +1545,9 @@ static int autoarg(db_work_area *dwa, stats_info *stats, int i)
 		}
 		case 9:
 		{
-			stats->received_count = 2 + (int)(4.0 * drand48());
+			unsigned *const target = stats->outgoing?
+				&stats->rcpt_count: &stats->received_count;
+			*target = 2 + (int)(4.0 * drand48());
 			break;
 		}
 		case 10:
@@ -1666,21 +1668,21 @@ int main(int argc, char*argv[])
 			"  --dry-run                            don't actually run queries\n"
 			"  --test                               force the \"test\" backend\n"
 			"  --db-sql-whitelisted domain ...      query domains\n"
-			"  --set-stats <d>[@ | msg data]        insert new data (see below)\n"
+			"  --set-stats <d> [msg-data]           insert new data (see below)\n"
 			" [--set-stats-domain] domain[,tok] ... domains related to the message\n"
 			"\n"
 			"For set-stats, the <d> (direction) must be either I (incoming) or\n"
-			"O (outgoing).  If it is immediately followed by @, then message\n"
-			"data and domains' tokens are automatically generated at random.\n"
-			"Otherwise some of the following ten arguments are expected:\n"
+			"O (outgoing).  The following arguments are one or more msg-data, if\n"
+			"the --set-stats-domain option is given, otherwise are domains.\n"
+			"In the former case, some of the following ten arguments are expected:\n"
 			"\n"
 			"  either ip or user@domain, envelope sender, from, date, message_id,\n"
-			"  subject, content_type, content_encoding, received_count,\n"
+			"  subject, content_type, content_encoding, received or rcpt _count,\n"
 			"  signatures_count, mailing_list, and ino.mtime.pid.\n"
 			"\n"
 			"The set-stats-domain option marks the end of message data and the\n"
-			"beginning of the domain list.  It is not necessary when using @.\n"
-			"Domains must be given one per argument, using commas to separate\n"
+			"beginning of the domain list.  It is only necessary if msg-data is\n"
+			"given.  Domains must be one per argument, using commas to separate\n"
 			"the tokens, which are the domain name, followed by any of the words:\n"
 			"author, spf_helo, spf, dkim, vbr.  If using @, tokens are generated at\n"
 			"random, provided no comma appear at the end of the domain name.\n",
@@ -1820,7 +1822,13 @@ int main(int argc, char*argv[])
 							case 6: stats.subject = strdup(arg); break;
 							case 7: stats.content_type = strdup(arg); break;
 							case 8: stats.content_encoding = strdup(arg); break;
-							case 9: stats.received_count = atoi(arg); break;
+							case 9:
+							{
+								unsigned *const target = stats.outgoing?
+									&stats.rcpt_count: &stats.received_count;
+								*target = atoi(arg);
+								break;
+							}
 							case 10: stats.signatures_count = atoi(arg); break;
 							case 11: stats.mailing_list = atoi(arg); break;
 							case 12: stats.ino_mtime_pid = strdup(arg); break;
@@ -1964,7 +1972,7 @@ int db_config_wrapup(db_work_area* dwa, int *in, int *out)
 	return 0;
 }
 int db_connect(db_work_area *dwa) { return 0; }
-int db_is_whitelisted(db_work_area* dwa, char const* domain) {return 0;}
+int db_is_whitelisted(db_work_area* dwa, char *domain) {return 0;}
 
 void db_set_authenticated_user(db_work_area *dwa,
 	char const *local_part, char const *domain) {}

@@ -1,10 +1,10 @@
 # 
 
-CREATE DATABASE IF NOT EXISTS zfilter_test;
+CREATE DATABASE IF NOT EXISTS test_zfilter;
 
-# GRANT SELECT, INSERT, UPDATE, EXECUTE ON zfilter_test.* TO 'zfilter'@'localhost'
+# GRANT SELECT, INSERT, UPDATE, EXECUTE, DELETE ON test_zfilter.* TO 'zfilter'@'localhost'
 
-USE zfilter_test;
+USE test_zfilter;
 DROP TABLE IF EXISTS domain;
 CREATE TABLE domain (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -131,7 +131,8 @@ CREATE PROCEDURE sent_message (
 	IN m_date VARCHAR(63),
 	IN m_id VARCHAR(63),
 	IN m_ct VARCHAR(63),
-	IN m_ce VARCHAR(63))
+	IN m_ce VARCHAR(63),
+	IN m_rcpt INT)
 #	COMMENT 'Called by db_sql_select_user: Insert/update user, insert message_out'
 	MODIFIES SQL DATA
 BEGIN
@@ -145,7 +146,7 @@ BEGIN
 	SELECT id INTO u_id FROM user WHERE addr = u_addr LIMIT 1;
 	INSERT INTO message_out SET ino = m_ino, mtime = m_mtime, pid = m_pid,
 		user = u_id, date = m_date, message_id = m_id,
-		content_type = m_ct, content_encoding = m_ce;
+		content_type = m_ct, content_encoding = m_ce, rcpt_count = m_rcpt;
 	SELECT LAST_INSERT_ID(); # result, goes into u_ref
 END //
 
@@ -216,6 +217,10 @@ WHERE r.message_out = m.id AND m.mtime < UNIX_TIMESTAMP(NOW() - INTERVAL 1 MONTH
 SELECT l.* FROM domain AS l LEFT JOIN msg_out_ref AS r ON r.domain = l.id
 WHERE r.domain IS NULL AND l.sent > 0
 
+
+# find the messages sent in the last 24 hours (add AND u.addr = 'user@example.com')
+SELECT FROM_UNIXTIME(m.mtime) AS time, u.addr FROM message_out AS m, user AS u
+WHERE m.user = u.id AND m.mtime > UNIX_TIMESTAMP(NOW() - INTERVAL 1 DAY)
 
 # find which users sent how many messages to a given list of domains
 SELECT d.domain, COUNT(*) AS cnt, u.addr

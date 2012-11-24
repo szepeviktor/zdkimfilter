@@ -91,6 +91,7 @@ struct filter_lib_struct
 	void *parm;
 
 	char const *resp;
+	void *free_on_exit[2];
 	int in, out;
 	char *data_fname, *write_fname;
 	FILE *data_fp, *write_fp;
@@ -107,6 +108,7 @@ struct filter_lib_struct
 	unsigned int batch_test:4;
 	unsigned int no_fork:2;
 	unsigned int write_file:2;
+	fl_whence_value whence;
 };
 
 /* ----- sig handlers ----- */
@@ -230,6 +232,29 @@ static int cfc_unshift(ctl_fname_chain **cfc, char const *fname, size_t len)
 }
 
 /* ----- fl_* aux functions ----- */
+static const char* const whence_string[] =
+{
+	"no filter",
+	"init",
+	"main loop",
+	"before fork",
+	"after fork",
+	"in child"
+};
+typedef char compile_time_check_that_whence_string_has_value_max_elements
+[(FL_WHENCE_VALUE_MAX == sizeof whence_string/sizeof whence_string[0])? 1: -1];
+
+fl_whence_value fl_whence(fl_parm *fl)
+{
+	return fl->whence;
+}
+
+char const* fl_whence_string(fl_parm *fl)
+{
+	unsigned const w = fl->whence;
+	assert(w < FL_WHENCE_VALUE_MAX);
+	return w < FL_WHENCE_VALUE_MAX? whence_string[w]: "NULL";
+}
 
 void *fl_get_parm(fl_parm*fl)
 {
@@ -270,6 +295,26 @@ void fl_pass_message(fl_parm*fl, char const *resp)
 */
 {
 	fl->resp = resp;
+}
+
+void fl_free_on_exit(fl_parm*fl, void *p)
+// child exit, that is
+{
+	assert(fl);
+
+	static const size_t n_max =
+		sizeof fl->free_on_exit / sizeof fl->free_on_exit[0];
+	if (p)
+	{
+		for (size_t n = 0; n < n_max; ++n)
+			if (fl->free_on_exit[n] == NULL)
+			{
+				fl->free_on_exit[n] = p;
+				return;
+			}
+
+		fl_report(LOG_ERR, "exceeded max of %zu items to free_on_exit", n_max);
+	}
 }
 
 char const *fl_get_passed_message(fl_parm *fl)
@@ -691,6 +736,44 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 }
 
 /* ----- core filter functions ----- */
+typedef struct process_fname
+{
+	char buf[1024];
+	unsigned count;
+	int found, empty;
+	char *data_fname;
+} process_fname;
+
+static void process_read_fname(process_fname *prof, fl_parm* fl)
+{
+	if (prof->buf[prof->count] != '\n')
+		++prof->count;
+	else if (prof->count == 0) /* empty line ends filenames */
+		prof->empty = 1;
+	else
+	{
+		prof->buf[prof->count] = 0;
+
+#if !defined(NDEBUG)
+		if (fl->verbose >= 8)
+			fprintf(stderr, THE_FILTER 
+				"[%d]: piped fname[%d]: %s (len=%u)\n",
+				my_getpid(), prof->found, prof->buf, prof->count);
+#endif
+
+		if (++prof->found == 1) /* first line */
+			prof->data_fname = strdup(prof->buf);
+		else if (prof->count > 1 ||
+			prof->buf[0] != ' ') /* discard dummy placeholders */
+		{
+			if (cfc_unshift(&fl->cfc, prof->buf, prof->count))
+				fprintf(stderr, "ALERT:"
+					THE_FILTER "[%d]: malloc on filename #%d\n",
+						my_getpid(), prof->found);
+		}
+		prof->count = 0;
+	}
+}
 
 static int read_fname(fl_parm* fl)
 /*
@@ -703,22 +786,40 @@ static int read_fname(fl_parm* fl)
 ** if "LOCALSTATEDIR/tmp" is always used as a an absolute path.)
 */
 {
-	char buf[1024];
-	unsigned count = 0;
-	int found = 0, empty = 0, rtc = 0;
 	int const fd = fl->in;
-	fl->data_fname = NULL;
+	process_fname prof;
+	prof.data_fname = NULL;
+	prof.count = 0;
+	prof.found = prof.empty = 0;
+	int rtc = 0;
 
 #if !defined(NDEBUG)
 	if (fl->verbose >= 8)
 		fprintf(stderr, THE_FILTER "[%d]: reading fd %d\n",
 			my_getpid(), fd);
 #endif
-	
-	fl_alarm(30);
-	while (count < sizeof buf && empty == 0 && fl_keep_running())
+
+	unsigned p = read(fd, prof.buf, sizeof prof.buf);
+	for (prof.count = 0; prof.count < p;)
 	{
-		unsigned const p = read(fd, &buf[count], 1);
+		unsigned const len = prof.count + 1;
+		process_read_fname(&prof, fl);
+		if (prof.count == 0)
+		{
+			p -= len;
+			memmove(&prof.buf[0], &prof.buf[len], p);
+		}
+	}
+
+	if (fl->verbose >= 8)
+		fl_report(LOG_DEBUG, "reading %d names%s completed by first call",
+			prof.found, prof.empty == 0? " not": "");
+
+	// read any remaining info, one byte at a time to find the empty line
+	fl_alarm(30);
+	while (prof.count < sizeof prof.buf && prof.empty == 0 && fl_keep_running())
+	{
+		p = read(fd, &prof.buf[prof.count], 1);
 		if (p == (unsigned)(-1))
 		{
 			switch (errno)
@@ -729,73 +830,41 @@ static int read_fname(fl_parm* fl)
 				default:
 					break;
 			}
-			fprintf(stderr, "ALERT:"
-				THE_FILTER "[%d]: cannot read fname pipe: %s\n",
-				my_getpid(), strerror(errno));
+			fl_report(LOG_ALERT, "cannot read fname pipe: %s", strerror(errno));
 			break;
 		}
 		else if (p != 1)
 		{
-			fprintf(stderr, "ALERT:"
-				THE_FILTER "[%d]: Unexpected %s (%d) on fname pipe\n",
-				my_getpid(), p == 0 ? "EOF" : "rtc from read", p);
+			fl_report(LOG_ALERT, "Unexpected %s (%d) on fname pipe",
+				p == 0 ? "EOF" : "rtc from read", p);
 			break;
 		}
 
-		if (buf[count] != '\n')
-			++count;
-		else if (count == 0) /* empty line ends filenames */
-			empty = 1;
-		else
-		{
-			buf[count] = 0;
-
-#if !defined(NDEBUG)
-			if (fl->verbose >= 8)
-				fprintf(stderr, THE_FILTER 
-					"[%d]: piped fname[%d]: %s (len=%u)\n",
-					my_getpid(), found, buf, count);
-#endif
-
-			if (++found == 1) /* first line */
-				fl->data_fname = strdup(buf);
-			else if (count > 1 || buf[0] != ' ') /* discard dummy placeholders */
-			{
-				if (cfc_unshift(&fl->cfc, buf, count))
-					fprintf(stderr, "ALERT:"
-						THE_FILTER "[%d]: malloc on filename #%d\n",
-							my_getpid(), found);
-			}
-			count = 0;
-		}
+		process_read_fname(&prof, fl);		
 	}
 	
 	alarm(0);
-	fl->ctl_count = found - 1;
-	if (!fl_keep_running() || found < 2 ||
-		empty == 0 || count >= sizeof buf || fl->data_fname == NULL)
+	fl->ctl_count = prof.found - 1;
+	if (!fl_keep_running() || prof.found < 2 ||
+		prof.empty == 0 || prof.count >= sizeof prof.buf ||
+		prof.data_fname == NULL)
 	{
 		rtc = 1;
 		if (!fl_keep_running())
-			fprintf(stderr, "ALERT:"
-				THE_FILTER
-				"[%d]: reading fname pipe terminated prematurely\n",
-					my_getpid());
-		if (found != 2 || empty == 0 || fl->data_fname == NULL)
-			fprintf(stderr, "ALERT:"
-				THE_FILTER "[%d]: found%s %d file name(s)%s%s\n",
-				my_getpid(),
-				found < 2 ? " only" : "", found,
-				empty ? "" : " no empty line",
-				fl->data_fname == NULL ? " malloc failure" : "");
-		if (count >= sizeof buf)
-			fprintf(stderr, "ALERT:"
-				THE_FILTER "[%d]: Buffer overflow reading fname pipe\n",
-					my_getpid());
-		free(fl->data_fname);
-		fl->data_fname = NULL;
+			fl_report(LOG_ALERT, "reading fname pipe terminated prematurely");
+		if (prof.found != 2 || prof.empty == 0 || prof.data_fname == NULL)
+			fl_report(LOG_ALERT,
+				"found%s %d file name(s)%s%s",
+				prof.found < 2 ? " only" : "", prof.found,
+				prof.empty ? "" : " no empty line",
+				prof.data_fname == NULL ? " malloc failure" : "");
+		if (prof.count >= sizeof prof.buf)
+			fl_report(LOG_ALERT, "Buffer overflow reading fname pipe");
+		free(prof.data_fname);
+		prof.data_fname = NULL;
 	}
 
+	fl->data_fname = prof.data_fname;
 	return rtc;
 }
 
@@ -986,6 +1055,15 @@ static void do_the_real_work(fl_parm* fl)
 		free(fl->info_to_free->authsender);
 		free(fl->info_to_free->frommta);
 	}
+	static const size_t n_max =
+		sizeof fl->free_on_exit / sizeof fl->free_on_exit[0];
+	for (size_t n = 0; n < n_max; ++n)
+	{
+		if (fl->free_on_exit[n] == NULL)
+			break;
+
+		free(fl->free_on_exit[n]);
+	}
 }
 
 #if !defined(NDEBUG)
@@ -1005,6 +1083,7 @@ static void fl_runchild(fl_parm* fl)
 	
 	if (pid == 0) /* child */
 	{
+		fl->whence = fl_whence_in_child;
 		if (fl->verbose >= 8)
 			fprintf(stderr, THE_FILTER "[%d]: started child\n",
 				my_getpid());
@@ -1045,7 +1124,10 @@ static void fl_runchild(fl_parm* fl)
 		exit(rtc);
 	}
 	else if (pid > 0) /* parent */
+	{
+		fl->whence = fl_whence_after_fork;
 		++live_children;
+	}
 	else
 		perror("ALERT:" THE_FILTER ": fork");
 }
@@ -1545,18 +1627,20 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		}
 	}
 
+	fl.whence = fl_whence_init;
+
 	if (fl.testing == 0 &&
 		argc == 1 &&
 		is_courierfilter(fl.verbose)) /* install filter */
 	{
 		int listensock = -1;
-		
+
 		if (fl.verbose >= 3)
 			fl_report(LOG_INFO, "running");
 		setsid();
 		/*
 		int rtc = setpgrp();
-	
+
 		if (rtc)
 			fprintf(stderr, THE_FILTER ": cannot set process group\n");
 		*/
@@ -1566,17 +1650,24 @@ int fl_main(fl_init_parm const*fn, void *parm,
 
 		if (listensock < 0)
 			return 1;
-		
+
 		if (fn->init_complete)
 			(*fn->init_complete)(&fl);
 
 		lf_init_completed(listensock);
 
+		if (fn->on_fork)
+			(*fn->on_fork)(&fl);
+
+		/*
+		* main loop
+		*/
 		for (;;)
 		{
 			int fd;
 			int const sig = signal_hangup;
 
+			fl.whence = fl_whence_main_loop;
 			if (sig != 0)
 			{
 				signal_hangup = 0;
@@ -1591,6 +1682,8 @@ int fl_main(fl_init_parm const*fn, void *parm,
 					{
 						case EAGAIN:
 						case EINTR:
+							if (fn->on_fork)
+								(*fn->on_fork)(&fl);
 							continue;
 						default:
 							break;
@@ -1603,6 +1696,9 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			}
 			signal_timed_out = signal_break = 0;
 			fl.in = fl.out = fd;
+			fl.whence = fl_whence_before_fork;
+			if (fn->on_fork)
+				(*fn->on_fork)(&fl);
 			fl_runchild(&fl);
 			close(fd);
 		}

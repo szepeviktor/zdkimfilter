@@ -36,7 +36,7 @@ void db_clear(db_work_area* dwa);
 db_parm_t* db_parm_addr(db_work_area *dwa);
 int db_config_wrapup(db_work_area* dwa, int *in, int *out);
 int db_connect(db_work_area *dwa);
-int db_is_whitelisted(db_work_area* dwa, char const* domain);
+int db_is_whitelisted(db_work_area* dwa, char /*const*/ *domain);
 
 void db_set_authenticated_user(db_work_area *dwa,
 	char const *local_part, char const *domain);
@@ -92,6 +92,9 @@ typedef struct stats_info
 
 	domain_prescreen* domain_head;
 
+	unsigned rcpt_count; // outgoing messages only
+
+	// incoming messages only (except outgoing flag)
 	unsigned received_count;
 	unsigned signatures_count;
 

@@ -41,7 +41,7 @@ typedef struct parm_t
 	char *selector;
 	char *default_domain;
 	char *tmp;
-	char *stats_file;
+	char *blocked_user_list;
 	char *redact_received_auth;
 	char *reputation_root;
 	const char **sign_hfields;

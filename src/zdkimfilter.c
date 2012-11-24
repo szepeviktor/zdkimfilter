@@ -38,7 +38,7 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include <unistd.h>
 #include <errno.h>
 #include <syslog.h> // for LOG_DEBUG,... constants
-#include <unistd.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <opendkim/dkim.h>
 #if !defined DKIM_PRESULT_AUTHOR
@@ -177,6 +177,35 @@ static void clean_stats_info_content(stats_info *stats)
 	}
 }
 
+typedef struct blocked_user_list
+{
+	char *data;
+	size_t size;
+	time_t mtime;
+} blocked_user_list;
+	
+static int search_list(blocked_user_list *bul, char const *u)
+{
+	if (bul->data && bul->size && u)
+	{
+		size_t const ulen = strlen(u);
+		char *p = bul->data;
+		while (p)
+		{
+			while (isspace(*(unsigned char*)p))
+				++p;
+			if (*p != '#')
+			{
+				if (strincmp(p, u, ulen) == 0)
+					return 1; // found
+			}
+			p = strchr(p, '\n');			
+		}
+	}
+
+	return 0;
+}
+
 typedef struct per_message_parm
 {
 	dkim_sigkey_t key;
@@ -188,7 +217,8 @@ typedef struct per_message_parm
 	fl_msg_info info;
 	int rtc;
 	char db_connected;
-	char nu[3];
+	char special; // never block outgoing messages to postmaster@domain only.
+	char nu[2];
 } per_message_parm;
 
 typedef struct dkimfl_parm
@@ -197,8 +227,9 @@ typedef struct dkimfl_parm
 	fl_parm *fl;
 	db_work_area *dwa;
 
-	parm_t z;
 	per_message_parm dyn;
+	blocked_user_list blocklist;
+	parm_t z;
 
 	// other
 	char pid_created;
@@ -305,6 +336,7 @@ static void some_cleanup(dkimfl_parm *parm) // parent
 	clear_parm(parm_target);
 	if (parm->dwa)
 		db_clear(parm->dwa);
+	free(parm->blocklist.data);
 }
 
 static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
@@ -1113,11 +1145,13 @@ static void copy_until_redacted(dkimfl_parm *parm, FILE *fp, FILE *fp_out)
 	vb_clean(&vb);
 }
 
-static domain_prescreen *recipient_s_domains(dkimfl_parm *parm)
+static void recipient_s_domains(dkimfl_parm *parm)
 {
 	assert(parm);
 	assert(parm->fl);
 
+	unsigned rcpt_count = 0;
+	int special_candidate = 0;
 	domain_prescreen *dps_head = NULL;
 	fl_rcpt_enum *fre = fl_rcpt_start(parm->fl);
 	if (fre)
@@ -1126,13 +1160,19 @@ static domain_prescreen *recipient_s_domains(dkimfl_parm *parm)
 		while ((rcpt = fl_rcpt_next(fre)) != NULL)
 		{
 			char *dom = strchr(rcpt, '@');
-			if (dom)
+			if (dom++)
 			{
-				domain_prescreen* dps = get_prescreen(&dps_head, dom + 1);
-				if (dps == NULL)
+				if (++rcpt_count == 1)
+					special_candidate =
+						stricmp(dom, parm->dyn.domain) == 0 &&
+						dom - rcpt == 11 &&
+						strincmp(rcpt, "postmaster@", 11) == 0;
+
+				domain_prescreen* dps = get_prescreen(&dps_head, dom);
+				if (dps == NULL) // memory fault
 				{
 					clear_prescreen(dps_head);
-					return NULL;
+					return;
 				}
 			}
 		}
@@ -1143,8 +1183,20 @@ static domain_prescreen *recipient_s_domains(dkimfl_parm *parm)
 		fl_report(LOG_ERR,
 			"id=%s: unable to collect recipients from ctl file",
 			parm->dyn.info.id);
+	else
+	{
+		if (parm->dyn.stats)
+		{
+			parm->dyn.stats->domain_head = dps_head;
+			parm->dyn.stats->rcpt_count = rcpt_count? rcpt_count: 1; // how come?
+		}
+		parm->dyn.special = rcpt_count == 1 && special_candidate;
+	}
+}
 
-	return dps_head;
+static inline int user_is_blocked(dkimfl_parm *parm)
+{
+	return search_list(&parm->blocklist, parm->dyn.info.authsender);
 }
 
 static void sign_message(dkimfl_parm *parm)
@@ -1165,6 +1217,50 @@ static void sign_message(dkimfl_parm *parm)
 		return;
 	}
 
+	/*
+	* Reject the message if the user is banned from sending,
+	* but allow (emergency?) messages --special-- that is, the
+	* only recipient is the postmaster at the signing domain.
+	*/
+	if (user_is_blocked(parm))
+	{
+		recipient_s_domains(parm);
+
+		if (parm->dyn.special)
+		{
+			if (parm->z.verbose >= 2)
+				fl_report(LOG_INFO,
+					"id=%s: allowing blocked user %s to send to postmaster@%s",
+					parm->dyn.info.id,
+					parm->dyn.info.authsender,
+					parm->dyn.domain);
+		}
+		else
+		{
+			static const char templ[] =
+				"550 BLOCKED: can send to <postmaster@%s> only.\n";
+
+			clean_stats(parm);
+			char *smtp_reason = malloc(sizeof templ + strlen(parm->dyn.domain));
+			if (smtp_reason)
+			{
+				sprintf(smtp_reason, templ, parm->dyn.domain);
+				fl_pass_message(parm->fl, smtp_reason);
+				fl_free_on_exit(parm->fl, smtp_reason);
+				parm->dyn.rtc = 2;
+			}
+			else
+				parm->dyn.rtc = -1;
+
+			if (parm->z.verbose >= 2 || parm->dyn.rtc < 0)
+				fl_report(parm->dyn.rtc < 0? LOG_CRIT: LOG_INFO,
+					"id=%s: %s user %s from sending",
+					parm->dyn.info.id,
+					parm->dyn.rtc == 2? "blocked": "MEMORY FAULT trying to block",
+					parm->dyn.info.authsender);
+		}
+	}
+
 	if (parm->dyn.key == NULL)
 	{
 		if (parm->z.verbose >= 2)
@@ -1173,9 +1269,12 @@ static void sign_message(dkimfl_parm *parm)
 				parm->dyn.info.id,
 				parm->dyn.info.authsender,
 				parm->dyn.domain? "key": "domain");
-		clean_stats(parm);
+
+		// add to db even if not signed
+		if (parm->dyn.stats && parm->dyn.stats->rcpt_count == 0)
+			recipient_s_domains(parm);
 	}
-	else
+	else if (parm->dyn.rtc == 0)
 	{
 		char *selector = parm->dyn.selector? parm->dyn.selector:
 			parm->z.selector? parm->z.selector: "s";
@@ -1223,13 +1322,15 @@ static void sign_message(dkimfl_parm *parm)
 		if (parm->dyn.stats)
 		{
 			parm->dyn.stats->outgoing = 1;
-			parm->dyn.stats->domain_head = recipient_s_domains(parm);
 			parm->dyn.stats->envelope_sender = fl_get_sender(parm->fl);
+			if (parm->dyn.stats->rcpt_count == 0)
+				recipient_s_domains(parm);
 		}
 
 		// (not)TODO: if parm.no_signlen, instead of copy_body, stop at either
 		// "-- " if plain text, or end of first mime alternative otherwise
-		if (sign_headers(parm, dkim) == 0 &&
+		if (parm->dyn.rtc == 0 &&
+			sign_headers(parm, dkim) == 0 &&
 			copy_body(parm, dkim) == 0)
 		{
 			vb_clean(&parm->dyn.vb);
@@ -1384,6 +1485,8 @@ static int check_db_connected(dkimfl_parm *parm)
 /*
 * Track db_connected.  Connection is only attempted if dwa was inited.
 * On connection, pass the authenticated user or the client IP.
+*
+* This function must be called before attempting any query.
 *
 * Return -1 on hardfail, 0 otherwise.
 */
@@ -3060,8 +3163,7 @@ static void write_pid_file(fl_parm *fl)
 	else
 		failed_action = "open";
 	if (failed_action)
-		fprintf(stderr,
-			"ALERT: zdkimfilter: cannot %s %s: %s\n",
+		fl_report(LOG_ALERT, "cannot %s %s: %s",
 			failed_action, pid_file, strerror(errno));
 }
 
@@ -3073,11 +3175,111 @@ static void delete_pid_file(dkimfl_parm *parm)
 				pid_file, strerror(errno));
 }
 
+static void check_blocked_user_list(fl_parm *fl)
+/*
+* this gets called once on init and thereafter on every message
+*/
+{
+	assert(fl);
+	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	assert(parm);
+
+	char const *const fname = parm->z.blocked_user_list;
+	int updated = 0;
+	if (fname)
+	{
+		char const *failed_action = NULL;
+		struct stat st;
+
+		if (stat(fname, &st))
+		{
+			if (errno == ENOENT) // no file, no blocked users
+			{
+				free(parm->blocklist.data);
+				parm->blocklist.data = NULL;
+				parm->blocklist.size = 0;
+				parm->blocklist.mtime = 0;
+				updated = 1;
+			}
+			else
+				failed_action = "stat";
+		}
+		else if (st.st_mtime != parm->blocklist.mtime ||
+			(size_t)st.st_size != parm->blocklist.size)
+		{
+			if (st.st_size == 0)
+			{
+				free(parm->blocklist.data);
+				parm->blocklist.data = NULL;
+				parm->blocklist.size = 0;
+				parm->blocklist.mtime = st.st_mtime;
+				updated = 1;
+			}
+			else if ((uint64_t)st.st_size >= SIZE_MAX)
+			{
+				fl_report(LOG_ALERT, "file %s: size %ldu too large: max = %lu\n",
+					fname, st.st_size, SIZE_MAX);
+			}
+			else
+			{
+				char *data = malloc(st.st_size + 1);
+				if (data == NULL)
+					failed_action = "malloc";
+				else
+				{
+					FILE *fp = fopen(fname, "r");
+					if (fp == NULL)
+						failed_action = "fopen";
+					else
+					{
+						size_t in = fread(data, 1, st.st_size, fp);
+						if ((ferror(fp) | fclose(fp)) != 0)
+							failed_action = "fread";
+						else if (in != (size_t)st.st_size)
+						{
+							if (parm->z.verbose >= 2)
+								fl_report(LOG_NOTICE,
+									"race condition reading %s (size from %zu to %zu)",
+									fname, st.st_size, in);
+						}
+						else
+						{
+							free(parm->blocklist.data);
+							data[in] = 0;
+							parm->blocklist.data = data;
+							parm->blocklist.size = st.st_size;
+							parm->blocklist.mtime = st.st_mtime;
+							updated = 1;
+						}
+					}
+				}
+			}
+		}
+
+		if (failed_action)
+			fl_report(LOG_ALERT, "cannot %s %s: %s",
+				failed_action, fname, strerror(errno));
+		else if (updated && parm->z.verbose >= 2 || parm->z.verbose >= 9)
+		{
+			struct tm tm;
+			localtime_r(&parm->blocklist.mtime, &tm);
+			fl_report(updated? LOG_INFO: LOG_DEBUG,
+				"%s %s version of %04d-%02d-%02dT%02d:%02d:%02d (%zu bytes) on %s",
+				fname,
+				updated? "updated to": "still at",
+				tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+				tm.tm_hour, tm.tm_min, tm.tm_sec,
+				parm->blocklist.size,
+				fl_whence_string(parm->fl));
+		}
+	}
+}
 
 static fl_init_parm functions =
 {
 	dkimfilter,
 	write_pid_file,
+	check_blocked_user_list,
 	NULL, NULL, NULL,
 	report_config, set_keyfile, set_policyfile, set_vbrfile
 };

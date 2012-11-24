@@ -45,9 +45,21 @@ typedef struct fl_init_parm
 	fl_callback
 		filter_fn, // filter function
 		init_complete, // called once before main loop
+		on_fork, // called on the parent, before main loop and before forking
 		on_sighup, on_sigusr1, on_sigusr2, // possibly null sig handlers
 		test_fn1, test_fn2, test_fn3, test_fn4; // test functions
 } fl_init_parm;
+
+typedef enum fl_whence_value
+{
+	fl_whence_other,
+	fl_whence_init,
+	fl_whence_main_loop,
+	fl_whence_before_fork,
+	fl_whence_after_fork,
+	fl_whence_in_child,
+	FL_WHENCE_VALUE_MAX
+} fl_whence_value;
 
 typedef struct fl_msg_info
 {
@@ -60,6 +72,8 @@ int fl_main(fl_init_parm const*, void *parm,
 	int argc, char*argv[], int allmode, int verbose);
 
 /* utilities for callback function */
+fl_whence_value fl_whence(fl_parm *fl);
+char const* fl_whence_string(fl_parm *fl);
 void *fl_get_parm(fl_parm*);
 void fl_set_parm(fl_parm *, void* parm);
 void fl_set_verbose(fl_parm*, int);
@@ -73,6 +87,7 @@ FILE* fl_get_file(fl_parm*);
 FILE *fl_get_write_file(fl_parm*);
 int fl_drop_message(fl_parm*, char const* reason);
 void fl_pass_message(fl_parm*, char const *);
+void fl_free_on_exit(fl_parm*fl, void *p);
 char const *fl_get_passed_message(fl_parm*);
 void fl_alarm(unsigned seconds);
 int fl_keep_running(void);
