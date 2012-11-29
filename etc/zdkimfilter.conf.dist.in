@@ -126,6 +126,14 @@ all_mode = @zdkimfilter_mode@
 # On some errors, e.g. out of memory, return 432 to have the sender retry;
 # otherwise, just let the msg through unfiltered.
 
+# blocked_user_list (string)
+# Filename of the list of blocked users.  Users on this list can only send to
+# the postmaster at the signing domain, if they authenticate.  This list is
+# automatically updated when the query db_sql_check_user returns a non-zero
+# reason.  It can be updated at any time (creating a temporary file and then
+# moving it can avoid race conditions.)  zdkimfilter keeps the file in memory
+# and reloads it when it realizes that it changed.
+
 # no_spf (bool)
 # If Courier sets Received-SPF: pass for sender or helo, that is reported in
 # A-R.  This option may prevent such behavior.

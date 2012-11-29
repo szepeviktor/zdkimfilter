@@ -18,8 +18,6 @@ when the package is built but not yet installed.
 
 To have zdkimfilter sign the files, it writes a minimal ctlfile in the tmp
 directory (either F</tmp> or the one given in the I<tmp> configuration option).
-It passes the I<--no-db> option to zdkimfilter, so as to avoid having the
-messages signed this way logged to the database.
 
 =head1 OPTIONS
 
@@ -35,6 +33,13 @@ command line option to the invoked zdkimfilter.
 =item B<--syslog>
 
 Log to syslog (LOG_MAIL facility) rather than stderr.
+
+
+=item B<--no-db>
+
+Pass the I<--no-db> option to zdkimfilter, so as to avoid having the
+messages signed this way logged to the database.
+
 
 =item B<--filter>
 
@@ -68,7 +73,9 @@ it is about to run.
 
 =back
 
+
 =head1 FILES
+
 
 =over
 
@@ -81,6 +88,17 @@ The build-time configured path of the zdkimfilter executable.
 Default configuration file.
 
 =back
+
+
+head1 ENVIRONMENT VARIABLES
+
+
+=over
+
+=item REMOTE_ADDR
+
+If this variable is set, zdkimfilter uses it for database logs as the client's
+C<ip> variable.
 
 
 =head1 AUTHOR

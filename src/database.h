@@ -37,6 +37,7 @@ db_parm_t* db_parm_addr(db_work_area *dwa);
 int db_config_wrapup(db_work_area* dwa, int *in, int *out);
 int db_connect(db_work_area *dwa);
 int db_is_whitelisted(db_work_area* dwa, char /*const*/ *domain);
+char *db_check_user(db_work_area* dwa);
 
 void db_set_authenticated_user(db_work_area *dwa,
 	char const *local_part, char const *domain);

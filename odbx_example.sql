@@ -68,6 +68,7 @@ CREATE TABLE message_out (
   mtime BIGINT UNSIGNED NOT NULL,
   pid  BIGINT UNSIGNED NOT NULL,
   user INT UNSIGNED NOT NULL COMMENT 'Foreign key to user',
+  rcpt_count INT UNSIGNED NOT NULL DEFAULT 1,
   date VARCHAR(63),
   message_id VARCHAR(63),
   content_type VARCHAR(63) NOT NULL DEFAULT 'text/plain',
@@ -121,39 +122,39 @@ BEGIN
 		vbr = IF(STRCMP(vbr_mv, 'dwl.spamhaus.org') = 0, '(spamhaus)', '()');
 END //
 
-DROP PROCEDURE IF EXISTS sent_message //
+	DROP PROCEDURE IF EXISTS sent_message //
 
-CREATE PROCEDURE sent_message (
-	IN u_addr VARCHAR(255),
-	IN m_ino BIGINT UNSIGNED,
-	IN m_mtime BIGINT UNSIGNED,
-	IN m_pid BIGINT UNSIGNED,
-	IN m_date VARCHAR(63),
-	IN m_id VARCHAR(63),
-	IN m_ct VARCHAR(63),
-	IN m_ce VARCHAR(63),
-	IN m_rcpt INT)
-#	COMMENT 'Called by db_sql_select_user: Insert/update user, insert message_out'
-	MODIFIES SQL DATA
-BEGIN
-	DECLARE u_id INT UNSIGNED;
-	DECLARE Empty_set CONDITION FOR 1329;
-	DECLARE CONTINUE HANDLER FOR Empty_set
-		BEGIN
-			INSERT INTO user SET addr = u_addr;
-			SELECT LAST_INSERT_ID() INTO u_id;
-		END;
-	SELECT id INTO u_id FROM user WHERE addr = u_addr LIMIT 1;
-	INSERT INTO message_out SET ino = m_ino, mtime = m_mtime, pid = m_pid,
-		user = u_id, date = m_date, message_id = m_id,
-		content_type = m_ct, content_encoding = m_ce, rcpt_count = m_rcpt;
-	SELECT LAST_INSERT_ID(); # result, goes into u_ref
-END //
+	CREATE PROCEDURE sent_message (
+		IN u_addr VARCHAR(255),
+		IN m_ino BIGINT UNSIGNED,
+		IN m_mtime BIGINT UNSIGNED,
+		IN m_pid BIGINT UNSIGNED,
+		IN m_date VARCHAR(63),
+		IN m_id VARCHAR(63),
+		IN m_ct VARCHAR(63),
+		IN m_ce VARCHAR(63),
+		IN m_rcpt INT UNSIGNED)
+	#	COMMENT 'Called by db_sql_select_user: Insert/update user, insert message_out'
+		MODIFIES SQL DATA
+	BEGIN
+		DECLARE user_ref INT UNSIGNED;
+		DECLARE Empty_set CONDITION FOR 1329;
+		DECLARE CONTINUE HANDLER FOR Empty_set
+			BEGIN
+				INSERT INTO user SET addr = u_addr;
+				SELECT LAST_INSERT_ID() INTO user_ref;
+			END;
+		SELECT id INTO user_ref FROM user WHERE addr = u_addr LIMIT 1;
+		INSERT INTO message_out SET ino = m_ino, mtime = m_mtime, pid = m_pid,
+			user = user_ref, date = m_date, message_id = m_id,
+			content_type = m_ct, content_encoding = m_ce, rcpt_count = m_rcpt;
+		SELECT user_ref, LAST_INSERT_ID() AS message_ref;
+	END //
 
 DROP PROCEDURE IF EXISTS sent_to_domain //
 
 CREATE PROCEDURE sent_to_domain (
-	IN u_ref INT UNSIGNED,
+	IN message_ref INT UNSIGNED,
 	IN dname VARCHAR(255))
 #	COMMENT 'Called by db_sql_insert_target_ref: Insert/update domain, insert msg_out_ref'
 	MODIFIES SQL DATA
@@ -174,7 +175,7 @@ BEGIN
 	ELSE
 		UPDATE domain SET sent = sent + 1, last = NOW() WHERE id = d_id;
 	END IF;
-	INSERT INTO msg_out_ref SET message_out = u_ref, domain = d_id;
+	INSERT INTO msg_out_ref SET message_out = message_ref, domain = d_id;
 END //
 
 delimiter ;
@@ -182,55 +183,55 @@ delimiter ;
 # example query, to see who signed what messages:
 SELECT INET_NTOA(CONV(HEX(m.ip),16,10)), m.date, FROM_UNIXTIME(m.mtime), d.domain, r.auth
 FROM msg_ref AS r, message_in AS m, domain AS d
-WHERE r.domain=d.id AND r.message_in=m.id AND FIND_IN_SET('dkim', r.auth)
+WHERE r.domain=d.id AND r.message_in=m.id AND FIND_IN_SET('dkim', r.auth);
 
 
 # how many new domains have been added today?
-SELECT COUNT(*) FROM domain WHERE since > NOW() - INTERVAL 1 DAY
+SELECT COUNT(*) FROM domain WHERE since > (NOW() - INTERVAL 1 DAY);
 
 # how many messages did each of them send?
 SELECT d.id, d.domain, r.auth, COUNT(*) AS cnt
 FROM domain AS d, msg_ref AS r, message_in AS m
-WHERE d.id = r.domain AND r.message_in = m.id AND d.since > NOW() - INTERVAL 1 DAY
-GROUP BY d.id, r.auth ORDER BY cnt DESC LIMIT 10
+WHERE d.id = r.domain AND r.message_in = m.id AND (d.since > NOW() - INTERVAL 1 DAY)
+GROUP BY d.id, r.auth ORDER BY cnt DESC LIMIT 10;
 
 # how many messages did they send as a whole?
 SELECT count(*)
 FROM domain AS d, msg_ref AS r, message_in AS m
-WHERE d.id = r.domain AND r.message_in = m.id AND d.since > NOW() - INTERVAL 1 DAY
+WHERE d.id = r.domain AND r.message_in = m.id AND (d.since > NOW() - INTERVAL 1 DAY);
 
 
 # delete incoming messages older than 1 month
 DELETE r, m FROM msg_ref AS r, message_in AS m
-WHERE r.message_in = m.id AND m.mtime < UNIX_TIMESTAMP(NOW() - INTERVAL 1 MONTH)
+WHERE r.message_in = m.id AND m.mtime < UNIX_TIMESTAMP(NOW() - INTERVAL 1 MONTH);
 
 # find domains having been orphaned that way
 SELECT l.* FROM domain AS l LEFT JOIN msg_ref AS r ON r.domain = l.id
-WHERE r.domain IS NULL AND l.recv > 0
+WHERE r.domain IS NULL AND l.recv > 0;
 
 
 # delete outgoing messages older than 1 month
 DELETE r, m FROM msg_out_ref AS r, message_out AS m
-WHERE r.message_out = m.id AND m.mtime < UNIX_TIMESTAMP(NOW() - INTERVAL 1 MONTH)
+WHERE r.message_out = m.id AND m.mtime < UNIX_TIMESTAMP(NOW() - INTERVAL 1 MONTH);
 
 # find domains having been orphaned that way
 SELECT l.* FROM domain AS l LEFT JOIN msg_out_ref AS r ON r.domain = l.id
-WHERE r.domain IS NULL AND l.sent > 0
+WHERE r.domain IS NULL AND l.sent > 0;
 
 
 # find the messages sent in the last 24 hours (add AND u.addr = 'user@example.com')
 SELECT FROM_UNIXTIME(m.mtime) AS time, u.addr FROM message_out AS m, user AS u
-WHERE m.user = u.id AND m.mtime > UNIX_TIMESTAMP(NOW() - INTERVAL 1 DAY)
+WHERE m.user = u.id AND m.mtime > UNIX_TIMESTAMP(NOW() - INTERVAL 1 DAY);
 
 # find which users sent how many messages to a given list of domains
 SELECT d.domain, COUNT(*) AS cnt, u.addr
 FROM domain AS d, msg_out_ref AS r, message_out AS m, user AS u
 WHERE d.id = r.domain AND r.message_out = m.id AND m.user = u.id AND
-d.id IN (1,2,3,4,5) GROUP BY u.id
+d.id IN (1,2,3,4,5) GROUP BY u.id;
 
 SELECT d.domain, COUNT(*) AS cnt, u.addr
 FROM domain AS d, msg_out_ref AS r, message_out AS m, user AS u
 WHERE d.id = r.domain AND r.message_out = m.id AND m.user = u.id 
-GROUP BY d.id, u.id ORDER BY cnt DESC LIMIT 10
+GROUP BY d.id, u.id ORDER BY cnt DESC LIMIT 10;
 
 

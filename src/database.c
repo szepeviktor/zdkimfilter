@@ -36,6 +36,7 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <ctype.h>
 #include <stdint.h>
 #include <limits.h>
@@ -371,12 +372,12 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 			1 << date_variable | 1 << message_id_variable | 1 << subject_variable |
 			1 << content_type_variable | 1 << content_encoding_variable |
 			1 << from_variable | 1 << mailing_list_variable |
-			1 << envelope_sender_variable;
+			1 << envelope_sender_variable | 1 << ip_variable;
+
 
 		const var_flag_t message_variables = common_variables |
 			1 << received_count_variable | 1 << signatures_count_variable |
-			1 << message_status_variable | 1 << adsp_flags_variable |
-			1 << ip_variable;
+			1 << message_status_variable | 1 << adsp_flags_variable;
 
 		STMT_ALLOC(db_sql_insert_message, message_variables);
 
@@ -402,17 +403,20 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 		const var_flag_t outgoing_variables =
 			common_variables | 1 << domain_variable | 1 << rcpt_count_variable;
 
-		// $(domain) is the local domain when selecting the user
-		STMT_ALLOC(db_sql_select_user,
-			outgoing_variables | 1 << local_part_variable);
+		// $(domain) is the local domain when selecting/checking the user
+		const var_flag_t outgoing_user_variables =
+			outgoing_variables | 1 << local_part_variable;
 
-		const var_flag_t target_variables = outgoing_variables |
-			1 << user_ref_variable;
+		STMT_ALLOC(db_sql_select_user, outgoing_user_variables);
+		STMT_ALLOC(db_sql_check_user, outgoing_user_variables |
+			1 << user_ref_variable);
 
 		// $(domain) is the target domain when selecting the target domain
 		// so disallow the local_part here
-		STMT_ALLOC(db_sql_select_target, target_variables);
+		const var_flag_t target_variables = outgoing_variables |
+			1 << message_ref_variable;
 
+		STMT_ALLOC(db_sql_select_target, target_variables);
 		STMT_ALLOC(db_sql_insert_target, target_variables);
 
 		const var_flag_t target_dom_variables = target_variables |
@@ -488,7 +492,7 @@ static int dump_vars(db_work_area* dwa, stmt_id sid, var_flag_t bitflag)
 	assert(sid < total_statements);
 
 	stmt_compose const *const stmt = dwa->stmt[sid];
-	if (stmt == NULL) // must be sid == db_sql_whitelisted...
+	if (stmt == NULL) // db_is_whitelisted and db_check_user don't check this
 		return 0;
 
 #if defined TEST_MAIN
@@ -520,13 +524,16 @@ static int dump_vars(db_work_area* dwa, stmt_id sid, var_flag_t bitflag)
 	return 0;
 }
 
-static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
-	char **wantchar, int* wantint)
+static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
+	int count, ...)
 /*
 * Build a statement assembling snippets and arguments, then run it.
 * count is the number of pairs of arguments that follow.
 *
-* Whitelist queries should just return a numeric result within [-1000, 1000]
+* If count is negative, then the remaining arguments are -count pointers to int.
+* Otherwise, they are count pointers to char*.  Currently only whitelist uses
+* integer return types.  Whitelist queries should return just a single numeric
+* result within [-1000, 1000] (count = -1).
 *
 * After inserting a message, or after querying or inserting domain, a reference
 * variable can be returned.  Those queries must be conceived so as to return a
@@ -535,13 +542,20 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 * multi-statement.  Otherwise those variables will be undefined, and replaced
 * with an empty string when used.
 *
-* Return 1 if a result is found (and returned in any of wantchar and wantint),
+* Return n (1 <= n <= count) for the results found and returned in wantchar,
 * 0 if no result was found or if the statement is not defined.
 * If an error is found (and logged) return OTHER_ERROR.
 */
 {
 	assert(dwa);
 	assert(sid < total_statements);
+
+	int wantint = 0;
+	if (count < 0)
+	{
+		wantint = 1;
+		count = -count;
+	}
 
 	stmt_compose const *const stmt = dwa->stmt[sid];
 	if (stmt == NULL)
@@ -656,8 +670,8 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 	}
 
 	/*
-	* All queries return at most a single value.  So we get the first
-	* (numeric) column for it.
+	* All queries return at most a single row.  So we match the (numeric)
+	* columns with the variable arguments.
 	*/
 
 	int got_result = 0;
@@ -705,52 +719,75 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 					break;
 
 				++seen;
-				if (got_result == 0 && odbx_column_count(result) > 0)
+				int const column_count = odbx_column_count(result);
+				if (got_result == 0 && column_count > 0)
 				{
 					got_result = 1;
-					char const *field = odbx_field_value(result, 0);
-					if (field != NULL)
+					va_list ap;
+					va_start(ap, count);
+					for (int column = 0; column < column_count; ++column)
 					{
-						if (wantchar &&
-							(*wantchar = strdup(field)) == NULL)
-								(*do_report)(LOG_ALERT, "MEMORY FAULT");
-						if (wantint)
+						char const *field = odbx_field_value(result, column);
+						if (column < count)
 						{
-							char *t = NULL;
-							long l = strtol(field, &t, 0);
-							if (t && *t == 0 && l >= 0 && l < INT_MAX && l > INT_MIN)
-								*wantint = (int)l;
+							if (wantint)
+							{
+								int *want = va_arg(ap, int*);
+								if (field != NULL)
+								{
+									char *t = NULL;
+									long l = strtol(field, &t, 0);
+									if (t && *t == 0 && l < INT_MAX && l > INT_MIN)
+										*want = (int)l;
+									else
+									{
+										*want = *field != 0;
+#if !defined TEST_MAIN
+										(*do_report)(LOG_WARNING,
+											"query %s, part #%d, row 1, col %d "
+											"is not a number: %s converted to %d",
+												stmt_name[sid], r_set, column + 1,
+												field, *want);
+#endif
+									}
+								}
+							}
 							else
 							{
-								*wantint = *field != 0;
-#if !defined TEST_MAIN
-								(*do_report)(LOG_WARNING,
-									"part #%d of the query returned a non-number %s"
-									" converted to %d (query: %s)",
-									r_set, field, *wantint, sql);
-#endif
+								char **want = va_arg(ap, char**);
+								if (field != NULL && (*want = strdup(field)) == NULL)
+									(*do_report)(LOG_ALERT, "MEMORY FAULT");
 							}
+						}
+						else
+						{
+							(*do_report)(LOG_WARNING,
+								"query %s, part #%d, row 1, col %d "
+								"is ignored: expected %d column(s) only",
+									stmt_name[sid], r_set, column + 1, count);
 						}
 #if defined TEST_MAIN
 						if (verbose)
-							(*do_report)(LOG_DEBUG, "row#%ld: %s", seen, field);
+							(*do_report)(LOG_DEBUG, "row#%ld, col %d: %s",
+								seen, column + 1, field? field: "NULL");
 #endif
 					}
+					va_end(ap);
 				}
 			}
 			if (seen > 1)
 			{
 				(*do_report)(LOG_WARNING,
-					"part #%d of the query had %ld rows (query: %s)",
-						r_set, seen, sql);
+					"part #%d of query %s had %ld rows",
+						r_set, stmt_name[sid], seen);
 			}
 			odbx_result_finish(result);
 		}
 
 		else if (err < 0)
 		{
-			(*do_report)(LOG_ERR, "DB error: %s (err: %d, part #%d, query: %s)",
-				odbx_error(handle, err), err, r_set, sql);
+			(*do_report)(LOG_ERR, "DB error: %s (err: %d, %s, part #%d, query: %s)",
+				odbx_error(handle, err), err, stmt_name[sid], r_set, sql);
 			if (result)
 				odbx_result_finish(result);
 			break;
@@ -760,7 +797,7 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 		{
 			(*do_report)(LOG_ERR,
 				"DB timeout: %d secs is too low? (part #%d, query: %s)",
-				dwa->z.db_timeout, r_set, sql);
+				dwa->z.db_timeout, r_set, stmt_name[sid]);
 			dwa->pending_result = time(0);
 			dwa->pending_result_msg = 0;
 			err =  OTHER_ERROR;
@@ -773,7 +810,7 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 		{
 			(*do_report)(LOG_CRIT,
 				"Internal error: unexpected rc=%d in part #%d of query %s",
-				err, r_set, sql);
+				err, r_set, stmt_name[sid]);
 			if (result)
 				odbx_result_finish(result);
 			break;
@@ -782,6 +819,23 @@ static int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 
 	free(sql);
 	return got_result;
+}
+
+static inline int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
+	char **wantchar, int* wantint)
+/*
+* Return 1 if a result is found and returned in any of wantchar and wantint,
+* 0 if no result was found or if the statement is not defined.
+* If an error is found (and logged) return OTHER_ERROR.
+*
+* TODO: rewrite stmt_run calls so as to avoid this hack.
+*/
+{
+	assert(wantchar == NULL || wantint == NULL);
+	void *passed = wantint != NULL? (void*)wantint: (void*)wantchar;
+	int const count = wantint != NULL? -1: wantchar != NULL? 1: 0;
+
+	return stmt_run_n(dwa, sid, bitflag, count, passed);
 }
 
 static inline int do_set_option(odbx_t *handle,
@@ -997,6 +1051,75 @@ int db_is_whitelisted(db_work_area* dwa, char *domain)
 
 	dwa->var[domain_variable] = NULL;
 	return rtc;
+}
+
+static char* test_check_user(db_work_area* dwa)
+{
+	char *r = NULL;
+	char *const h = dwa->z.db_sql_check_user;
+	if (h)
+	{
+		char *const u = dwa->var[local_part_variable];
+		char *x = strstr(h, u);
+		if (x)
+		{
+			x += strlen(u);
+			if (*x++ == ':')
+			{
+				int ch;
+				while ((ch = *(unsigned char*)x) != 0 && isspace(ch))
+					++x;
+				if (ch)
+				{
+					char *start = x++;
+					while ((ch = *(unsigned char*)x) != 0 && !isspace(ch))
+						++x;
+					*x = 0;
+					r = strdup(start);
+					*x = ch;
+				}
+			}
+		}
+	}
+	return r;
+}
+
+char *db_check_user(db_work_area* dwa)
+/*
+* Run db_sql_check_user query.  Return any result, or NULL.
+* Returned values are to be freed by caller.
+*/
+{
+	assert(dwa == NULL || dwa->handle || dwa->is_test);
+
+	if (dwa == NULL || dwa->var[local_part_variable] == NULL)
+		return NULL;
+
+	var_flag_t bitflag = 1 << local_part_variable;
+	if (dwa->user_domain)
+	{
+		// there may be multiple domain_variable, so they are not kept here
+		assert(dwa->var[domain_variable] == NULL);
+
+		dwa->var[domain_variable] = dwa->user_domain;
+		bitflag |= 1 << domain_variable;
+	}
+
+	if (dwa->var[user_ref_variable])
+		bitflag |= 1 << user_ref_variable;
+	
+	char *r = NULL;
+
+	if (dwa->is_test) // need our own rtc for testsuite
+	{
+		dump_vars(dwa, db_sql_check_user, bitflag);
+		r = test_check_user(dwa);
+	}
+	else
+		stmt_run(dwa, db_sql_check_user, bitflag, &r, NULL);
+
+	dwa->var[domain_variable] = NULL;
+	return r;
 }
 
 void db_set_authenticated_user(db_work_area *dwa,
@@ -1274,11 +1397,13 @@ out_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 
 	bitflag |= 1 << local_part_variable | 1 << domain_variable;
 	dwa->var[domain_variable] = dwa->user_domain;
-	char *var = NULL;
-	stmt_run(dwa, db_sql_select_user, bitflag, &var, NULL);
+	char *user_ref = NULL, *message_ref = NULL;
+	stmt_run_n(dwa, db_sql_select_user, bitflag, 2, &user_ref, &message_ref);
 
-	if ((dwa->var[user_ref_variable] = var) != NULL)
+	if ((dwa->var[user_ref_variable] = user_ref) != NULL)
 		bitflag |= 1 << user_ref_variable;
+	if ((dwa->var[message_ref_variable] = message_ref) != NULL)
+		bitflag |= 1 << message_ref_variable;
 
 	/*
 	* For each target domain:
@@ -1449,6 +1574,8 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 			zeroflag |= bit;
 		}
 	}
+	else
+		SET_NUMBER(rcpt_count);
 	SET_NUMBER(mailing_list);
 #undef SET_NUMBER
 
@@ -1491,12 +1618,10 @@ static int autoarg(db_work_area *dwa, stats_info *stats, int i)
 				db_set_authenticated_user(dwa, "user",
 					rand() > PERC_50? "user.example" : NULL);
 			}
-			else
-			{
-				sprintf(buf, "192.0.2.%d", (int)(rand() & 255));
-				db_set_client_ip(dwa, buf);
-				set_client_ip = 1;
-			}
+
+			sprintf(buf, "192.0.2.%d", (int)(rand() & 255));
+			db_set_client_ip(dwa, buf);
+			set_client_ip = 1;
 
 			break;
 		}
@@ -1756,6 +1881,7 @@ int main(int argc, char*argv[])
 
 		if (set_stats < argc)
 		{
+			unsigned ndomains = 0, nwhitelisted = 0;
 			unsigned char const dir = toupper((unsigned char)argv[set_stats][0]);
 			int atauto = 0;
 			
@@ -1789,7 +1915,7 @@ int main(int argc, char*argv[])
 						if (arg[0] == 0)
 							continue;
 
-						if (arg[0] == '@' && arg[1] == '0')
+						if (arg[0] == '@' && arg[1] == 0)
 						{
 							autoarg(dwa, &stats, auto_from);
 							continue;
@@ -1863,6 +1989,10 @@ int main(int argc, char*argv[])
 
 				pdps = &dps->next;
 				strcpy(dps->name, strtok(arg, ","));
+				ndomains += 1;
+				if (stats.outgoing == 0 &&
+					db_is_whitelisted(dwa, dps->name))
+						nwhitelisted += 1;
 
 				int m = 0;
 				while ((arg = strtok(NULL, ",")) != NULL)
@@ -1925,6 +2055,14 @@ int main(int argc, char*argv[])
 			}
 
 			db_set_stats_info(dwa, &stats);
+			if (stats.outgoing)
+			{
+				char *s = db_check_user(dwa);
+				printf("user check: %s\n", s? s: "negative");
+				free(s);
+			}
+			else
+				printf("%d/%d domain(s) whitelisted\n", ndomains, nwhitelisted);
 
 			free(stats.ino_mtime_pid);
 			for (domain_prescreen *dps = stats.domain_head; dps;)
@@ -1973,6 +2111,7 @@ int db_config_wrapup(db_work_area* dwa, int *in, int *out)
 }
 int db_connect(db_work_area *dwa) { return 0; }
 int db_is_whitelisted(db_work_area* dwa, char *domain) {return 0;}
+char *db_check_user(db_work_area* dwa) {return NULL;}
 
 void db_set_authenticated_user(db_work_area *dwa,
 	char const *local_part, char const *domain) {}

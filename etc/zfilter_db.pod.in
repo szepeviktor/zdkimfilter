@@ -115,15 +115,18 @@ C<ip>, the IP address of the client.
 =back
 
 
-Whitelist queries are issued while processing incoming messages.  They should
-return an integer.  A value of 1 or higher affects the order in which
-DKIM signatures verification is attempted.  A value of 2 or higher prevents
-a message from being rejected or dropped due to ADSP.  (A value of 3 or higher
-will be used in an upcoming version of zdkimfilter.)
+This query should return an integer.  A value of 1 or higher affects the order
+in which DKIM signatures verification is attempted.  A value of 2 or higher
+prevents a message from being rejected or dropped due to ADSP.  (A value of 3
+or higher will be used in an upcoming version of zdkimfilter.)
+
+Whitelist queries are issued while processing incoming messages.  By contrast,
+the other queries are issued after messages have been dealt with.
+
 
 =head2 Common variables
 
-These are eleven variables that can be used in all of the following queries.
+There are eleven variables that can be used in all of the following queries.
 They are: C<ino>, C<mtime>, and C<pid>, as used by Courier to identify a
 message; C<from>, C<date>, C<message_id>, C<subject>, C<content_type>, and
 C<content_encoding> from the corresponding header fields in the message;
@@ -135,7 +138,8 @@ typical of mailing lists; and C<envelope_sender> for the bounce address.
 Incoming messages, after any valid DKIM signature or SPF authentication has
 been seen, can be logged to the database by defining some or all of these
 queries.  Besides common variables, the queries in this group can log two
-additional sets of variables.
+additional sets of variables, one for the message as a whole, and one for each
+domain.
 
 The first set consists of C<ip>, seen above; C<message_status>, which is one of
 the three values C<accept>, C<reject>, and C<drop>; C<adsp_flags>, which is a
@@ -146,14 +150,14 @@ the number of C<Received:> header fields; and C<signatures_count> for the
 number of DKIM signatures.
 
 The second set of variables can be only used by all but one of the queries in
-this group.  It contains the domain-related variables C<domain> seen above;
-C<reputation>, the integer found via the DKIM-reputation query, see
-L<zdikimfilter.conf(5)>;  C<vbr_mv>, the one of the I<trusted_vouchers> that
-confirmed a VBR claim; C<vbr_response> the actual string returned by the VBR
-query; and C<auth_type>, a comma separated list of the following tokens:
-C<author> for author domain signature, C<spf>, C<spf_helo>, C<dkim>, and C<vbr>
-for the corresponding authentication methods, C<rep> and C<rep_s> for domains
-involved in DKIM reputation as subjects and/or signers respectively.
+this group.  It contains the variables C<domain>, the name; C<reputation>, the
+integer found via the DKIM-reputation query, see L<zdikimfilter.conf(5)>;
+C<vbr_mv>, the one of the I<trusted_vouchers> that confirmed a VBR claim;
+C<vbr_response> the actual string returned by the VBR query; and C<auth_type>,
+a comma separated list of the following tokens:  C<author> for author domain
+signature, C<spf>, C<spf_helo>, C<dkim>, and C<vbr> for the corresponding
+authentication methods, C<rep> and C<rep_s> for domains involved in DKIM
+reputation as subjects and/or signers respectively.
 
 =over
 
@@ -189,8 +193,11 @@ it existed already.
 =item B<db_sql_insert_msg_ref>
 
 A message reference table links messages to domains.  As this is the last query
-in the sequence, it should receive both C<message_ref> and C<domain_ref>.  This
-might be the only query one needs to define in order to log all data.
+in the domain loop, it should receive both C<message_ref> and C<domain_ref>.
+Otherwise, as it can use all of the other variables, it may manage to select,
+insert, and update domain data.  In the latter case, the preceding three domain
+queries had better be left undefined.
+
 
 =back
 
@@ -205,8 +212,9 @@ variables defined above, and some additional ones as defined below.
 =item B<db_sql_select_user>
 
 This query can use C<local_part> and C<domain> of the authenticated user who
-sent the message.  It returns a C<user_ref>.  It occurs at most once per
-message.
+sent the message.  It occurs at most once per message, and can return two
+record id's, C<user_ref> and C<message_ref>; that is one row with two columns.
+
 
 =item B<db_sql_select_target>
 
@@ -228,8 +236,19 @@ I<db_sql_select_target>.
 
 =item B<db_sql_insert_target_ref>
 
-Final query, with both C<domain_ref> and C<user_ref>.
+This completes message logging.  It is called with both C<domain_ref> and
+C<message_ref> and provides the many-to-many link between the targeted domain
+and the user.
 
+
+=item B<db_sql_check_user>
+
+This is the final query.  It can use C<user_ref> to check whether a user's
+activity is normal or exceedingly high, such as submitting too many messages
+for too many recipients, from too many IP addresses.  If the query returns
+anything that is not C<0> or NULL, and the I<blocked_user_list> is defined,
+then the filter appends the user-id to that list, quoting the returned string
+as a reason.
 
 =back
 
@@ -310,6 +329,7 @@ First, let's define some tables:
     mtime BIGINT UNSIGNED NOT NULL,
     pid  BIGINT UNSIGNED NOT NULL,
     user INT UNSIGNED NOT NULL COMMENT 'Foreign key to user',
+    rcpt_count INT UNSIGNED NOT NULL DEFAULT 1,
     date VARCHAR(63),
     message_id VARCHAR(63),
     content_type VARCHAR(63) NOT NULL DEFAULT 'text/plain',
@@ -379,21 +399,22 @@ also inserts a new message_out.
     IN m_date VARCHAR(63),
     IN m_id VARCHAR(63),
     IN m_ct VARCHAR(63),
-    IN m_ce VARCHAR(63))
+    IN m_ce VARCHAR(63),
+    IN m_rcpt INT UNSIGNED)
     MODIFIES SQL DATA
   BEGIN
-    DECLARE u_id INT UNSIGNED;
+    DECLARE u_ref INT UNSIGNED;
     DECLARE Empty_set CONDITION FOR 1329;
     DECLARE CONTINUE HANDLER FOR Empty_set
       BEGIN
         INSERT INTO user SET addr = u_addr;
-        SELECT LAST_INSERT_ID() INTO u_id;
+        SELECT LAST_INSERT_ID() INTO u_ref;
       END;
-    SELECT id INTO u_id FROM user WHERE addr = u_addr LIMIT 1;
+    SELECT id INTO u_ref FROM user WHERE addr = u_addr LIMIT 1;
     INSERT INTO message_out SET ino = m_ino, mtime = m_mtime, pid = m_pid,
-      user = u_id, date = m_date, message_id = m_id,
-      content_type = m_ct, content_encoding = m_ce;
-    SELECT LAST_INSERT_ID(); # result, goes into u_ref
+      user = u_ref, date = m_date, message_id = m_id,
+      content_type = m_ct, content_encoding = m_ce, rcpt_count = m_rcpt;
+    SELECT u_ref;
   END //
 
 The domain table is obviously shared between incoming and outgoing messages.

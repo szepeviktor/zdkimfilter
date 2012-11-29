@@ -234,6 +234,7 @@ typedef struct dkimfl_parm
 	// other
 	char pid_created;
 	char use_dwa_after_sign, use_dwa_verifying;
+	char user_blocked;
 } dkimfl_parm;
 
 static inline const u_char **
@@ -739,7 +740,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	{
 		if (errno != EINVAL && parm->z.verbose || parm->z.verbose >= 8)
 			fl_report(errno == EINVAL? LOG_INFO: LOG_ALERT,
-				"id=%s: cannot readlink for %s: no selector in %zd: %s",
+				"id=%s: cannot readlink for %s: readlink returns %zd: %s",
 				parm->dyn.info.id,
 				fname,
 				lsz,
@@ -1190,13 +1191,16 @@ static void recipient_s_domains(dkimfl_parm *parm)
 			parm->dyn.stats->domain_head = dps_head;
 			parm->dyn.stats->rcpt_count = rcpt_count? rcpt_count: 1; // how come?
 		}
+		else
+			clear_prescreen(dps_head);
 		parm->dyn.special = rcpt_count == 1 && special_candidate;
 	}
 }
 
 static inline int user_is_blocked(dkimfl_parm *parm)
 {
-	return search_list(&parm->blocklist, parm->dyn.info.authsender);
+	return parm->user_blocked =
+		search_list(&parm->blocklist, parm->dyn.info.authsender);
 }
 
 static void sign_message(dkimfl_parm *parm)
@@ -1228,7 +1232,7 @@ static void sign_message(dkimfl_parm *parm)
 
 		if (parm->dyn.special)
 		{
-			if (parm->z.verbose >= 2)
+			if (parm->z.verbose >= 3)
 				fl_report(LOG_INFO,
 					"id=%s: allowing blocked user %s to send to postmaster@%s",
 					parm->dyn.info.id,
@@ -1252,7 +1256,7 @@ static void sign_message(dkimfl_parm *parm)
 			else
 				parm->dyn.rtc = -1;
 
-			if (parm->z.verbose >= 2 || parm->dyn.rtc < 0)
+			if (parm->z.verbose >= 3 || parm->dyn.rtc < 0)
 				fl_report(parm->dyn.rtc < 0? LOG_CRIT: LOG_INFO,
 					"id=%s: %s user %s from sending",
 					parm->dyn.info.id,
@@ -1484,13 +1488,16 @@ static void clean_vh(verify_parms *vh)
 static int check_db_connected(dkimfl_parm *parm)
 /*
 * Track db_connected.  Connection is only attempted if dwa was inited.
-* On connection, pass the authenticated user or the client IP.
+* On connection, pass the authenticated user and the client IP, if any.
 *
 * This function must be called before attempting any query.
 *
 * Return -1 on hardfail, 0 otherwise.
 */
 {
+	assert(parm);
+	assert(parm->fl);
+
 	db_work_area *const dwa = parm->dwa;
 	if (dwa == NULL || parm->dyn.db_connected)
 		return 0;
@@ -1510,7 +1517,8 @@ static int check_db_connected(dkimfl_parm *parm)
 		if (dom)
 			*dom = '@';
 	}
-	else if ((s = parm->dyn.info.frommta) != NULL &&
+
+	if ((s = parm->dyn.info.frommta) != NULL &&
 		strincmp(s, "dns;", 4) == 0)
 /*
 for esmtp, this is done by courieresmtpd.c as:
@@ -1540,6 +1548,11 @@ and then conveyed to ctlfile 'f' (COMCTLFILE_FROMMTA).  E.g.
 				*e = ']';
 			}
 		}
+	}
+	else if (fl_whence(parm->fl) == fl_whence_other && // working stdalone
+		(s = getenv("REMOTE_ADDR")) != NULL)
+	{
+		db_set_client_ip(dwa, s);
 	}
 
 	return 0;
@@ -2925,6 +2938,216 @@ static void verify_message(dkimfl_parm *parm)
 	dkim_free(dkim);
 }
 
+// after filter functions
+
+static int update_blocked_user_list(dkimfl_parm *parm)
+/*
+* (Re)load list from disk (also run in parent).
+* return -1 on error, +1 on update, 0 otherwise;
+*/
+{
+	char const *const fname = parm->z.blocked_user_list;
+	int updated = 0, rtc = -1;
+	if (fname)
+	{
+		char const *failed_action = NULL;
+		struct stat st;
+
+		if (stat(fname, &st))
+		{
+			if (errno == ENOENT) // no file, no blocked users
+			{
+				updated = rtc = parm->blocklist.data ||
+					parm->blocklist.size ||
+					parm->blocklist.mtime;
+				free(parm->blocklist.data);
+				parm->blocklist.data = NULL;
+				parm->blocklist.size = 0;
+				parm->blocklist.mtime = 0;
+			}
+			else
+				failed_action = "stat";
+		}
+		else if (st.st_mtime != parm->blocklist.mtime ||
+			(size_t)st.st_size != parm->blocklist.size)
+		{
+			if (st.st_size == 0)
+			{
+				free(parm->blocklist.data);
+				parm->blocklist.data = NULL;
+				parm->blocklist.size = 0;
+				parm->blocklist.mtime = st.st_mtime;
+				updated = rtc = 1;
+			}
+			else if ((uint64_t)st.st_size >= SIZE_MAX)
+			{
+				fl_report(LOG_ALERT, "file %s: size %ldu too large: max = %lu\n",
+					fname, st.st_size, SIZE_MAX);
+			}
+			else
+			{
+				char *data = malloc(st.st_size + 1);
+				if (data == NULL)
+					failed_action = "malloc";
+				else
+				{
+					FILE *fp = fopen(fname, "r");
+					if (fp == NULL)
+						failed_action = "fopen";
+					else
+					{
+						size_t in = fread(data, 1, st.st_size, fp);
+						if ((ferror(fp) | fclose(fp)) != 0)
+							failed_action = "fread";
+						else if (in != (size_t)st.st_size)
+						{
+							if (parm->z.verbose >= 2)
+								fl_report(LOG_NOTICE,
+									"race condition reading %s (size from %zu to %zu)",
+									fname, st.st_size, in);
+						}
+						else
+						{
+							free(parm->blocklist.data);
+							data[in] = 0;
+							parm->blocklist.data = data;
+							parm->blocklist.size = st.st_size;
+							parm->blocklist.mtime = st.st_mtime;
+							updated = rtc = 1;
+						}
+					}
+				}
+			}
+		}
+		else rtc = 0;
+
+		if (failed_action)
+			fl_report(LOG_ALERT, "cannot %s %s: %s",
+				failed_action, fname, strerror(errno));
+		else if (updated && parm->z.verbose >= 2 || parm->z.verbose >= 8)
+		{
+			struct tm tm;
+			localtime_r(&parm->blocklist.mtime, &tm);
+			fl_report(updated? LOG_INFO: LOG_DEBUG,
+				"%s %s version of %04d-%02d-%02dT%02d:%02d:%02d (%zu bytes) on %s",
+				fname,
+				updated? "updated to": "still at",
+				tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+				tm.tm_hour, tm.tm_min, tm.tm_sec,
+				parm->blocklist.size,
+				fl_whence_string(parm->fl));
+		}
+	}
+
+	return rtc;
+}
+
+static void block_user(dkimfl_parm *parm, char *reason)
+{
+	assert(parm);
+	assert(reason);
+	assert(!parm->user_blocked);
+	assert(parm->dyn.info.authsender);
+
+	time_t now = time(0); // approx. query time, for list entry
+
+	/*
+	* check there is an on-disk copy of blocked_user_list,
+	* refresh the in-memory copy of the list, and
+	* ensure the user is still not blocked,
+	*/
+	char const *const fname = parm->z.blocked_user_list;
+	if (fname == NULL ||
+		update_blocked_user_list(parm) <= 0 ||
+		search_list(&parm->blocklist, parm->dyn.info.authsender) != 0)
+			return;
+
+	/*
+	* write to disk a temp copy of the list,
+	* add the user to it, and
+	* move it back to blocked_user_list.
+	*/
+	char const *failed_action = NULL;
+	int failed_errno = 0;
+	size_t l = strlen(fname);
+	char *fname_tmp = malloc(l + 20);
+	if (fname_tmp)
+	{
+		memcpy(fname_tmp, fname, l);
+		strcat(fname_tmp + l, ".XXXXXX");
+		int fd = mkstemp(fname_tmp);
+		if (fd >= 0)
+		{
+			FILE *fp = fdopen(fd, "w");
+			if (fp)
+			{
+				if (parm->blocklist.data &&
+					fwrite(parm->blocklist.data, parm->blocklist.size, 1, fp) != 1)
+				{
+					failed_action = "fwrite";
+					failed_errno = errno;
+				}
+				else
+				{
+					char *t = strchr(reason, '\n');
+					if (t)
+						*t = 0;
+					struct tm tm;
+					localtime_r(&now, &tm);
+					fprintf(fp, "%s on %04d-%02d-%02dT%02d:%02d:%02d %s\n",
+						parm->dyn.info.authsender,
+						tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+						tm.tm_hour, tm.tm_min, tm.tm_sec,
+						reason);						
+				}
+				if ((ferror(fp) | fclose(fp)) && failed_action == NULL)
+				{
+					failed_action = "fprintf";
+					failed_errno = errno;
+				}
+
+				if (failed_action == NULL)
+				{
+					if (rename(fname_tmp, fname) == 0)
+					{
+						if (parm->z.verbose >= 1)
+							fl_report(LOG_INFO, "id=%s: user %s added to %s: %s",
+								parm->dyn.info.id,
+								parm->dyn.info.authsender,
+								fname,
+								reason);
+					}
+					else
+					{
+						failed_action = "rename";
+						failed_errno = errno;
+					}
+				}
+			}
+			else
+			{
+				failed_action = "fdopen";
+				failed_errno = errno;
+			}
+		}
+		else
+		{
+			failed_action = "mkstemp";
+			failed_errno = errno;
+		}
+	}
+	else
+	{
+		failed_action = "malloc";
+		if ((failed_errno = errno) == 0)
+			failed_errno = ENOMEM;
+	}
+
+	if (failed_action)
+		fl_report(LOG_CRIT, "cannot %s %s: %s",
+			failed_action, fname, strerror(failed_errno));
+}
+
 static void after_filter_stats(fl_parm *fl)
 {
 	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
@@ -2932,7 +3155,26 @@ static void after_filter_stats(fl_parm *fl)
 	if (parm && parm->dwa && parm->dyn.stats)
 	{
 		if (check_db_connected(parm) == 0)
+		{
 			db_set_stats_info(parm->dwa, parm->dyn.stats);
+			if (parm->dyn.stats->outgoing && !parm->user_blocked)
+			{
+				char *block = db_check_user(parm->dwa);
+				/*
+				* If block is not null and not zero, write block
+				*/
+				if (block)
+				{
+					char *p = block, *t = NULL;
+					while (isspace(*(unsigned char*)p))
+						++p;
+					long l = strtol(p, &t, 0);
+					if (l || t == p && *p)
+						block_user(parm, p);
+					free(block);
+				}
+			}
+		}
 		db_clear(parm->dwa);
 		parm->dwa = NULL;
 	}
@@ -3184,95 +3426,8 @@ static void check_blocked_user_list(fl_parm *fl)
 	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
 	assert(parm);
 
-	char const *const fname = parm->z.blocked_user_list;
-	int updated = 0;
-	if (fname)
-	{
-		char const *failed_action = NULL;
-		struct stat st;
-
-		if (stat(fname, &st))
-		{
-			if (errno == ENOENT) // no file, no blocked users
-			{
-				free(parm->blocklist.data);
-				parm->blocklist.data = NULL;
-				parm->blocklist.size = 0;
-				parm->blocklist.mtime = 0;
-				updated = 1;
-			}
-			else
-				failed_action = "stat";
-		}
-		else if (st.st_mtime != parm->blocklist.mtime ||
-			(size_t)st.st_size != parm->blocklist.size)
-		{
-			if (st.st_size == 0)
-			{
-				free(parm->blocklist.data);
-				parm->blocklist.data = NULL;
-				parm->blocklist.size = 0;
-				parm->blocklist.mtime = st.st_mtime;
-				updated = 1;
-			}
-			else if ((uint64_t)st.st_size >= SIZE_MAX)
-			{
-				fl_report(LOG_ALERT, "file %s: size %ldu too large: max = %lu\n",
-					fname, st.st_size, SIZE_MAX);
-			}
-			else
-			{
-				char *data = malloc(st.st_size + 1);
-				if (data == NULL)
-					failed_action = "malloc";
-				else
-				{
-					FILE *fp = fopen(fname, "r");
-					if (fp == NULL)
-						failed_action = "fopen";
-					else
-					{
-						size_t in = fread(data, 1, st.st_size, fp);
-						if ((ferror(fp) | fclose(fp)) != 0)
-							failed_action = "fread";
-						else if (in != (size_t)st.st_size)
-						{
-							if (parm->z.verbose >= 2)
-								fl_report(LOG_NOTICE,
-									"race condition reading %s (size from %zu to %zu)",
-									fname, st.st_size, in);
-						}
-						else
-						{
-							free(parm->blocklist.data);
-							data[in] = 0;
-							parm->blocklist.data = data;
-							parm->blocklist.size = st.st_size;
-							parm->blocklist.mtime = st.st_mtime;
-							updated = 1;
-						}
-					}
-				}
-			}
-		}
-
-		if (failed_action)
-			fl_report(LOG_ALERT, "cannot %s %s: %s",
-				failed_action, fname, strerror(errno));
-		else if (updated && parm->z.verbose >= 2 || parm->z.verbose >= 9)
-		{
-			struct tm tm;
-			localtime_r(&parm->blocklist.mtime, &tm);
-			fl_report(updated? LOG_INFO: LOG_DEBUG,
-				"%s %s version of %04d-%02d-%02dT%02d:%02d:%02d (%zu bytes) on %s",
-				fname,
-				updated? "updated to": "still at",
-				tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-				tm.tm_hour, tm.tm_min, tm.tm_sec,
-				parm->blocklist.size,
-				fl_whence_string(parm->fl));
-		}
-	}
+	parm->fl = fl;
+	update_blocked_user_list(parm);
 }
 
 static fl_init_parm functions =

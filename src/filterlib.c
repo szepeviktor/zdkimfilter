@@ -234,7 +234,7 @@ static int cfc_unshift(ctl_fname_chain **cfc, char const *fname, size_t len)
 /* ----- fl_* aux functions ----- */
 static const char* const whence_string[] =
 {
-	"no filter",
+	"stdalone",
 	"init",
 	"main loop",
 	"before fork",
@@ -246,11 +246,13 @@ typedef char compile_time_check_that_whence_string_has_value_max_elements
 
 fl_whence_value fl_whence(fl_parm *fl)
 {
+	assert(fl);
 	return fl->whence;
 }
 
 char const* fl_whence_string(fl_parm *fl)
 {
+	assert(fl);
 	unsigned const w = fl->whence;
 	assert(w < FL_WHENCE_VALUE_MAX);
 	return w < FL_WHENCE_VALUE_MAX? whence_string[w]: "NULL";
@@ -258,26 +260,31 @@ char const* fl_whence_string(fl_parm *fl)
 
 void *fl_get_parm(fl_parm*fl)
 {
+	assert(fl);
 	return fl->parm;
 }
 
 void fl_set_parm(fl_parm *fl, void* parm)
 {
+	assert(fl);
 	fl->parm = parm;
 }
 
 void fl_set_verbose(fl_parm*fl, int verbose)
 {
+	assert(fl);
 	fl->verbose = sig_verbose = verbose;
 }
 
 int fl_get_verbose(fl_parm*fl)
 {
+	assert(fl);
 	return fl->verbose;
 }
 
 fl_callback fl_set_after_filter(fl_parm *fl, fl_callback after_filter)
 {
+	assert(fl);
 	fl_callback old = fl->after_filter;
 	fl->after_filter = after_filter;
 	return old;
@@ -294,6 +301,7 @@ void fl_pass_message(fl_parm*fl, char const *resp)
 * 2xx responses are not parsed. However, we log them.
 */
 {
+	assert(fl);
 	fl->resp = resp;
 }
 
@@ -319,16 +327,19 @@ void fl_free_on_exit(fl_parm*fl, void *p)
 
 char const *fl_get_passed_message(fl_parm *fl)
 {
+	assert(fl);
 	return fl->resp;
 }
 
 FILE* fl_get_file(fl_parm*fl)
 {
+	assert(fl);
 	return fl->data_fp;
 }
 
 FILE *fl_get_write_file(fl_parm *fl)
 {
+	assert(fl);
 	fl->write_file = 1;
 	if (fl->write_fp == NULL)
 	{
@@ -356,6 +367,7 @@ FILE *fl_get_write_file(fl_parm *fl)
 
 fl_test_mode fl_get_test_mode(fl_parm* fl)
 {
+	assert(fl);
 	return fl->testing ? fl->batch_test ?
 		fl_batch_test : fl_testing : fl_no_test;
 }
@@ -1598,6 +1610,8 @@ int fl_main(fl_init_parm const*fn, void *parm,
 					fprintf(stderr,
 						THE_FILTER ": running for %s on %d ctl + %d mail files\n",
 						*t == 0? "test": t + 1, (int)l, argc - i - 2);
+				if (fn->on_fork)
+					(*fn->on_fork)(&fl);
 				rtc = (*fl_fn)(&fl, (int)l, argc - i - 1, argv + i + 1);
 			}
 			break;
@@ -1607,6 +1621,8 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		{
 			fl.batch_test = fl.testing = 1;
 			fl_init_signal(init_signal_all);
+			if (fn->on_fork)
+				(*fn->on_fork)(&fl);
 			if (isatty(fileno(stdout)))
 				fprintf(stdout,
 					THE_FILTER ": batch test. Type `?' for help.\n");

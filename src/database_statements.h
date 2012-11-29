@@ -41,4 +41,5 @@ DATABASE_STATEMENT(db_sql_select_target)
 DATABASE_STATEMENT(db_sql_update_target)
 DATABASE_STATEMENT(db_sql_insert_target)
 DATABASE_STATEMENT(db_sql_insert_target_ref)
+DATABASE_STATEMENT(db_sql_check_user)
 

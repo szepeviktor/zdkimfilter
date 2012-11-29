@@ -175,6 +175,7 @@ no_signlen               = N (Y/N)
 redact_received_auth     = NULL (any text)
 tmp                      = . (temp directory)
 tempfail_on_error        = N (Y/N)
+blocked_user_list        = NULL (filename)
 no_spf                   = N (Y/N)
 save_from_anyway         = N (Y/N)
 add_a_r_anyway           = N (Y/N)
@@ -1722,6 +1723,13 @@ grep 'example.org' database_dump, 0,
 [domain: example.org
 domain: example.org
 ],[])
+AT_CHECK(
+grep 'rcpt_count' database_dump, 0,
+[rcpt_count: 3
+rcpt_count: 3
+rcpt_count: 3
+rcpt_count: 3
+],[])
 AT_CLEANUP
 
 #
@@ -1829,6 +1837,85 @@ INFO: zfilter: zdkimfilter[[0]]:id=dkimsign: response: 250 not filtered.
 INFO: zfilter: 250 not filtered.
 ])
 AT_CHECK(cmp mail mailsig, 0, [], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Reject blocked user])
+ZF_CONFIG(1, [
+blocked_user_list bul.txt
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Moutgoingmsg
+uauthsmtp
+iuser@example.com
+rsomeone@somewhere.example
+])
+AT_DATA([bul.txt], [user@example.com is naughty
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 BLOCKED: can send to <postmaster@example.com> only.
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Reject blocked user sending also to postmaster])
+ZF_CONFIG(1, [
+blocked_user_list bul.txt
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Moutgoingmsg
+uauthsmtp
+iuser@example.com
+rpostmaster@example.com
+rsomeone@somewhere.example
+])
+AT_DATA([bul.txt], [user@example.com is naughty
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 BLOCKED: can send to <postmaster@example.com> only.
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Accept blocked user sending to postmaster only])
+ZF_CONFIG(1, [
+blocked_user_list bul.txt
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Moutgoingmsg
+uauthsmtp
+iuser@example.com
+rpostmaster@example.com
+])
+AT_DATA([bul.txt], [user@example.com is naughty
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
 AT_CLEANUP
 
 
