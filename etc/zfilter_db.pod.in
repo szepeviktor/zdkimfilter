@@ -126,12 +126,13 @@ the other queries are issued after messages have been dealt with.
 
 =head2 Common variables
 
-There are eleven variables that can be used in all of the following queries.
+There are twelve variables that can be used in all of the following queries.
 They are: C<ino>, C<mtime>, and C<pid>, as used by Courier to identify a
 message; C<from>, C<date>, C<message_id>, C<subject>, C<content_type>, and
 C<content_encoding> from the corresponding header fields in the message;
 C<mailing_list>, which is 1 if the message has some header fields that are
-typical of mailing lists; and C<envelope_sender> for the bounce address.
+typical of mailing lists; C<envelope_sender> for the bounce address; and
+C<ip> for the client IP address.
 
 =head2 Log of incoming messages
 
@@ -141,13 +142,13 @@ queries.  Besides common variables, the queries in this group can log two
 additional sets of variables, one for the message as a whole, and one for each
 domain.
 
-The first set consists of C<ip>, seen above; C<message_status>, which is one of
-the three values C<accept>, C<reject>, and C<drop>; C<adsp_flags>, which is a
-comma separated list of one of the three possible values of the policy,
-C<unknown>, C<all>, and C<discardable>, along with C<found>, in case C<unknown>
-was not inferred, and possibly C<fail> and C<whitelisted>; C<received_count>
-the number of C<Received:> header fields; and C<signatures_count> for the
-number of DKIM signatures.
+The first set consists of C<message_status>, which is one of the three values
+C<accept>, C<reject>, and C<drop>; C<adsp_flags>, which is a comma separated
+list of one of the three possible values of the policy, C<unknown>, C<all>,
+and C<discardable>, along with C<found>, in case C<unknown> was not inferred,
+and possibly C<fail> and C<whitelisted>; C<received_count> the number of
+C<Received:> header fields; and C<signatures_count> for the number of DKIM
+signatures.
 
 The second set of variables can be only used by all but one of the queries in
 this group.  It contains the variables C<domain>, the name; C<reputation>, the
@@ -204,8 +205,9 @@ queries had better be left undefined.
 
 =head2 Log of outgoing messages
 
-These queries resemble the ones for incoming messages.  They can use the common
-variables defined above, and some additional ones as defined below.
+These queries consist of an initial query, a loop for each target domain, and
+a final query.  They can use the common variables defined above, and some
+additional ones as defined below.
 
 =over
 
@@ -213,7 +215,8 @@ variables defined above, and some additional ones as defined below.
 
 This query can use C<local_part> and C<domain> of the authenticated user who
 sent the message.  It occurs at most once per message, and can return two
-record id's, C<user_ref> and C<message_ref>; that is one row with two columns.
+values, that is one row with two columns, that will be made available as
+C<user_ref> and C<message_ref>.
 
 
 =item B<db_sql_select_target>
@@ -236,7 +239,7 @@ I<db_sql_select_target>.
 
 =item B<db_sql_insert_target_ref>
 
-This completes message logging.  It is called with both C<domain_ref> and
+This completes the target loop.  It is called with both C<domain_ref> and
 C<message_ref> and provides the many-to-many link between the targeted domain
 and the user.
 
@@ -260,11 +263,16 @@ the procedures, so it doesn't reflect tough design issues on how to integrate
 it with scripts that handle bounces and complaints.  Please spend some time on
 such design.
 
+The code in this section can be found in the files F<odbx_example.sql> and
+F<odbx_example.conf> in the tarball.
+
 First, let's define some tables:
 
-  CREATE DATABASE IF NOT EXISTS zfilter_test;
-  USE zfilter_test;
+  CREATE DATABASE IF NOT EXISTS test_zfilter;
+  USE test_zfilter;
 
+  # domains that we exchange mail with
+  #
   DROP TABLE IF EXISTS domain;
   CREATE TABLE domain (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -279,20 +287,23 @@ First, let's define some tables:
   ENGINE = MyISAM
   CHARACTER SET ascii COLLATE ascii_general_ci;
 
+  # many-to-many link between domains and received messages
+  #
   DROP TABLE IF EXISTS msg_ref;
   CREATE TABLE msg_ref (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     message_in INT UNSIGNED NOT NULL COMMENT 'Foreign key to message_in',
     domain INT UNSIGNED NOT NULL COMMENT 'Foreign key to domain',
     reputation INT NOT NULL,
-    auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s')
-      NOT NULL,
+    auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s') NOT NULL,
     vbr ENUM ('spamhaus', 'who_else') NOT NULL,
     INDEX by_dom_msg(domain, message_in)
   )
   ENGINE = MyISAM
   CHARACTER SET ascii COLLATE ascii_general_ci;
 
+  # received messages
+  #
   DROP TABLE IF EXISTS message_in;
   CREATE TABLE message_in (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -302,6 +313,7 @@ First, let's define some tables:
     ip BINARY(4) NOT NULL COMMENT 'Ok for IPv4.  For IPv6 use VARBINARY(16)',
     date VARCHAR(63),
     message_id VARCHAR(63),
+    envelope_sender VARCHAR(63) NOT NULL DEFAULT '',
     content_type VARCHAR(63) NOT NULL DEFAULT 'text/plain',
     content_encoding VARCHAR(63) NOT NULL DEFAULT '7bit',
     received_count SMALLINT UNSIGNED NOT NULL,
@@ -313,6 +325,8 @@ First, let's define some tables:
   ENGINE = MyISAM
   CHARACTER SET ascii COLLATE ascii_general_ci;
 
+  # user table
+  #
   DROP TABLE IF EXISTS user;
   CREATE TABLE user (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -322,6 +336,8 @@ First, let's define some tables:
   ENGINE = MyISAM
   CHARACTER SET ascii COLLATE ascii_general_ci;
 
+  # sent messages
+  #
   DROP TABLE IF EXISTS message_out;
   CREATE TABLE message_out (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -329,9 +345,11 @@ First, let's define some tables:
     mtime BIGINT UNSIGNED NOT NULL,
     pid  BIGINT UNSIGNED NOT NULL,
     user INT UNSIGNED NOT NULL COMMENT 'Foreign key to user',
+    ip BINARY(4) NOT NULL COMMENT 'Ok for IPv4.  For IPv6 use VARBINARY(16)',
     rcpt_count INT UNSIGNED NOT NULL DEFAULT 1,
     date VARCHAR(63),
     message_id VARCHAR(63),
+    envelope_sender VARCHAR(63) NOT NULL DEFAULT '',
     content_type VARCHAR(63) NOT NULL DEFAULT 'text/plain',
     content_encoding VARCHAR(63) NOT NULL DEFAULT '7bit',
     UNIQUE KEY (mtime, pid, ino)
@@ -339,6 +357,8 @@ First, let's define some tables:
   ENGINE = MyISAM
   CHARACTER SET ascii COLLATE ascii_general_ci;
 
+  # many-to-many link between domains and sent messages
+  #
   DROP TABLE IF EXISTS msg_out_ref;
   CREATE TABLE msg_out_ref (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -349,103 +369,126 @@ First, let's define some tables:
   ENGINE = MyISAM
   CHARACTER SET ascii COLLATE ascii_general_ci;
 
-Next, we define procedures.  The following one inserts or updates domains and
-inserts msg_ref records.  We'll call it from I<db_sql_insert_msg_ref>.
-
-  DROP PROCEDURE IF EXISTS recv_from_domain;
+Next, we define procedures.  The following one does domains and their links to
+incoming messages:
 
   delimiter //
+
+  # Called by db_sql_insert_msg_ref:
+  # Insert/update domain, insert msg_ref
+  #
+  DROP PROCEDURE IF EXISTS recv_from_domain//
   CREATE PROCEDURE recv_from_domain (
-    IN m_ref INT UNSIGNED,
-    IN dname VARCHAR(255),
+    IN m_mi INT UNSIGNED,
+    IN m_domain VARCHAR(63),
     IN m_auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s'),
-    IN vbr_mv VARCHAR(255),
-    IN rep INT)
+    IN m_vbr VARCHAR(63),
+    IN m_rep INT)
     MODIFIES SQL DATA
   BEGIN
     DECLARE d_id INT UNSIGNED;
-    DECLARE d_whit TINYINT;
+    DECLARE d_white TINYINT;
     DECLARE Empty_set CONDITION FOR 1329;
     DECLARE CONTINUE HANDLER FOR Empty_set
       BEGIN
-        INSERT INTO domain SET domain = dname;
+        INSERT INTO domain SET domain = m_domain;
         SELECT LAST_INSERT_ID() INTO d_id;
-        SET d_whit = 0;
+        SET d_white = 0;
       END;
-    SELECT id, whitelisted INTO d_id, d_whit FROM domain WHERE domain = dname;
-    IF d_whit < 1 AND FIND_IN_SET('dkim', m_auth) THEN
-      # whitelisted=1 affects the order in which to try signature validation
-      UPDATE domain SET whitelisted = 1, recv = recv + 1, last = NOW()
-        WHERE id = d_id;
+    SELECT id, whitelisted INTO d_id, d_white
+      FROM domain WHERE domain = m_domain;
+    IF d_white < 1 AND FIND_IN_SET('dkim', m_auth) THEN
+      # whitelisted=1 just affects the order of signature validation attempts
+      UPDATE domain SET whitelisted = 1,
+        recv = recv + 1, last = NOW() WHERE id = d_id;
     ELSE
-      UPDATE domain SET recv = recv + 1, last = NOW() WHERE id = d_id;
+      UPDATE domain SET recv = recv + 1,
+        last = NOW() WHERE id = d_id;
     END IF;
-    INSERT INTO msg_ref SET message_in = m_ref, domain = d_id, auth = m_auth,
-      reputation = rep,
-      vbr = IF(STRCMP(vbr_mv, 'dwl.spamhaus.org') = 0, '(spamhaus)', '()');
+    INSERT INTO msg_ref SET message_in = m_mi,
+      domain = d_id,
+      auth = m_auth,
+      reputation = m_rep,
+      vbr = IF(STRCMP(m_vbr, 'dwl.spamhaus.org') = 0, '(spamhaus)', '()');
   END //
 
 Now for outgoing messages.  For simplicity, we repopulate the user table.  The
-following procedure will be called from I<db_sql_select_user>.  Note that it
-also inserts a new message_out.
+following procedure will insert users as needed, as well as the message.
 
+  # Called by db_sql_select_user:
+  # Insert/update user, insert message_out'
+  #
   DROP PROCEDURE IF EXISTS sent_message //
-
   CREATE PROCEDURE sent_message (
-    IN u_addr VARCHAR(255),
+    IN m_addr VARCHAR(63),
     IN m_ino BIGINT UNSIGNED,
     IN m_mtime BIGINT UNSIGNED,
     IN m_pid BIGINT UNSIGNED,
+    IN m_ip BINARY(4), # for IPv6 use VARBINARY(16)
     IN m_date VARCHAR(63),
     IN m_id VARCHAR(63),
+    IN m_es VARCHAR(63),
     IN m_ct VARCHAR(63),
     IN m_ce VARCHAR(63),
     IN m_rcpt INT UNSIGNED)
     MODIFIES SQL DATA
   BEGIN
-    DECLARE u_ref INT UNSIGNED;
+    DECLARE user_ref INT UNSIGNED;
     DECLARE Empty_set CONDITION FOR 1329;
     DECLARE CONTINUE HANDLER FOR Empty_set
       BEGIN
-        INSERT INTO user SET addr = u_addr;
-        SELECT LAST_INSERT_ID() INTO u_ref;
+        INSERT INTO user SET addr = m_addr;
+        SELECT LAST_INSERT_ID() INTO user_ref;
       END;
-    SELECT id INTO u_ref FROM user WHERE addr = u_addr LIMIT 1;
-    INSERT INTO message_out SET ino = m_ino, mtime = m_mtime, pid = m_pid,
-      user = u_ref, date = m_date, message_id = m_id,
-      content_type = m_ct, content_encoding = m_ce, rcpt_count = m_rcpt;
-    SELECT u_ref;
+    SELECT id INTO user_ref FROM user WHERE addr = m_addr LIMIT 1;
+    INSERT INTO message_out SET ino = m_ino,
+      mtime = m_mtime,
+      pid = m_pid,
+      ip = m_ip,
+      user = user_ref,
+      date = m_date,
+      message_id = m_id,
+      envelope_sender = m_es,
+      content_type = m_ct,
+      content_encoding = m_ce,
+      rcpt_count = m_rcpt;
+    SELECT user_ref, LAST_INSERT_ID() AS message_ref;
   END //
 
 The domain table is obviously shared between incoming and outgoing messages.
-This example mimics the way some mail clients do whitelisting.  It will be
-called by I<db_sql_insert_target_ref>.
+This example mimics the way some mail clients do whitelisting.
 
+  #  Called by db_sql_insert_target_ref:
+  #  Insert/update domain, insert msg_out_ref
+  #
   DROP PROCEDURE IF EXISTS sent_to_domain //
-
   CREATE PROCEDURE sent_to_domain (
-    IN u_ref INT UNSIGNED,
-    IN dname VARCHAR(255))
+    IN message_ref INT UNSIGNED,
+    IN m_domain VARCHAR(63))
     MODIFIES SQL DATA
   BEGIN
     DECLARE d_id INT UNSIGNED;
-    DECLARE d_whit TINYINT;
+    DECLARE d_white TINYINT;
     DECLARE Empty_set CONDITION FOR 1329;
     DECLARE CONTINUE HANDLER FOR Empty_set
       BEGIN
-        INSERT INTO domain SET domain = dname;
+        INSERT INTO domain SET domain = m_domain;
         SELECT LAST_INSERT_ID() INTO d_id;
-        SET d_whit = 0;
+        SET d_white = 0;
       END;
-    SELECT id, whitelisted INTO d_id, d_whit FROM domain WHERE domain = dname;
-    IF d_whit < 2 THEN
+    SELECT id, whitelisted INTO d_id, d_white
+      FROM domain WHERE domain = m_domain;
+    IF d_white < 2 THEN
       # whitelisted=2 prevents ADSP discard; whitelisted=3 is not used yet
-      UPDATE domain SET whitelisted = 2, sent = sent + 1, last = NOW()
-        WHERE id = d_id;
+      UPDATE domain SET whitelisted = 2,
+        sent = sent + 1,
+        last = NOW() WHERE id = d_id;
     ELSE
-      UPDATE domain SET sent = sent + 1, last = NOW() WHERE id = d_id;
+      UPDATE domain SET sent = sent + 1,
+        last = NOW() WHERE id = d_id;
     END IF;
-    INSERT INTO msg_out_ref SET message_out = u_ref, domain = d_id;
+    INSERT INTO msg_out_ref SET message_out = message_ref,
+      domain = d_id;
   END //
 
   delimiter ;
@@ -465,31 +508,58 @@ Finally, we'll write C<db_> options to a file named C<test.conf>:
 
   db_opt_multi_statements
 
-  db_database zfilter_test
+  db_database test_zfilter
   db_user zfilter
 
   db_sql_whitelisted SELECT whitelisted FROM domain WHERE domain = '$(domain)'
 
   db_sql_insert_msg_ref CALL recv_from_domain(\
-    $(message_ref), '$(domain)', ('$(auth_type)'), '$(vbr_mv)', $(reputation))
+   $(message_ref),\
+   '$(domain)',\
+   ('$(auth_type)'),\
+   '$(vbr_mv)',\
+   $(reputation))
 
-  db_sql_insert_message INSERT INTO message_in SET \
-   ino = 0x$(ino), mtime = 0x$(mtime), pid = 0x$(pid),\
-   ip = X'$(ip)', date = '$(date)', message_id = '$(message_id)',\
-   content_type = '$(content_type)', content_encoding = '$(content_encoding)',\
-   received_count = $(received_count), signatures_count = $(signatures_count),\
+  db_sql_insert_message INSERT INTO message_in SET\
+   ino = 0x$(ino),\
+   mtime = 0x$(mtime),\
+   pid = 0x$(pid),\
+   ip = X'$(ip)',\
+   date = '$(date)',\
+   message_id = '$(message_id)',\
+   envelope_sender = '$(envelope_sender)',\
+   content_type = '$(content_type)',\
+   content_encoding = '$(content_encoding)',\
+   received_count = $(received_count),\
+   signatures_count = $(signatures_count),\
    mailing_list = $(mailing_list); SELECT LAST_INSERT_ID()
 
-
   db_sql_select_user CALL sent_message('$(local_part)@$(domain)',\
-    0x$(ino), 0x$(mtime), 0x$(pid), '$(date)', '$(message_id)',\
-    '$(content_type)', '$(content_encoding)')
+   0x$(ino),\
+   0x$(mtime),\
+   0x$(pid),\
+   0x$(ip),\
+   '$(date)',\
+   '$(message_id)',\
+   '$(envelope_sender)',\
+   '$(content_type)',\
+   '$(content_encoding)',\
+   $(rcpt_count))
 
-  db_sql_insert_target_ref CALL sent_to_domain($(user_ref), '$(domain)')
+  db_sql_insert_target_ref CALL sent_to_domain($(message_ref), '$(domain)')
+
+  db_sql_check_user SELECT IF ((SELECT SUM(rcpt_count)\
+   FROM message_out WHERE user = $(user_ref) AND\
+   mtime > UNIX_TIMESTAMP(NOW() - INTERVAL 1 DAY)) > 10000,\
+   'Block this guy', 0) AS reason
+
+
+Missing variables result in an empty string.
 
 Note that C<ino>, C<mtime>, and C<pid> are given as hex string, but without
 the leading C<0x>.  The same is true for the IP address.  Also note how comma
 separated lists match SET/ENUM types.
+
 
 =head1 COMMAND LINE OPTIONS
 
@@ -573,40 +643,42 @@ any result from queries.  Hence, it will call select statements multiple times.
 
 =head1 EXAMPLES
 
-The database and configuration exemplified above can be exercised like so:
+These examples assume the database and configuration exemplified above.
+
+Check what happens receiving a message:
 
   $ zfilter_db -f test.conf --set-stats i example.com
-  DEBUG: zfilter: query: INSERT INTO message_in SET   ino = 0x7ed6eb01, mtime
-   = 0x508bfc6a, pid = 0x1c01,   ip = X'c0000286', date = 'Sat, 27 Oct 2012 1
-  7:23:22 +0200', message_id = '<6f9d7557@example.com>',   content_type = 'te
-  xt/plain', content_encoding = '8bit',   received_count = 2, signatures_coun
-  t = 3,   mailing_list = 0; SELECT LAST_INSERT_ID()
-  DEBUG: zfilter: query: CALL recv_from_domain(  2444, 'example.com', (''), '
-  ', 0)
 
-We can set VBR:
+Same as above, with a DKIM signature and a VBR vouch:
 
   $ zfilter_db -f test.conf \
-  > --set-stats i example.com,dkim,vbr:dwl.spamhause.org:all
+  > --set-stats i example.com,dkim,vbr:dwl.spamhaus.org:all
 
-The second part of the output will change to
-
-  DEBUG: zfilter: query: CALL recv_from_domain(  2446, 'example.com', ('dkim,
-  vbr'), 'dwl.spamhause.org', 0)
-
-Was that handled correctly?  We can query the database using mysql client:
+IN each case, the configured db queries are displayed.  Their effect can be
+verified using mysql client:
 
   mysql> SELECT INET_NTOA(CONV(HEX(m.ip),16,10)) AS ip,
-      -> FROM_UNIXTIME(m.mtime), d.domain, r.auth
+      -> FROM_UNIXTIME(m.mtime), d.domain, d.whitelisted AS w, r.auth
       -> FROM msg_ref AS r, message_in AS m, domain AS d
       -> WHERE r.domain=d.id AND r.message_in=m.id AND
       -> FIND_IN_SET('vbr', r.auth);
-  +-------------+------------------------+-------------+----------+
-  | ip          | FROM_UNIXTIME(m.mtime) | domain      | auth     |
-  +-------------+------------------------+-------------+----------+
-  | 192.0.2.133 | 2012-10-27 17:32:59    | example.com | dkim,vbr |
-  +-------------+------------------------+-------------+----------+
+  +-------------+------------------------+-------------+---+----------+
+  | ip          | FROM_UNIXTIME(m.mtime) | domain      | w | auth     |
+  +-------------+------------------------+-------------+---+----------+
+  | 192.0.2.154 | 2012-11-30 17:22:49    | example.com | 1 | dkim,vbr |
+  +-------------+------------------------+-------------+---+----------+
   1 row in set (0.00 sec)
+
+
+Does the user check function work?  To test it, we simulate an outgoing message
+with 8000 recipients.  Since that datum is accepted at position 9, we use
+C<@>s placeholders and let the test program assign values for us:
+
+  $ zfilter_db -f test.conf --set-stats-domain example.org \
+  > --set-stats o user@example.com @ @ @ @ @ @ @  8000
+
+The bottom line of the output should report "user check: 0" until the
+configured limit is reached.
 
 We can populate the test database as needed, in order to design and test our
 procedures and scripts.  But what columns can we use for that query?  Just ask:
@@ -631,8 +703,6 @@ procedures and scripts.  But what columns can we use for that query?  Just ask:
   mailing_list: 1
   adsp_flags: unknown
   message_status: accept
-
-You added C<envelope_sender>, didn't you?  Just checking if you were asleep...
 
 
 =head1 FILES

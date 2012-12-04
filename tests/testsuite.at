@@ -1743,7 +1743,7 @@ AT_CLEANUP
 # batch invocation a-la dkimsign, with config file; adding --batch-test for fl_log_no_pid
 # (can use ./testsuite -d VALGRIND_AND_OPTS="valgrind -v --leak-check=full --trace-children=yes --log-file=valgrind%p.out")
 m4_define([ZF_NOFORK], [$VALGRIND_AND_OPTS zdkimfilter -f zftest.conf --no-db --no-fork [-t1,dkimsign] ctls $1 --batch-test <mail >mailsig ])
-m4_define([ZDKSIGN], [$VALGRIND_AND_OPTS dkimsign -f zftest.conf --filter $1 --batch-test >mailsig ])
+m4_define([ZDKSIGN], [$VALGRIND_AND_OPTS dkimsign -f zftest.conf --filter $1 -- --batch-test >mailsig ])
 #
 AT_SETUP([Sign and verify with no-fork])
 ZF_CONFIG(6)
@@ -1837,6 +1837,42 @@ INFO: zfilter: zdkimfilter[[0]]:id=dkimsign: response: 250 not filtered.
 INFO: zfilter: 250 not filtered.
 ])
 AT_CHECK(cmp mail mailsig, 0, [], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Dkimsign reads message recipients])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(1, [
+#this is the default domain
+default_domain = example.com
+db_backend test
+db_sql_select_target dummy
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail],
+[ZF_MESSAGE([], [], [Cc: name@some.example
+], [Bcc: "User" <user2@example.org>, user3@example(user's domain).net
+])])
+AT_CHECK([REMOTE_ADDR=192.0.2.2 ZDKSIGN(--db-filter -t. --domain user@example.com) <mail],
+0, [], [])
+AT_CHECK(
+grep 'ip: c0000202' database_dump, 0,
+[ip: c0000202
+ip: c0000202
+ip: c0000202
+ip: c0000202
+ip: c0000202
+ip: c0000202
+],[])
+AT_CHECK(
+grep 'domain:' database_dump, 0,
+[domain: some.example
+domain: some.example
+domain: example.org
+domain: example.org
+domain: example.net
+domain: example.net
+],[])
 AT_CLEANUP
 
 #

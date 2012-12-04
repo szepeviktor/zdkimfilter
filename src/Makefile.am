@@ -4,7 +4,7 @@
 
 AM_CFLAGS = -I$(top_srcdir)
 AM_CPPFLAGS = -fno-strict-aliasing
-noinst_HEADERS = filterlib.h filedefs.h filecopy.h \
+noinst_HEADERS = filterlib.h filedefs.h filecopy.h dkim-mailparse.h\
  myvbr.h redact.h vb_fgets.h parm.h database.h database_variables.h database_statements.h
 
 filterexecdir = @COURIER_FILTER_INSTALL@
@@ -18,7 +18,7 @@ zdkimfilter_CPPFLAGS = -DFILTER_NAME=zdkimfilter @OPENDKIM_CFLAGS@ @OPENDBX_CFLA
 # nozdkimfilter_CCLD = libtool --mode=link $(CCLD)
 
 bin_PROGRAMS = dkimsign redact zfilter_db
-dkimsign_SOURCES = dkimsign.c parm.c parm.h
+dkimsign_SOURCES = dkimsign.c dkim-mailparse.c parm.c
 redact_SOURCES = redact.c parm.c
 redact_CPPFLAGS = -DMAIN
 redact_LDADD = @NETTLE_LIB@
@@ -27,7 +27,7 @@ zfilter_db_CPPFLAGS = @OPENDBX_CFLAGS@ -DTEST_MAIN
 zfilter_db_LDADD = @OPENDBX_LIB@
 
 check_PROGRAMS = TESTmyvbr
-TESTmyvbr_SOURCES = myvbr.c myvbr.h
+TESTmyvbr_SOURCES = myvbr.c
 TESTmyvbr_CPPFLAGS = -DTEST_MAIN
 TESTmyvbr_LDADD = @RESOLVER_LIB@
 

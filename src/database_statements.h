@@ -21,9 +21,11 @@ along with zdkimfilter.  If not, see <http://www.gnu.org/licenses/>.
 
 Additional permission under GNU GPLv3 section 7:
 
-If you modify zdkimfilter, or any covered work, by linking or combining it
-with OpenDKIM, containing parts covered by the applicable licence, the licensor
-or zdkimfilter grants you additional permission to convey the resulting work.
+If you modify zdkimfilter, or any covered part of it, by linking or combining
+it with OpenSSL, OpenDKIM, Sendmail, or any software developed by The Trusted
+Domain Project or Sendmail Inc., containing parts covered by the applicable
+licence, the licensor of zdkimfilter grants you additional permission to convey
+the resulting work.
 */
 
 #if !defined DATABASE_STATEMENT

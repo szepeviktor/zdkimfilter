@@ -24,10 +24,11 @@ along with zdkimfilter.  If not, see <http://www.gnu.org/licenses/>.
 
 Additional permission under GNU GPLv3 section 7:
 
-If you modify zdkimfilter, or any covered work, by linking or combining it
-with software developed by The OpenDKIM Project and its contributors,
-containing parts covered by the applicable licence, the licensor or
-zdkimfilter grants you additional permission to convey the resulting work.
+If you modify zdkimfilter, or any covered part of it, by linking or combining
+it with OpenSSL, OpenDKIM, Sendmail, or any software developed by The Trusted
+Domain Project or Sendmail Inc., containing parts covered by the applicable
+licence, the licensor of zdkimfilter grants you additional permission to convey
+the resulting work.
 */
 #include <config.h>
 #if !ZDKIMFILTER_DEBUG
@@ -1605,6 +1606,14 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 #include <sys/types.h>
 #include <unistd.h>
 
+static int autoargip(db_work_area *dwa, stats_info *stats)
+{
+	char buf[32];
+	sprintf(buf, "192.0.2.%d", (int)(rand() & 255));
+	db_set_client_ip(dwa, buf);
+	return 1;
+}
+
 static int autoarg(db_work_area *dwa, stats_info *stats, int i)
 {
 	int set_client_ip = 0;
@@ -1619,10 +1628,7 @@ static int autoarg(db_work_area *dwa, stats_info *stats, int i)
 					rand() > PERC_50? "user.example" : NULL);
 			}
 
-			sprintf(buf, "192.0.2.%d", (int)(rand() & 255));
-			db_set_client_ip(dwa, buf);
-			set_client_ip = 1;
-
+			set_client_ip = autoargip(dwa, stats);
 			break;
 		}
 		case 2:
@@ -1897,7 +1903,7 @@ int main(int argc, char*argv[])
 				if (set_stats_domain >= argc)
 				{
 					set_stats_domain = set_stats + 1;
-					auto_from = 1;
+					auto_from = 0;
 				}
 
 				srand((unsigned int)time(NULL));
@@ -1965,8 +1971,11 @@ int main(int argc, char*argv[])
 					}
 				}
 
-				for (int i = auto_from; i <= 12; ++i)
+				for (int i = auto_from + 1; i <= 12; ++i)
 					set_client_ip |= autoarg(dwa, &stats, i);
+
+				if (set_client_ip == 0)
+					set_client_ip = autoargip(dwa, &stats);
 			}
 
 			domain_prescreen **pdps = &stats.domain_head;
@@ -2062,7 +2071,7 @@ int main(int argc, char*argv[])
 				free(s);
 			}
 			else
-				printf("%d/%d domain(s) whitelisted\n", ndomains, nwhitelisted);
+				printf("%d/%d domain(s) whitelisted\n", nwhitelisted, ndomains);
 
 			free(stats.ino_mtime_pid);
 			for (domain_prescreen *dps = stats.domain_head; dps;)
@@ -2076,18 +2085,18 @@ int main(int argc, char*argv[])
 
 		for (int i = query_whitelisted; i < argc; ++i)
 		{
-			if (set_client_ip == 0)
-			{
-				if (stats.outgoing)
-				{
-					puts("NOTE: db_sql_whitelisted is not for outgoing messages");
-					stats.outgoing = 0;
-				}
-				set_client_ip = autoarg(dwa, &stats, 1);
-			}
-
 			if (argv[i][0] == '-')
 				break;
+
+			if (stats.outgoing)
+			{
+				puts("NOTE: db_sql_whitelisted is not for outgoing messages");
+				stats.outgoing = 0;
+			}
+
+			if (set_client_ip == 0)
+				set_client_ip = autoargip(dwa, &stats);
+
 			printf("%s: %d\n", argv[i], db_is_whitelisted(dwa, argv[i]));
 		}
 	}

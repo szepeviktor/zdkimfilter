@@ -24,10 +24,11 @@ along with zdkimfilter.  If not, see <http://www.gnu.org/licenses/>.
 
 Additional permission under GNU GPLv3 section 7:
 
-If you modify zdkimfilter, or any covered work, by linking or combining it
-with software developed by The OpenDKIM Project and its contributors,
-containing parts covered by the applicable licence, the licensor or
-zdkimfilter grants you additional permission to convey the resulting work.
+If you modify zdkimfilter, or any covered part of it, by linking or combining
+it with OpenSSL, OpenDKIM, Sendmail, or any software developed by The Trusted
+Domain Project or Sendmail Inc., containing parts covered by the applicable
+licence, the licensor of zdkimfilter grants you additional permission to convey
+the resulting work.
 */
 #include <config.h>
 #if !ZDKIMFILTER_DEBUG
@@ -41,6 +42,10 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #include <nettle/base64.h>
 #endif // HAVE_NETTLE
 #include "redact.h"
+
+#if defined MAIN
+#include "parm.h"
+#endif
 
 #if defined HAVE_NETTLE
 
@@ -112,7 +117,6 @@ static size_t my_compress(unsigned char *out, size_t outlength, char const *in)
 #include <stdio.h>
 #include <errno.h>
 #include "vb_fgets.h"
-#include "parm.h"
 
 size_t frombase64(unsigned char *dest, size_t destlen, char *src, size_t len)
 {
@@ -263,6 +267,12 @@ char *redacted(char const *key, char const*txt)
 		buf2[l2] = '@';
 	}
 	return strdup(buf2);
+}
+#else
+char *redacted(char const *key, char const*txt)
+// return NULL, since we don't have nettle
+{
+	return NULL;
 }
 #endif // HAVE_NETTLE
 

@@ -1,10 +1,13 @@
-# 
+# zdkimfilter database example using MySQL
 
 CREATE DATABASE IF NOT EXISTS test_zfilter;
 
 # GRANT SELECT, INSERT, UPDATE, EXECUTE, DELETE ON test_zfilter.* TO 'zfilter'@'localhost'
 
 USE test_zfilter;
+
+# domains that we exchange mail with
+#
 DROP TABLE IF EXISTS domain;
 CREATE TABLE domain (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -19,6 +22,8 @@ CREATE TABLE domain (
 ENGINE = MyISAM
 CHARACTER SET ascii COLLATE ascii_general_ci;
 
+# many-to-many link between domains and received messages
+#
 DROP TABLE IF EXISTS msg_ref;
 CREATE TABLE msg_ref (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -32,6 +37,8 @@ CREATE TABLE msg_ref (
 ENGINE = MyISAM
 CHARACTER SET ascii COLLATE ascii_general_ci;
 
+# received messages
+#
 DROP TABLE IF EXISTS message_in;
 CREATE TABLE message_in (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -41,6 +48,7 @@ CREATE TABLE message_in (
   ip BINARY(4) NOT NULL COMMENT 'Ok for IPv4.  For IPv6 use VARBINARY(16)',
   date VARCHAR(63),
   message_id VARCHAR(63),
+  envelope_sender VARCHAR(63) NOT NULL DEFAULT '',
   content_type VARCHAR(63) NOT NULL DEFAULT 'text/plain',
   content_encoding VARCHAR(63) NOT NULL DEFAULT '7bit',
   received_count SMALLINT UNSIGNED NOT NULL,
@@ -52,6 +60,8 @@ CREATE TABLE message_in (
 ENGINE = MyISAM
 CHARACTER SET ascii COLLATE ascii_general_ci;
 
+# user table
+#
 DROP TABLE IF EXISTS user;
 CREATE TABLE user (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -61,6 +71,8 @@ CREATE TABLE user (
 ENGINE = MyISAM
 CHARACTER SET ascii COLLATE ascii_general_ci;
 
+# sent messages
+#
 DROP TABLE IF EXISTS message_out;
 CREATE TABLE message_out (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -68,9 +80,11 @@ CREATE TABLE message_out (
   mtime BIGINT UNSIGNED NOT NULL,
   pid  BIGINT UNSIGNED NOT NULL,
   user INT UNSIGNED NOT NULL COMMENT 'Foreign key to user',
+  ip BINARY(4) NOT NULL COMMENT 'Ok for IPv4.  For IPv6 use VARBINARY(16)',
   rcpt_count INT UNSIGNED NOT NULL DEFAULT 1,
   date VARCHAR(63),
   message_id VARCHAR(63),
+  envelope_sender VARCHAR(63) NOT NULL DEFAULT '',
   content_type VARCHAR(63) NOT NULL DEFAULT 'text/plain',
   content_encoding VARCHAR(63) NOT NULL DEFAULT '7bit',
   UNIQUE KEY (mtime, pid, ino)
@@ -78,6 +92,8 @@ CREATE TABLE message_out (
 ENGINE = MyISAM
 CHARACTER SET ascii COLLATE ascii_general_ci;
 
+# many-to-many link between domains and sent messages
+#
 DROP TABLE IF EXISTS msg_out_ref;
 CREATE TABLE msg_out_ref (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -89,93 +105,121 @@ ENGINE = MyISAM
 CHARACTER SET ascii COLLATE ascii_general_ci;
 
 
-DROP PROCEDURE IF EXISTS recv_from_domain;
 
 delimiter //
+
+# Called by db_sql_insert_msg_ref:
+# Insert/update domain, insert msg_ref
+#
+DROP PROCEDURE IF EXISTS recv_from_domain//
 CREATE PROCEDURE recv_from_domain (
-	IN m_ref INT UNSIGNED,
-	IN dname VARCHAR(255),
+	IN m_mi INT UNSIGNED,
+	IN m_domain VARCHAR(63),
 	IN m_auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s'),
-	IN vbr_mv VARCHAR(255),
-	IN rep INT)
-#	COMMENT 'Called by db_sql_insert_msg_ref: Insert/update domain, insert msg_ref'
+	IN m_vbr VARCHAR(63),
+	IN m_rep INT)
 	MODIFIES SQL DATA
 BEGIN
 	DECLARE d_id INT UNSIGNED;
-	DECLARE d_whit TINYINT;
+	DECLARE d_white TINYINT;
 	DECLARE Empty_set CONDITION FOR 1329;
 	DECLARE CONTINUE HANDLER FOR Empty_set
 		BEGIN
-			INSERT INTO domain SET domain = dname;
+			INSERT INTO domain SET domain = m_domain;
 			SELECT LAST_INSERT_ID() INTO d_id;
-			SET d_whit = 0;
+			SET d_white = 0;
 		END;
-	SELECT id, whitelisted INTO d_id, d_whit FROM domain WHERE domain = dname;
-	IF d_whit < 1 AND FIND_IN_SET('dkim', m_auth) THEN
-		# whitelisted=1 just affects the order in which to try signature validation
-		UPDATE domain SET whitelisted = 1, recv = recv + 1, last = NOW() WHERE id = d_id;
+	SELECT id, whitelisted INTO d_id, d_white
+		FROM domain WHERE domain = m_domain;
+	IF d_white < 1 AND FIND_IN_SET('dkim', m_auth) THEN
+		# whitelisted=1 just affects the order of signature validation attempts
+		UPDATE domain SET whitelisted = 1,
+			recv = recv + 1, last = NOW() WHERE id = d_id;
 	ELSE
-		UPDATE domain SET recv = recv + 1, last = NOW() WHERE id = d_id;
+		UPDATE domain SET recv = recv + 1,
+			last = NOW() WHERE id = d_id;
 	END IF;
-	INSERT INTO msg_ref SET message_in = m_ref, domain = d_id, auth = m_auth,
-		reputation = rep,
-		vbr = IF(STRCMP(vbr_mv, 'dwl.spamhaus.org') = 0, '(spamhaus)', '()');
+	INSERT INTO msg_ref SET message_in = m_mi,
+		domain = d_id,
+		auth = m_auth,
+		reputation = m_rep,
+		vbr = IF(STRCMP(m_vbr, 'dwl.spamhaus.org') = 0, '(spamhaus)', '()');
 END //
 
-	DROP PROCEDURE IF EXISTS sent_message //
 
-	CREATE PROCEDURE sent_message (
-		IN u_addr VARCHAR(255),
-		IN m_ino BIGINT UNSIGNED,
-		IN m_mtime BIGINT UNSIGNED,
-		IN m_pid BIGINT UNSIGNED,
-		IN m_date VARCHAR(63),
-		IN m_id VARCHAR(63),
-		IN m_ct VARCHAR(63),
-		IN m_ce VARCHAR(63),
-		IN m_rcpt INT UNSIGNED)
-	#	COMMENT 'Called by db_sql_select_user: Insert/update user, insert message_out'
-		MODIFIES SQL DATA
-	BEGIN
-		DECLARE user_ref INT UNSIGNED;
-		DECLARE Empty_set CONDITION FOR 1329;
-		DECLARE CONTINUE HANDLER FOR Empty_set
-			BEGIN
-				INSERT INTO user SET addr = u_addr;
-				SELECT LAST_INSERT_ID() INTO user_ref;
-			END;
-		SELECT id INTO user_ref FROM user WHERE addr = u_addr LIMIT 1;
-		INSERT INTO message_out SET ino = m_ino, mtime = m_mtime, pid = m_pid,
-			user = user_ref, date = m_date, message_id = m_id,
-			content_type = m_ct, content_encoding = m_ce, rcpt_count = m_rcpt;
-		SELECT user_ref, LAST_INSERT_ID() AS message_ref;
-	END //
-
-DROP PROCEDURE IF EXISTS sent_to_domain //
-
-CREATE PROCEDURE sent_to_domain (
-	IN message_ref INT UNSIGNED,
-	IN dname VARCHAR(255))
-#	COMMENT 'Called by db_sql_insert_target_ref: Insert/update domain, insert msg_out_ref'
+# Called by db_sql_select_user:
+# Insert/update user, insert message_out'
+#
+DROP PROCEDURE IF EXISTS sent_message //
+CREATE PROCEDURE sent_message (
+	IN m_addr VARCHAR(63),
+	IN m_ino BIGINT UNSIGNED,
+	IN m_mtime BIGINT UNSIGNED,
+	IN m_pid BIGINT UNSIGNED,
+	IN m_ip BINARY(4), # for IPv6 use VARBINARY(16)
+	IN m_date VARCHAR(63),
+	IN m_id VARCHAR(63),
+	IN m_es VARCHAR(63),
+	IN m_ct VARCHAR(63),
+	IN m_ce VARCHAR(63),
+	IN m_rcpt INT UNSIGNED)
 	MODIFIES SQL DATA
 BEGIN
-	DECLARE d_id INT UNSIGNED;
-	DECLARE d_whit TINYINT;
+	DECLARE user_ref INT UNSIGNED;
 	DECLARE Empty_set CONDITION FOR 1329;
 	DECLARE CONTINUE HANDLER FOR Empty_set
 		BEGIN
-			INSERT INTO domain SET domain = dname;
-			SELECT LAST_INSERT_ID() INTO d_id;
-			SET d_whit = 0;
+			INSERT INTO user SET addr = m_addr;
+			SELECT LAST_INSERT_ID() INTO user_ref;
 		END;
-	SELECT id, whitelisted INTO d_id, d_whit FROM domain WHERE domain = dname;
-	IF d_whit < 2 THEN
+	SELECT id INTO user_ref FROM user WHERE addr = m_addr LIMIT 1;
+	INSERT INTO message_out SET ino = m_ino,
+		mtime = m_mtime,
+		pid = m_pid,
+		ip = m_ip,
+		user = user_ref,
+		date = m_date,
+		message_id = m_id,
+		envelope_sender = m_es,
+		content_type = m_ct,
+		content_encoding = m_ce,
+		rcpt_count = m_rcpt;
+	SELECT user_ref, LAST_INSERT_ID() AS message_ref;
+END //
+
+
+
+#	Called by db_sql_insert_target_ref:
+#  Insert/update domain, insert msg_out_ref
+#
+DROP PROCEDURE IF EXISTS sent_to_domain //
+CREATE PROCEDURE sent_to_domain (
+	IN message_ref INT UNSIGNED,
+	IN m_domain VARCHAR(63))
+	MODIFIES SQL DATA
+BEGIN
+	DECLARE d_id INT UNSIGNED;
+	DECLARE d_white TINYINT;
+	DECLARE Empty_set CONDITION FOR 1329;
+	DECLARE CONTINUE HANDLER FOR Empty_set
+		BEGIN
+			INSERT INTO domain SET domain = m_domain;
+			SELECT LAST_INSERT_ID() INTO d_id;
+			SET d_white = 0;
+		END;
+	SELECT id, whitelisted INTO d_id, d_white
+		FROM domain WHERE domain = m_domain;
+	IF d_white < 2 THEN
 		# whitelisted=2 prevents ADSP discard; whitelisted=3 is not used yet
-		UPDATE domain SET whitelisted = 2, sent = sent + 1, last = NOW() WHERE id = d_id;
+		UPDATE domain SET whitelisted = 2,
+			sent = sent + 1,
+			last = NOW() WHERE id = d_id;
 	ELSE
-		UPDATE domain SET sent = sent + 1, last = NOW() WHERE id = d_id;
+		UPDATE domain SET sent = sent + 1,
+			last = NOW() WHERE id = d_id;
 	END IF;
-	INSERT INTO msg_out_ref SET message_out = message_ref, domain = d_id;
+	INSERT INTO msg_out_ref SET message_out = message_ref,
+		domain = d_id;
 END //
 
 delimiter ;

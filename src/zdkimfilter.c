@@ -21,9 +21,11 @@ along with zdkimfilter.  If not, see <http://www.gnu.org/licenses/>.
 
 Additional permission under GNU GPLv3 section 7:
 
-If you modify zdkimfilter, or any covered work, by linking or combining it
-with OpenDKIM, containing parts covered by the applicable licence, the licensor
-or zdkimfilter grants you additional permission to convey the resulting work.
+If you modify zdkimfilter, or any covered part of it, by linking or combining
+it with OpenSSL, OpenDKIM, Sendmail, or any software developed by The Trusted
+Domain Project or Sendmail Inc., containing parts covered by the applicable
+licence, the licensor of zdkimfilter grants you additional permission to convey
+the resulting work.
 */
 #include <config.h>
 #if !ZDKIMFILTER_DEBUG
@@ -244,7 +246,7 @@ static inline u_char **
 cast_u_char_parm_array(char **a) {return (u_char **)a;}
 
 static char const parm_z_domain_keys[] = COURIER_SYSCONF_INSTALL "/filters/keys";
-static char const parm_z_reputation_root[] =
+static char const *parm_z_reputation_root =
 #if defined DKIM_REP_ROOT
 	DKIM_REP_ROOT;
 #elif defined DKIM_REP_DEFROOT
@@ -1163,7 +1165,7 @@ static void recipient_s_domains(dkimfl_parm *parm)
 			char *dom = strchr(rcpt, '@');
 			if (dom++)
 			{
-				if (++rcpt_count == 1)
+				if (++rcpt_count == 1 && parm->dyn.domain)
 					special_candidate =
 						stricmp(dom, parm->dyn.domain) == 0 &&
 						dom - rcpt == 11 &&
@@ -1232,6 +1234,7 @@ static void sign_message(dkimfl_parm *parm)
 
 		if (parm->dyn.special)
 		{
+			assert(parm->dyn.domain); // since check in recipient_s_domains
 			if (parm->z.verbose >= 3)
 				fl_report(LOG_INFO,
 					"id=%s: allowing blocked user %s to send to postmaster@%s",
@@ -1241,10 +1244,13 @@ static void sign_message(dkimfl_parm *parm)
 		}
 		else
 		{
+			static const char null_domain[] = "--domain misconfigured--";
 			static const char templ[] =
 				"550 BLOCKED: can send to <postmaster@%s> only.\n";
 
 			clean_stats(parm);
+			if (parm->dyn.domain == NULL)
+				parm->dyn.domain = null_domain;
 			char *smtp_reason = malloc(sizeof templ + strlen(parm->dyn.domain));
 			if (smtp_reason)
 			{
@@ -1262,10 +1268,12 @@ static void sign_message(dkimfl_parm *parm)
 					parm->dyn.info.id,
 					parm->dyn.rtc == 2? "blocked": "MEMORY FAULT trying to block",
 					parm->dyn.info.authsender);
+			if (parm->dyn.domain == null_domain)
+				parm->dyn.domain = NULL;
 		}
 	}
 
-	if (parm->dyn.key == NULL)
+	if (parm->dyn.key == NULL || parm->dyn.domain == NULL)
 	{
 		if (parm->z.verbose >= 2)
 			fl_report(LOG_INFO,

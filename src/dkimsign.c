@@ -21,9 +21,11 @@ along with zdkimfilter.  If not, see <http://www.gnu.org/licenses/>.
 
 Additional permission under GNU GPLv3 section 7:
 
-If you modify zdkimfilter, or any covered work, by linking or combining it
-with OpenDKIM, containing parts covered by the applicable licence, the licensor
-or zdkimfilter grants you additional permission to convey the resulting work.
+If you modify zdkimfilter, or any covered part of it, by linking or combining
+it with OpenSSL, OpenDKIM, Sendmail, or any software developed by The Trusted
+Domain Project or Sendmail Inc., containing parts covered by the applicable
+licence, the licensor of zdkimfilter grants you additional permission to convey
+the resulting work.
 */
 #include <config.h>
 #if !ZDKIMFILTER_DEBUG
@@ -35,6 +37,7 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <limits.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -48,6 +51,9 @@ or zdkimfilter grants you additional permission to convey the resulting work.
 #include <assert.h>
 
 #include "parm.h"
+#include "vb_fgets.h"
+#include "filecopy.h"
+#include "dkim-mailparse.h"
 
 static volatile int
 	signal_child = 0,
@@ -117,6 +123,8 @@ static const int do_version = 2;
 static const int do_syslog = 4;
 static const int do_mail = 8;
 static const int do_filter = 16;
+
+static int verbose = 3;
 
 static int run_zdkimfilter(char *argv[], int do_what)
 {
@@ -239,11 +247,15 @@ static int run_zdkimfilter(char *argv[], int do_what)
 							if (isdigit(*(unsigned char*)&p[0]) &&
 								isdigit(*(unsigned char*)&p[1]) &&
 								isdigit(*(unsigned char*)&p[2]) &&
-								isspace(*(unsigned char*)&p[3]) &&
-								p[0] >= '3')
+								isspace(*(unsigned char*)&p[3]))
 							{
-								fprintf(stderr, "%s\n", p + 4); // for parent process
-								level = LOG_ERR;                // this will set rtc
+								if (p[0] >= '3')
+								{
+									fprintf(stderr, "%s\n", p + 4); // for parent process
+									level = LOG_ERR;                // this will set rtc
+								}
+								else if (verbose < 4)
+									*p = 0;
 							}
 						}
 
@@ -380,33 +392,182 @@ static int my_mkstemp(int is_msg, char *tmp, char **fname)
 	
 	int const fd = mkstemp(f);
 	if (fd < 0)
-		(*do_report)(LOG_CRIT, "mkstemp failure: %s\n", strerror(errno));
+		(*do_report)(LOG_CRIT, "mkstemp failure: %s", strerror(errno));
 
 	return fd;
 }
 
-static int create_tmpfiles(char const *config_file, char const *domain,
-	char **ctlfile, char **msgfile)
+static int
+copy_recipients(FILE *fp_in, FILE *fp_ctl, FILE *fp_out)
+{
+	assert(fp_in);
+	assert(fp_ctl);
+
+	size_t keep = 0;
+	var_buf vb;
+	if (vb_init(&vb))
+	{
+		(*do_report)(LOG_ALERT, "MEMORY FAULT");
+		return -1;
+	}
+
+	size_t count = 0;
+	for (;;)
+	{
+		char *p = vb_fgets(&vb, keep, fp_in);
+		char *eol = p? strchr(p, '\n'): NULL;
+
+		if (eol == NULL)
+		{
+			if (verbose)
+				(*do_report)(LOG_ERR, "header too long? %s", vb_what(&vb, fp_in));
+			vb_clean(&vb);
+			return -1;
+		}
+
+		int const next = eol > p? fgetc(fp_in): '\n';
+		int const cont = next != EOF && next != '\n';
+		char *const start = vb.buf;
+		keep = eol - start + 1;
+		if (cont && isspace(next)) // wrapped
+		{
+			*++eol = next;
+			++keep;
+			continue;
+		}
+
+		/*
+		* full field is in buffer
+		*/
+		if (fp_out && fwrite(start, 1, keep, fp_out) != keep)
+		{
+			(*do_report)(LOG_CRIT, "copy error: %s", strerror(errno));
+			vb_clean(&vb);
+			return -1;
+		}
+		
+		p = start;
+		*eol = 0;
+
+		size_t len = 0;
+		int ch;
+		while ((ch = *(unsigned char*)p) != 0 && ch != ':')
+		{
+			if (isalnum(ch))
+			{
+				if (len < 3)
+				{
+					*p = tolower(ch);
+					++len;
+				}
+				else
+					break;
+			}
+			++p;
+		}
+
+		if (ch == ':')
+		{
+			if (len == 3 && strncmp(start, "bcc", 3) == 0 ||
+				len == 2 &&
+					(strncmp(start, "to", 2) == 0 || strncmp(start, "cc", 2) == 0))
+			{
+				unsigned const max_rcpts = keep/7; // 1@3.56,
+				unsigned rcpts = 0;
+				unsigned char *user, *domain, *pcont = NULL;
+				int err = 0;
+				char *err_report = strdup(++p);
+				static char const data_lost[] = "--*DATA LOST*--";
+
+				while (rcpts++ < max_rcpts)
+				{
+					err = dkim_mail_parse_c(p, &user, &domain, &pcont);
+
+					if (err)
+					{
+						if (verbose)
+							(*do_report)(LOG_ERR,
+								"unable to parse address %u of %s (err=%d)",
+								rcpts, err_report? err_report: data_lost, err);
+						break;
+					}
+					else if (user == NULL || *user == 0)
+					{
+						if (verbose >= 8)
+							(*do_report)(LOG_DEBUG,
+								"no user in address %u of %s",
+								rcpts, err_report? err_report: data_lost);
+					}
+					else if (domain == NULL || *domain == 0)
+					{
+						fprintf(fp_ctl, "r%s\n", user);
+						++count;
+					}
+					else
+					{
+						fprintf(fp_ctl, "r%s@%s\n", user, domain);
+						++count;
+					}
+
+					if (pcont == NULL || *pcont == 0)
+						break;
+
+					p = pcont;
+					pcont = NULL;
+				}
+
+				if (verbose && rcpts >= max_rcpts && err == 0 && *p)
+					(*do_report)(LOG_DEBUG,
+						"stuck after %u/%u address(es) of %s (%s)",
+						rcpts, max_rcpts, err_report? err_report: data_lost, pcont);
+
+				free(err_report);
+			}
+		}
+
+		if (!cont)
+			break;
+
+		start[0] = next;
+		keep = 1;
+	}
+
+	vb_clean(&vb);
+	return count == 0;
+}
+
+static int
+create_tmpfiles(char const *config_file, char *domain, char *tmp_dir,
+	char **ctlfile, char **msgfile, int need_rcpts)
 {
 	/*
 	* Read the tmp directory and, if not given, the default domain
 	*/
-	static char const *names[] = {"tmp", "default_domain"};
-	char *out[2] = { NULL, NULL};
-	char *buf = NULL;
-	int rtc = read_single_values(config_file, domain? 1: 2, names, out);
-	if (rtc < 0)
+	static char const *names[] = {"verbose", "tmp", "default_domain"};
+	char *out[3] = { NULL, NULL, NULL};
+
+	if (read_single_values(config_file,
+		domain && tmp_dir? 1: domain? 2: 3, names, out) < 0)
 	{
 		(*do_report)(LOG_CRIT, "error reading %s: %s\n",
 			config_file? config_file: "default config file",
 			strerror(errno));
 		return 1;
 	}
+	if (out[0])
+		verbose = atoi(out[0]);
+	if (tmp_dir == NULL)
+		tmp_dir = out[1];
+	if (domain == NULL)
+		domain = out[2];
 
-	rtc = 1; // unless cleared before error_exit;
+	int rtc = 1; // unless cleared before error_exit;
+	char const *failed_action = NULL;
+	FILE *fp_ctl = NULL, *fp_msg = NULL;
+	int fd_msg = -1;
 
-	int fd = my_mkstemp(0, out[0], ctlfile);
-	if (fd < 0)
+	int fd_ctl = my_mkstemp(0, tmp_dir, ctlfile);
+	if (fd_ctl < 0)
 		goto error_exit;
 
 #if 0	
@@ -420,88 +581,120 @@ static int create_tmpfiles(char const *config_file, char const *domain,
 	}
 #endif
 
-	FILE *fp = fdopen(fd, "w+");
-	if (fp)
+	fp_ctl = fdopen(fd_ctl, "w");
+	if (fp_ctl)
 	{
-		fputs("uauthsmtp\nipostmaster", fp);
-		if (domain == NULL)
-			domain = out[1];
+		fd_ctl = -1; // will get closed with fp_ctl
+		fputs("uauthsmtp\n", fp_ctl);
 		if (domain)
 		{
 			char const* const at = strchr(domain, '@');
-			fprintf(fp, "@%s", at? at + 1: domain);
+			fprintf(fp_ctl, "i%s%s\n", at? "": "postmaster@", domain);
 		}
-		fputs("\nMdkimsign\n", fp);
-		fclose(fp);
+		else
+			fputs("ipostmaster\n", fp_ctl);
+
+		if (need_rcpts == 0)
+			fputs("Mdkimsign\n", fp_ctl);
+		else
+		{
+			struct stat st;
+			if (fstat(fileno(fp_ctl), &st))
+			{
+				failed_action = "fstat fd ctl";
+				goto error_exit;
+			}
+
+			/*
+			* Courier-style message id.  This will only be unique if
+			* the ctlfile is created in the same partition as Courier's
+			* mail spool area.  The tmp variable must be set accordingly.
+			*/
+			fprintf(fp_ctl, "M%0*jX.%0*jX.%0*jX\n",
+				(int)(2*sizeof st.st_ino), (uintmax_t)st.st_ino,
+				(int)(2*sizeof st.st_mtime), (uintmax_t)st.st_mtime,
+				(int)(2*sizeof(pid_t)), (uintmax_t)getpid());
+		}
+
+		// don't close fp_ctl, in case need_rcpts
 	}
-	else goto error_exit;
+	else
+	{
+		failed_action = "fdopen ctl";
+		goto error_exit;
+	}
 
 	if (msgfile)
 	{
 		struct stat st;
 		if (fstat(0, &st))
 		{
-			(*do_report)(LOG_CRIT, "fstat fd 0 fails: %s\n", strerror(errno));
+			failed_action = "fstat fd 0";
 			goto error_exit;
 		}
 
 		if (!S_ISREG(st.st_mode))
 		{
-#if defined NDEBUG
-			size_t const sizeofbuf = 8192;
-#else
-			size_t const sizeofbuf = 64;
-#endif
-			if ((buf = malloc(sizeofbuf)) == NULL)
+			if ((fd_msg = my_mkstemp(1, tmp_dir, msgfile)) < 0)
 				goto error_exit;
 
-			if ((fd = my_mkstemp(1, out[0], msgfile)) < 0)
-				goto error_exit;
-
-			for (;;)
+			fp_msg = fdopen(fd_msg, "w");
+			if (fp_msg)
 			{
-				ssize_t nr = read(0, buf, sizeofbuf);
-				if (nr == 0)
-					break;
+				fd_msg = -1;
+				if (need_rcpts &&
+					copy_recipients(stdin, fp_ctl, fp_msg) < 0)
+						goto error_exit;
 
-				if (nr < 0 && errno != EAGAIN && errno != EINTR)
+				filecopy(stdin, fp_msg);
+				fclose(fp_msg);
+				fp_msg = NULL;
+				if (freopen(*msgfile, "r", stdin) == NULL)
 				{
-					(*do_report)(LOG_CRIT, "copying fd0, read stdin: %s",
-						strerror(errno));
-					close(fd);
+					failed_action = "freopen";
 					goto error_exit;
 				}
-
-				char *bw = buf;
-				while (nr > 0)
-				{
-					ssize_t nw = write(fd, bw, nr);
-					if (nw > 0)
-					{
-						nr -= nw;
-						bw += nw;
-					}
-					else if (errno != EAGAIN && errno != EINTR)
-					{
-						(*do_report)(LOG_CRIT, "copying fd0, write %s: %s",
-							*msgfile, strerror(errno));
-						close(fd);
-						goto error_exit;
-					}
-				}
 			}
-			close(0);
-			dup(fd);
-			close(fd);
+			else
+			{
+				failed_action = "fdopen msg";
+				goto error_exit;
+			}
+		}
+		else if (need_rcpts)
+		{
+			if (copy_recipients(stdin, fp_ctl, NULL) < 0)
+				goto error_exit;
+
+			if (fseek(stdin, 0L, SEEK_SET))
+			{
+				failed_action = "fseek";
+				goto error_exit;
+			}
 		}
 	}
 
 	rtc = 0;
 
 	error_exit:
+	{
+		if (failed_action)
+			(*do_report)(LOG_CRIT, "%s failed: %s",
+				failed_action, strerror(errno));
+
+		if (fd_ctl >= 0)
+			close(fd_ctl);
+		if (fd_msg >= 0)
+			close(fd_msg);
+		if (fp_ctl)
+			fclose(fp_ctl);
+		if (fp_msg)
+			fclose(fp_msg);
 		free(out[0]);
 		free(out[1]);
-		free(buf);
+		free(out[2]);
+	}
+
 	return rtc;
 }
 
@@ -581,56 +774,95 @@ static char* get_executable(char *argv0)
 
 int main(int argc, char *argv[])
 {
-	int rtc = 0, file_arg = 0, do_what = 0;
-	char *config_file = NULL;
+	int rtc = 0, file_arg = 0, do_what = 0, no_db = 1, allowopt = 1;
+	char *config_file = NULL, *tmp_dir = NULL;
 	char *domain = NULL;
 
 	set_parm_logfun(&stderrlog);
 
 	for (int i = 1; i < argc; ++i)
 	{
-		char const *const arg = argv[i];
-		
-		if (strcmp(arg, "-f") == 0)
+		char *arg = argv[i];
+
+		if (allowopt && arg[0] == '-')
 		{
-			config_file = ++i < argc ? argv[i] : NULL;
-		}
-		else if (strcmp(arg, "--syslog") == 0)
-		{
-			do_what |= do_syslog;
-		}
-		else if (strcmp(arg, "--domain") == 0)
-		{
-			domain = ++i < argc ? argv[i] : NULL;
-		}
-		else if (strcmp(arg, "--config") == 0)
-		{
-			do_what |= do_config;
-		}
-		else if (strcmp(arg, "--version") == 0)
-		{
-			do_what |= do_version;
-		}
-		else if (strcmp(arg, "--filter") == 0)
-		{
-			do_what |= do_filter;
-			do_what |= do_syslog;
-		}
-		else if (strcmp(arg, "--help") == 0)
-		{
-			printf("This is a wrapper around the zdkimfilter executable.\n"
-				"Usage:\n"
-				"           dkimsign [opts] message-file...\n"
-				"with opts:\n"
-				"  -f config-filename  override %s\n"
-				"  --syslog            use syslog (MAIL) rather than stderr\n"
-				"  --filter            use stdin and ignore any message-file\n"
-				"  --domain domain     domain used for signing\n"
-				"  --config            have the exec check and print config\n"
-				"  --help              print this stuff and exit\n"
-				"  --version           have the exec print version and exit\n",
-					default_config_file);
-			return 0;
+			if (arg[1] != '-')
+			{
+				char **target;
+				switch (arg[1])
+				{
+					case 'f':
+						target = &config_file;
+						break;
+					case 't':
+						target = &tmp_dir;
+						break;
+					default:
+						fprintf(stderr,
+							"dkimsign: invalid option: %s\n", arg);
+						return 1;
+				}
+
+				if (arg[2])
+					*target = &arg[2];
+				else
+					*target = ++i < argc ? argv[i] : NULL;
+			}
+			else if (arg[2] == 0)
+			{
+				allowopt = 0;
+			}
+			else if (strcmp(arg, "--syslog") == 0)
+			{
+				do_what |= do_syslog;
+			}
+			else if (strcmp(arg, "--domain") == 0)
+			{
+				domain = ++i < argc ? argv[i] : NULL;
+			}
+			else if (strcmp(arg, "--config") == 0)
+			{
+				do_what |= do_config;
+			}
+			else if (strcmp(arg, "--version") == 0)
+			{
+				do_what |= do_version;
+			}
+			else if (strcmp(arg, "--filter") == 0)
+			{
+				do_what |= do_filter;
+				do_what |= do_syslog;
+			}
+			else if (strcmp(arg, "--db-filter") == 0)
+			{
+				do_what |= do_filter;
+				do_what |= do_syslog;
+				no_db = 0;
+			}
+			else if (strcmp(arg, "--help") == 0)
+			{
+				printf("This is a wrapper around the zdkimfilter executable.\n"
+					"Usage:\n"
+					"           dkimsign [opts] message-file...\n"
+					"with opts:\n"
+					"  -f config-filename  override %s\n"
+					"  -t tem-dir          override the temporary directory\n"
+					"  --syslog            use syslog (MAIL) rather than stderr\n"
+					"  --filter            use stdin and ignore any message-file\n"
+					"  --db-filter         same as filter, but enable db logging\n"
+					"  --domain domain     domain used for signing\n"
+					"  --config            have the exec check and print config\n"
+					"  --help              print this stuff and exit\n"
+					"  --version           have the exec print version and exit\n",
+						default_config_file);
+				return 0;
+			}
+			else
+			{
+				fprintf(stderr,
+					"dkimsign: invalid option: %s\n", arg);
+				return 1;
+			}
 		}
 		else // message files
 		{
@@ -687,12 +919,13 @@ int main(int argc, char *argv[])
 	else if ((file_arg || (do_what & do_filter)) && rtc == 0)
 	{
 		do_what |= do_mail;
-		rtc = create_tmpfiles(config_file, domain, &ctlfile,
-			(do_what & do_filter)? &msgfile: NULL);
+		rtc = create_tmpfiles(config_file, domain, tmp_dir, &ctlfile,
+			(do_what & do_filter)? &msgfile: NULL, no_db == 0);
 
 		if (rtc == 0)
 		{
-			xargv[xargc++] = "--no-db";
+			if (no_db)
+				xargv[xargc++] = "--no-db";
 			if ((do_what & do_filter) != 0)
 				xargv[xargc++] = "--no-fork";
 			xargv[xargc++] = "-t1,dkimsign";

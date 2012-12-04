@@ -16,8 +16,18 @@ zdkimfilter executable in the build-time configured path, and either in the
 directory used for calling it, if any, or in the PATH.  That way it can work
 when the package is built but not yet installed.
 
-To have zdkimfilter sign the files, it writes a minimal ctlfile in the tmp
-directory (either F</tmp> or the one given in the I<tmp> configuration option).
+Normally, dkimsign uses the I<--no-db> option of zdkimfilter, so as to avoid
+having the messages signed this way logged to the database.  However, the
+I<--db-filter> option allows logging.  Using it may require to choose a
+temporary directory carefully:  To have zdkimfilter sign the files, dkimsign
+writes a minimal ctlfile in the temporary directory.  The inode number for
+database keys is that of the ctlfile.  To ensure uniqueness, if used as a key,
+it is necessary that the ctlfile gets created in the same disk partition where
+Courier writes received mail files.
+
+Dkimsign creates the ctlfile in the directory specified by the I<-t> option, if
+any; otherwise, in the one specified by the I<tmp> configuration option, if
+present; otherwise in F</tmp>.
 
 =head1 OPTIONS
 
@@ -30,15 +40,15 @@ for signing different header fields, or using different keys.  B<dkimsign> only
 reads the I<tmp> and I<default_domain> configuration options, but forwards this
 command line option to the invoked zdkimfilter.
 
+
+=item B<-t> I<tmp-directory>
+
+The directory used for temporary files.
+
+
 =item B<--syslog>
 
 Log to syslog (LOG_MAIL facility) rather than stderr.
-
-
-=item B<--no-db>
-
-Pass the I<--no-db> option to zdkimfilter, so as to avoid having the
-messages signed this way logged to the database.
 
 
 =item B<--filter>
@@ -50,13 +60,23 @@ case of error.
 I/O behavior is obtained by passing the I<--no-fork> option to zdkimfilter.
 That way, the message-file arguments get silently ignored.
 
+
+=item B<--db-filter>
+
+This option implies I<--filter>, and enables database logging.  To do that, the
+ctlfile includes the full list of recipients and a Courier's style id with the
+inode number of the ctlfile itself.
+
+See the description above for the relationship between key uniqueness and the
+temporary directory.
+
+
 =item B<--domain> I<domain>
 
-Use this as the signing domain.  The ctlfile will have
-E<lt>postmaster@I<domain>E<gt> as the authenticated user.  This may or may not
-result in a signature by such domain, according to the other configuration
-options.  If the I<domain> argument contains a C<@>, only the part after it is
-used.
+Use this as the signing domain.  If the I<domain> argument contains a C<@>,
+then the whole string is set as the authenticated user, otherwise the ctlfile
+will have postmaster@I<domain>.  This may or may not result in a signature by
+such domain, according to the other configuration options.
 
 =item B<--config>
 
