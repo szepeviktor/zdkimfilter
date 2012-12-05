@@ -3546,11 +3546,12 @@ int main(int argc, char *argv[])
 		fl_report(LOG_ERR, "Unable to read config file");
 	}
 
-	if (parm.z.redact_received_auth && !redact_is_fully_featured())
-		fl_report(LOG_WARNING,
-			"Option redact_received_header is set in %s,"
-			" but it is not fully featured.",
-				config_file? config_file: default_config_file);
+	if (parm.z.verbose >= 4 &&
+		parm.z.redact_received_auth && !redact_is_fully_featured())
+			fl_report(LOG_WARNING,
+				"Option redact_received_header is set in %s,"
+				" but it is not fully featured.",
+					config_file? config_file: default_config_file);
 
 #if defined HAVE_LIBOPENDKIM_22
 	if (parm.z.verbose >= 2 &&

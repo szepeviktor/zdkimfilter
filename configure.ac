@@ -182,26 +182,51 @@ fi
 LIBS="$SAVE_LIBS"
 AC_SUBST([SOCKET_LIB])
 
-AC_CACHE_CHECK([opendkim version],
-	av_cv_opendkim_version,
-	[
-	av_cv_opendkim_version="`$PKG_CONFIG --modversion opendkim`"
+AC_CACHE_CHECK([if opendkim.pc exists], [av_cv_opendkim_version],
+	[av_cv_opendkim_version=false
+	($PKG_CONFIG --modversion opendkim) 2>/dev/null && av_cv_opendkim_version=true])
+
+AC_CACHE_CHECK([if opendkim is at least 1.2.2], [av_cv_opendkim_version_ok],
+	[av_cv_opendkim_version_ok=false
+	if test "$av_cv_opendkim_version" = "true" ; then
+		$PKG_CONFIG --atleast-version=1.2.2 opendkim && av_cv_opendkim_version_ok="true"
+	else
+		SAVE_LIBS="$LIBS"
+		LIBS="$SAVE_LIBS -lopendkim"
+		save_ac_link="$ac_link"
+		ac_link="libtool --mode=link $ac_link"
+		AC_RUN_IFELSE([
+			#include <opendkim/dkim.h>
+			int main(){unsigned long v = dkim_libversion();
+			return v < 0x01020200U;}
+			],
+			[av_cv_opendkim_version_ok="true"], [])
+		ac_link="$save_ac_link"
+		LIBS="$SAVE_LIBS"
+	fi
 	])
-AC_CACHE_CHECK([if that was at least 1.2.2],
-	av_cv_opendkim_version_ok,
-	[
-	av_cv_opendkim_version_ok="no"
-	$PKG_CONFIG --atleast-version=1.2.2 opendkim && av_cv_opendkim_version_ok="yes"
-	])
-if test "$av_cv_opendkim_version_ok" = "no"; then
-	AC_MSG_ERROR([unsupported old opendkim library])
+if test "$av_cv_opendkim_version_ok" = "false"; then
+	AC_MSG_ERROR([unsupported or unrecognized opendkim library])
 fi
 
-AC_CACHE_CHECK([if that was 2.2.0 or better],
-	av_cv_opendkim_version_220,
-	[
-	av_cv_opendkim_version_220="false"
-	$PKG_CONFIG --atleast-version=2.2.0 opendkim && av_cv_opendkim_version_220="true"
+AC_CACHE_CHECK([if that was 2.2.0 or better], [av_cv_opendkim_version_220],
+	[av_cv_opendkim_version_220=false
+	if test "$av_cv_opendkim_version" = "true" ; then
+		$PKG_CONFIG --atleast-version=2.2.0 opendkim && av_cv_opendkim_version_220="true"
+	else
+		SAVE_LIBS="$LIBS"
+		LIBS="$SAVE_LIBS -lopendkim"
+		save_ac_link="$ac_link"
+		ac_link="libtool --mode=link $ac_link"
+		AC_RUN_IFELSE([
+			#include <opendkim/dkim.h>
+			int main(){unsigned long v = dkim_libversion();
+			return v < 0x02020000U;}
+			],
+			[av_cv_opendkim_version_ok="true"], [])
+		ac_link="$save_ac_link"
+		LIBS="$SAVE_LIBS"
+	fi
 	])
 
 AC_CACHE_CHECK([cflags for opendkim],
