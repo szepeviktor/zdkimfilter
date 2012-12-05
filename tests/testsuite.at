@@ -1876,6 +1876,91 @@ domain: example.net
 AT_CLEANUP
 
 #
+AT_SETUP([Create blocked user list])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [
+blocked_user_list = bul.txt
+db_backend test
+db_sql_check_user user: is-naughty
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail],
+[ZF_MESSAGE([], [], [Cc: name@some.example
+], [Bcc: "User" <user2@example.org>, user3@example(user's domain).net
+])])
+AT_CHECK([ZDKSIGN(--db-filter --domain user@example.com) <mail],
+0, [], [])
+AT_CHECK(grep 'user@example' bul.txt, 0, [ignore], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Update blocked user list])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [
+blocked_user_list = bul.txt
+db_backend test
+db_sql_check_user user: is-naughty
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([bul.txt], [someonelse@another.example is also naughty
+])
+AT_DATA([mail],
+[ZF_MESSAGE([], [], [Cc: name@some.example
+], [Bcc: "User" <user2@example.org>, user3@example(user's domain).net
+])])
+AT_CHECK([ZDKSIGN(--db-filter --domain user@example.com) <mail],
+0, [], [])
+AT_CHECK(grep 'user@example' bul.txt, 0, [ignore], [])
+AT_CHECK(grep 'someonelse@another.example' bul.txt, 0,
+[someonelse@another.example is also naughty
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Update blocked user list missing key])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [
+blocked_user_list = bul.txt
+db_backend test
+db_sql_check_user user: is-naughty
+])
+AT_DATA([bul.txt], [someonelse@another.example is also naughty
+])
+AT_DATA([mail],
+[ZF_MESSAGE([], [], [Cc: name@some.example
+], [Bcc: "User" <user2@example.org>, user3@example(user's domain).net
+])])
+AT_CHECK([ZDKSIGN(--db-filter --domain user@example.com) <mail],
+0, [], [])
+AT_CHECK(grep 'user@example' bul.txt, 0, [ignore], [])
+AT_CHECK(grep 'someonelse@another.example' bul.txt, 0,
+[someonelse@another.example is also naughty
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Update blocked user list missing key and domain])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [
+blocked_user_list = bul.txt
+db_backend test
+db_sql_check_user user: not referenced: postmaster: naughty
+])
+AT_DATA([bul.txt], [someonelse@another.example is also naughty
+])
+AT_DATA([mail],
+[ZF_MESSAGE([], [], [Cc: name@some.example
+], [Bcc: "User" <user2@example.org>, user3@example(user's domain).net
+])])
+AT_CHECK([ZDKSIGN(--db-filter) <mail],
+0, [], [])
+AT_CHECK(grep 'postmaster' bul.txt, 0, [ignore], [])
+AT_CHECK(grep 'someonelse@another.example' bul.txt, 0,
+[someonelse@another.example is also naughty
+], [])
+AT_CLEANUP
+
+#
 AT_SETUP([Reject blocked user])
 ZF_CONFIG(1, [
 blocked_user_list bul.txt
@@ -1897,6 +1982,32 @@ AT_CHECK(
 ZF_RUN,
 0,
 [550 BLOCKED: can send to <postmaster@example.com> only.
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Reject blocked user missing domain])
+ZF_CONFIG(1, [
+blocked_user_list bul.txt
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Moutgoingmsg
+uauthsmtp
+iuser
+rsomeone@somewhere.example
+])
+AT_DATA([bul.txt], [user is naughty
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 BLOCKED: can send to <postmaster@--domain misconfigured--> only.
 ],
 [])
 AT_CLEANUP

@@ -188,6 +188,7 @@ typedef struct blocked_user_list
 	
 static int search_list(blocked_user_list *bul, char const *u)
 {
+	assert(bul);
 	if (bul->data && bul->size && u)
 	{
 		size_t const ulen = strlen(u);
@@ -329,8 +330,24 @@ static void config_wrapup(dkimfl_parm *parm)
 	}
 }
 
+static inline void some_dwa_cleanup(dkimfl_parm *parm)
+{
+	assert(parm);
+	if (parm->dwa)
+	{
+		void *parm_target[PARM_TARGET_SIZE];
+		parm_target[parm_t_id] = NULL;
+		parm_target[db_parm_t_id] = db_parm_addr(parm->dwa);
+
+		clear_parm(parm_target);
+		db_clear(parm->dwa);
+		parm->dwa = NULL;
+	}
+}
+
 static void some_cleanup(dkimfl_parm *parm) // parent
 {
+	assert(parm);
 	void *parm_target[PARM_TARGET_SIZE];
 	parm_target[parm_t_id] = &parm->z;
 	parm_target[db_parm_t_id] = parm->dwa? db_parm_addr(parm->dwa): NULL;
@@ -338,7 +355,10 @@ static void some_cleanup(dkimfl_parm *parm) // parent
 	config_cleanup_default(parm);
 	clear_parm(parm_target);
 	if (parm->dwa)
+	{
 		db_clear(parm->dwa);
+		parm->dwa = NULL;
+	}
 	free(parm->blocklist.data);
 }
 
@@ -390,10 +410,7 @@ static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
 				errs = 1;
 			else if (in <= 0 && out <= 0) // no statements compiled: reset
 			{
-				parm_target[parm_t_id] = NULL;
-				clear_parm(parm_target);
-				db_clear(parm->dwa);
-				parm->dwa = NULL;
+				some_dwa_cleanup(parm);
 			}
 			else
 			{
@@ -565,7 +582,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 // return parm->dyn.rtc = -1 for unrecoverable error,
 // parm->dyn.rtc (0) otherwise
 {
-	assert(parm && dkim);
+	assert(parm);
 
 	size_t keep = 0;
 	var_buf *vb = &parm->dyn.vb;
@@ -606,7 +623,8 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 		/*
 		* full field is in buffer (dkim_header does not want the trailing \n)
 		*/
-		if (keep && (status = dkim_header(dkim, start, keep)) != DKIM_STAT_OK)
+		if (keep && dkim &&
+			(status = dkim_header(dkim, start, keep)) != DKIM_STAT_OK)
 		{
 			if (parm->z.verbose)
 			{
@@ -631,17 +649,20 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 	* check results thus far.
 	*/
 	
-	status = dkim_eoh(dkim);
-	if (status != DKIM_STAT_OK)
+	if (dkim)
 	{
-		if (parm->z.verbose >= 3)
+		status = dkim_eoh(dkim);
+		if (status != DKIM_STAT_OK)
 		{
-			char const *err = dkim_getresultstr(status);
-			fl_report(LOG_INFO,
-				"id=%s: signing dkim_eoh: %s (stat=%d)",
-				parm->dyn.info.id, err? err: "(NULL)", (int)status);
+			if (parm->z.verbose >= 3)
+			{
+				char const *err = dkim_getresultstr(status);
+				fl_report(LOG_INFO,
+					"id=%s: signing dkim_eoh: %s (stat=%d)",
+					parm->dyn.info.id, err? err: "(NULL)", (int)status);
+			}
+			// return parm->dyn.rtc = -1;
 		}
-		// return parm->dyn.rtc = -1;
 	}
 
 	return parm->dyn.rtc;
@@ -1205,6 +1226,17 @@ static inline int user_is_blocked(dkimfl_parm *parm)
 		search_list(&parm->blocklist, parm->dyn.info.authsender);
 }
 
+static inline void stats_outgoing(dkimfl_parm *parm)
+{
+	if (parm->dyn.stats)
+	{
+		parm->dyn.stats->outgoing = 1;
+		parm->dyn.stats->envelope_sender = fl_get_sender(parm->fl);
+		if (parm->dyn.stats->rcpt_count == 0)
+			recipient_s_domains(parm);
+	}
+}
+
 static void sign_message(dkimfl_parm *parm)
 /*
 * possibly sign the message, set rtc 1 if signed, -1 if failed,
@@ -1250,7 +1282,7 @@ static void sign_message(dkimfl_parm *parm)
 
 			clean_stats(parm);
 			if (parm->dyn.domain == NULL)
-				parm->dyn.domain = null_domain;
+				parm->dyn.domain = (char*) null_domain;
 			char *smtp_reason = malloc(sizeof templ + strlen(parm->dyn.domain));
 			if (smtp_reason)
 			{
@@ -1283,8 +1315,11 @@ static void sign_message(dkimfl_parm *parm)
 				parm->dyn.domain? "key": "domain");
 
 		// add to db even if not signed
-		if (parm->dyn.stats && parm->dyn.stats->rcpt_count == 0)
-			recipient_s_domains(parm);
+		if (parm->dyn.stats)
+		{
+			sign_headers(parm, NULL);
+			stats_outgoing(parm);
+		}
 	}
 	else if (parm->dyn.rtc == 0)
 	{
@@ -1331,13 +1366,7 @@ static void sign_message(dkimfl_parm *parm)
 			return;
 		}
 
-		if (parm->dyn.stats)
-		{
-			parm->dyn.stats->outgoing = 1;
-			parm->dyn.stats->envelope_sender = fl_get_sender(parm->fl);
-			if (parm->dyn.stats->rcpt_count == 0)
-				recipient_s_domains(parm);
-		}
+		stats_outgoing(parm);
 
 		// (not)TODO: if parm.no_signlen, instead of copy_body, stop at either
 		// "-- " if plain text, or end of first mime alternative otherwise
@@ -3065,9 +3094,10 @@ static void block_user(dkimfl_parm *parm, char *reason)
 	* ensure the user is still not blocked,
 	*/
 	char const *const fname = parm->z.blocked_user_list;
+	int rtc;
 	if (fname == NULL ||
-		update_blocked_user_list(parm) <= 0 ||
-		search_list(&parm->blocklist, parm->dyn.info.authsender) != 0)
+		(rtc = update_blocked_user_list(parm)) < 0 ||
+		rtc > 0 && search_list(&parm->blocklist, parm->dyn.info.authsender) != 0)
 			return;
 
 	/*
@@ -3082,7 +3112,8 @@ static void block_user(dkimfl_parm *parm, char *reason)
 	if (fname_tmp)
 	{
 		memcpy(fname_tmp, fname, l);
-		strcat(fname_tmp + l, ".XXXXXX");
+		fname_tmp[l] = 0;
+		strcat(&fname_tmp[l], ".XXXXXX");
 		int fd = mkstemp(fname_tmp);
 		if (fd >= 0)
 		{
@@ -3118,8 +3149,9 @@ static void block_user(dkimfl_parm *parm, char *reason)
 				{
 					if (rename(fname_tmp, fname) == 0)
 					{
+						// make this noticeable anyway
 						if (parm->z.verbose >= 1)
-							fl_report(LOG_INFO, "id=%s: user %s added to %s: %s",
+							fl_report(LOG_CRIT, "id=%s: user %s added to %s: %s",
 								parm->dyn.info.id,
 								parm->dyn.info.authsender,
 								fname,
@@ -3143,6 +3175,7 @@ static void block_user(dkimfl_parm *parm, char *reason)
 			failed_action = "mkstemp";
 			failed_errno = errno;
 		}
+		free(fname_tmp);
 	}
 	else
 	{
@@ -3183,8 +3216,7 @@ static void after_filter_stats(fl_parm *fl)
 				}
 			}
 		}
-		db_clear(parm->dwa);
-		parm->dwa = NULL;
+		some_dwa_cleanup(parm);
 	}
 	clean_stats(parm);
 }
@@ -3269,7 +3301,7 @@ static void dkimfilter(fl_parm *fl)
 	if (parm->dyn.stats)
 		fl_set_after_filter(parm->fl, after_filter_stats);
 	else if (parm->dwa)
-		db_clear(parm->dwa);
+		some_dwa_cleanup(parm);
 
 	assert(fl_get_passed_message(fl) != NULL);
 

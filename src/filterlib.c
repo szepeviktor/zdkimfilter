@@ -1069,6 +1069,10 @@ static void do_the_real_work(fl_parm* fl)
 		free(fl->info_to_free->authsender);
 		free(fl->info_to_free->frommta);
 	}
+}
+
+static void free_on_exit(fl_parm* fl)
+{
 	static const size_t n_max =
 		sizeof fl->free_on_exit / sizeof fl->free_on_exit[0];
 	for (size_t n = 0; n < n_max; ++n)
@@ -1135,6 +1139,7 @@ static void fl_runchild(fl_parm* fl)
 		else
 			do_the_real_work(fl);
 
+		free_on_exit(fl);
 		exit(rtc);
 	}
 	else if (pid > 0) /* parent */
@@ -1289,6 +1294,7 @@ static int fl_runstdio(fl_parm* fl, int ctlfiles, int argc, char *argv[])
 			fprintf(stderr, "\nFILTER-RESPONSE:%s", fl->resp);
 	}
 
+	free_on_exit(fl);
 	return bad;
 }
 

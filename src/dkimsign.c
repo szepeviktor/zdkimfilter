@@ -949,7 +949,8 @@ int main(int argc, char *argv[])
 
 	if (ctlfile)
 	{
-		unlink(ctlfile);
+		if (!no_needless_logging)
+			unlink(ctlfile);
 		free(ctlfile);
 	}
 
