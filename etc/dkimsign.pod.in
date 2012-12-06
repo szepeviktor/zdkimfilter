@@ -6,7 +6,7 @@ dkimsign - a wrapper around zdkimfilter
 
 =head1 SYNOPSIS
 
-B<dkimsign> [I<option> [I<option-arg>] I<message-file> ...
+B<dkimsign> [I<option> [I<option-arg>]] I<message-file> ...
 
 =head1 DESCRIPTION
 
@@ -110,7 +110,7 @@ Default configuration file.
 =back
 
 
-head1 ENVIRONMENT VARIABLES
+=head1 ENVIRONMENT VARIABLES
 
 
 =over
@@ -120,6 +120,7 @@ head1 ENVIRONMENT VARIABLES
 If this variable is set, zdkimfilter uses it for database logs as the client's
 C<ip> variable.
 
+=back
 
 =head1 AUTHOR
 
