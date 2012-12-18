@@ -537,8 +537,8 @@ copy_recipients(FILE *fp_in, FILE *fp_ctl, FILE *fp_out)
 }
 
 static int
-create_tmpfiles(char const *config_file, char *domain, char *tmp_dir,
-	char **ctlfile, char **msgfile, int need_rcpts)
+create_tmpfiles(char const *config_file, char *domain, char *sender,
+	char *tmp_dir, char **ctlfile, char **msgfile, int need_rcpts)
 {
 	/*
 	* Read the tmp directory and, if not given, the default domain
@@ -586,10 +586,20 @@ create_tmpfiles(char const *config_file, char *domain, char *tmp_dir,
 	{
 		fd_ctl = -1; // will get closed with fp_ctl
 		fputs("uauthsmtp\n", fp_ctl);
+		if (sender && strchr(sender, '@'))
+			fprintf(fp_ctl, "s%s\n", sender);
+		
 		if (domain)
 		{
 			char const* const at = strchr(domain, '@');
-			fprintf(fp_ctl, "i%s%s\n", at? "": "postmaster@", domain);
+			if (at) // use also as envelope sender if not overridden
+			{
+				if (sender == NULL)
+					fprintf(fp_ctl, "s%s\n", domain);
+				fprintf(fp_ctl, "i%s\n", domain);
+			}
+			else
+				fprintf(fp_ctl, "ipostmaster@%s\n", domain);
 		}
 		else
 			fputs("ipostmaster\n", fp_ctl);
@@ -776,7 +786,7 @@ int main(int argc, char *argv[])
 {
 	int rtc = 0, file_arg = 0, do_what = 0, no_db = 1, allowopt = 1;
 	char *config_file = NULL, *tmp_dir = NULL;
-	char *domain = NULL;
+	char *domain = NULL, *sender = NULL;
 
 	set_parm_logfun(&stderrlog);
 
@@ -820,6 +830,10 @@ int main(int argc, char *argv[])
 			{
 				domain = ++i < argc ? argv[i] : NULL;
 			}
+			else if (strcmp(arg, "--sender") == 0)
+			{
+				sender = ++i < argc ? argv[i] : NULL;
+			}
 			else if (strcmp(arg, "--config") == 0)
 			{
 				do_what |= do_config;
@@ -846,11 +860,12 @@ int main(int argc, char *argv[])
 					"           dkimsign [opts] message-file...\n"
 					"with opts:\n"
 					"  -f config-filename  override %s\n"
-					"  -t tem-dir          override the temporary directory\n"
+					"  -t temp-dir         override the temporary directory\n"
 					"  --syslog            use syslog (MAIL) rather than stderr\n"
 					"  --filter            use stdin and ignore any message-file\n"
 					"  --db-filter         same as filter, but enable db logging\n"
-					"  --domain domain     domain used for signing\n"
+					"  --domain domain     signing domain, can be full address\n"
+					"  --sender sender     envelope sender if different from domain\n"
 					"  --config            have the exec check and print config\n"
 					"  --help              print this stuff and exit\n"
 					"  --version           have the exec print version and exit\n",
@@ -919,7 +934,7 @@ int main(int argc, char *argv[])
 	else if ((file_arg || (do_what & do_filter)) && rtc == 0)
 	{
 		do_what |= do_mail;
-		rtc = create_tmpfiles(config_file, domain, tmp_dir, &ctlfile,
+		rtc = create_tmpfiles(config_file, domain, sender, tmp_dir, &ctlfile,
 			(do_what & do_filter)? &msgfile: NULL, no_db == 0);
 
 		if (rtc == 0)

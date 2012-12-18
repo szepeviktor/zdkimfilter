@@ -74,9 +74,18 @@ temporary directory.
 =item B<--domain> I<domain>
 
 Use this as the signing domain.  If the I<domain> argument contains a C<@>,
-then the whole string is set as the authenticated user, otherwise the ctlfile
+then the whole string is set as the authenticated user and, if not overridden by
+the next option, to the envelope sender.  Otherwise, if no C<@>, the ctlfile
 will have postmaster@I<domain>.  This may or may not result in a signature by
 such domain, according to the other configuration options.
+
+=item B<--sender> I<sender>
+
+This sets the envelope sender in the ctlfile.  The value is only relevant for
+I<--db-filter>, since the ctlfile is used for signing only.  If this option is
+not specified, <I<domain> is used as envelope sender as well, if it contains a
+C<@>.
+
 
 =item B<--config>
 
