@@ -40,6 +40,7 @@ the resulting work.
 #include <stdarg.h>
 #include "parm.h"
 #include "vb_fgets.h"
+#include "util.h"
 #include <assert.h>
 
 /*
@@ -285,16 +286,6 @@ static config_conf const conf[] =
 
 	{NULL, NULL, NULL, 0, 0, 0}
 };
-
-// utilities -----
-static int stricmp(const char *a, const char *b)
-{
-	int c, d;
-	do c = *a++, d = *b++;
-	while (c != 0 && d != 0 && (c == d || (c = tolower(c)) == (d = tolower(d))));
-
-	return c < d ? -1 : c > d;
-}
 
 void print_parm(void *parm_target[PARM_TARGET_SIZE])
 {
