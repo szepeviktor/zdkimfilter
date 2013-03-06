@@ -1438,6 +1438,7 @@ static void sign_message(dkimfl_parm *parm)
 typedef struct verify_parms
 {
 	char *sender_domain, *helo_domain; // imply SPF "pass"
+	char *dnswl_domain;
 	domain_prescreen *domain_head, **domain_ptr;
 	vbr_info *vbr;  // store of all VBR-Info fields
 
@@ -2108,7 +2109,7 @@ static int verify_headers(verify_parms *vh)
 		if (!isalpha(*(unsigned char*)start))
 			zap = 1;
 
-		// count A-R fields that have to be removed
+		// A-R fields
 		else if ((s = hdrval(start, "Authentication-Results")) != NULL)
 		{
 			if ((s = skip_cfws(s)) == NULL)
@@ -2117,18 +2118,19 @@ static int verify_headers(verify_parms *vh)
 			{
 				char *const authserv_id = s;
 				int ch;
-				while (isalnum(ch = *(unsigned char*)s) || ch == '.')
-					++s;
+				while (isalnum(ch = *(unsigned char*)s) ||
+					strchr(".-_", ch) != NULL)
+						++s;
 				if (s == authserv_id)
 					zap = 1; // bogus
-				else
+				else  if (parm->z.dont_trust_a_r)
 				{
 					int maybe_attack = 0;
 					*s = 0;
 					/*
-					* An A-R field before any "Received" must have been set by us.
+					* Courier puts A-R after "Received" (but before Received-SPF).
 					* After first "Received", if the authserv_id matches it may
-					* be an attack (or our mail coming back from a mailing list).
+					* be an attack.
 					*/
 					if (parm->dyn.authserv_id &&
 						stricmp(authserv_id, parm->dyn.authserv_id) == 0)
@@ -2146,6 +2148,9 @@ static int verify_headers(verify_parms *vh)
 					}
 					// TODO: check a list of trusted/untrusted id's
 					*s = ch;
+				}
+				else if (dkim) // acquire trusted results on 1st pass
+				{
 				}
 			}
 		}

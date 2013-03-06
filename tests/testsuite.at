@@ -161,6 +161,7 @@ m4_if([$#], [1],, m4_foreach([link], [$2],
 # default parms
 m4_define([ZF_DEFAULT_PARM_TMP],
 [all_mode                 = N (Y/N)
+dont_trust_a_r           = N (Y/N)
 verbose                  = 0 (int)
 domain_keys              = . (key's directory)
 header_canon_relaxed     = N (Y/N, N for simple)
@@ -242,7 +243,8 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign and verify my signature])
-ZF_CONFIG(6)
+ZF_CONFIG(6, [dont_trust_a_r
+])
 ZF_PRIVATEKEY([example.com])
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctls], [Msignmsg
@@ -1746,7 +1748,8 @@ m4_define([ZF_NOFORK], [$VALGRIND_AND_OPTS zdkimfilter -f zftest.conf --no-db --
 m4_define([ZDKSIGN], [$VALGRIND_AND_OPTS dkimsign -f zftest.conf --filter $1 -- --batch-test >mailsig ])
 #
 AT_SETUP([Sign and verify with no-fork])
-ZF_CONFIG(6)
+ZF_CONFIG(6, [dont_trust_a_r
+])
 ZF_PRIVATEKEY([example.com])
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctls], [Mdkimsign

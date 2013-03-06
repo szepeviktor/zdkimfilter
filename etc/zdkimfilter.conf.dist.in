@@ -14,6 +14,11 @@
 # global filter can whitelist the filters running after it.
 all_mode = @zdkimfilter_mode@
 
+# dont_trust_a_r
+# Remove any Authentication-Results: (A-R) header field.
+# Courier renames existing A-R fields since 0.71.0, if ALLOW_EXCLUSIVE is set.
+# If ALLOW_EXCLUSIVE is not set, then this value should be set.
+
 # verbose (int)
 # Loosely control the amount of output.
 # The filter prints to stderr, assuming that courier's logger will capture it
@@ -22,7 +27,7 @@ all_mode = @zdkimfilter_mode@
 # being used as follows (each level includes the preceding ones):
 #  0: startup issues or totally unexpected errors
 #  1: failures or unexpected events
-#  2: removal of Authentication-Results: (A-R) on verify; missing domain on sign
+#  2: removal of A-R on verify, missing domain on sign
 #  3: start/stop info, relevant verify results, sign errors, response except 250
 #  4: response returned to courier for each message
 #  5: verify errors except no signature

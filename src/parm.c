@@ -236,6 +236,7 @@ assign_array(void *parm, config_conf const *c, char*s)
 static config_conf const conf[] =
 {
 	CONFIG(parm_t, all_mode, "Y/N", assign_char),
+	CONFIG(parm_t, dont_trust_a_r, "Y/N", assign_char),
 	CONFIG(parm_t, verbose, "int", assign_int),
 	CONFIG(parm_t, domain_keys, "key's directory", assign_ptr),
 	CONFIG(parm_t, header_canon_relaxed, "Y/N, N for simple", assign_char),

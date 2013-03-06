@@ -57,6 +57,7 @@ typedef struct parm_t
 	int reputation_fail, reputation_pass;
 	int max_signatures;
 
+	char dont_trust_a_r;
 	char add_a_r_anyway;
 	char report_all_sigs;
 	char no_spf;
