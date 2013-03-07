@@ -2068,4 +2068,34 @@ ZF_RUN,
 [])
 AT_CLEANUP
 
+m4_define([ZFARTEST], [$VALGRIND_AND_OPTS TESTutil a_r])
+m4_define([ZFARDATA], [example.com;
+ dnswl/3=pass dns.zone=list.dnswl.org policy.ip=127.0.6.2 policy.txt=test.tana.it http://www.tana.it/
+ spf=pass smtp.mailfrom=bounce.example.org
+ dkim=pass header.i=@example.org
+])
+#
+AT_SETUP([Check parsing Authentication-Results])
+AT_DATA([a_r], [example.com; none
+])
+AT_CHECK(ZFARTEST, 0,
+[example.com;
+], [])
+AT_DATA([a_r], [example.com;
+ dnswl/3=pass dns.zone=list.dnswl.org policy.ip=127.0.6.2 policy.txt="test.tana.it http://www.tana.it/";
+ spf=pass smtp.mailfrom=bounce.example.org;
+ dkim=pass header.i=@example.org
+])
+AT_CHECK(ZFARTEST, 0, ZFARDATA, [])
+AT_DATA([a_r], [example.com;
+ dnswl (comment is allowed here) / (here) 3 = pass   dns.zone = list.dnswl.org
+ 	policy.ip=127.0.6.2 policy.txt="test.tana.it http://www.tana.it/";
+ spf (and here) = pass smtp.mailfrom=bounce.example.org;
+ dkim(evenwithoutspaces)=pass header.i=@example.org
+])
+AT_CHECK(ZFARTEST, 0, ZFARDATA, [])
+AT_DATA([a_r], [example.com;dnswl/3=pass dns.zone=list.dnswl.org policy.ip=127.0.6.2 policy.txt=test.tana.it\ http://www.tana.it/;spf=pass smtp.mailfrom=bounce.example.org;dkim=pass header.i=@example.org
+])
+AT_CHECK(ZFARTEST, 0, ZFARDATA, [])
+AT_CLEANUP
 

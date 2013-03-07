@@ -2,7 +2,7 @@
 * parm.h - written by ale in milano on 21sep2012
 * parameter file parsing
 
-Copyright (C) 2012 Alessandro Vesely
+Copyright (C) 2012-2013 Alessandro Vesely
 
 This file is part of zdkimfilter
 

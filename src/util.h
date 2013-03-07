@@ -60,5 +60,13 @@ char *hdrval(const char *a, const char *b);
 char *skip_comment(char const *s);
 char *skip_cfws(char const *s);
 
+typedef struct name_val
+{
+	char const *name;
+	char const *value;
+} name_val;
+int
+a_r_parse(char const *a_r, int (*cb)(void*, int, name_val*, size_t), void *cbv);
+
 #define UTIL_H_INCLUDED
 #endif

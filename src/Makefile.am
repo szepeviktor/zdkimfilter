@@ -26,8 +26,10 @@ zfilter_db_SOURCES = database.c ip_to_hex.c parm.c
 zfilter_db_CPPFLAGS = @OPENDBX_CFLAGS@ -DTEST_MAIN
 zfilter_db_LDADD = @OPENDBX_LIB@
 
-check_PROGRAMS = TESTmyvbr
+check_PROGRAMS = TESTmyvbr TESTutil
 TESTmyvbr_SOURCES = myvbr.c
 TESTmyvbr_CPPFLAGS = -DTEST_MAIN
 TESTmyvbr_LDADD = @RESOLVER_LIB@
+TESTutil_SOURCES = util.c
+TESTutil_CPPFLAGS = -DTEST_MAIN
 

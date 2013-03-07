@@ -2,7 +2,7 @@
 * zdkimfilter - written by ale in milano on Thu 11 Feb 2010 03:48:15 PM CET 
 * Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010-2012 Alessandro Vesely
+Copyright (C) 2010-2013 Alessandro Vesely
 
 This file is part of zdkimfilter
 
