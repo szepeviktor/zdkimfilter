@@ -2097,5 +2097,16 @@ AT_CHECK(ZFARTEST, 0, ZFARDATA, [])
 AT_DATA([a_r], [example.com;dnswl/3=pass dns.zone=list.dnswl.org policy.ip=127.0.6.2 policy.txt=test.tana.it\ http://www.tana.it/;spf=pass smtp.mailfrom=bounce.example.org;dkim=pass header.i=@example.org
 ])
 AT_CHECK(ZFARTEST, 0, ZFARDATA, [])
+AT_DATA([a_r], [example.com;p1=v p2=v p3=v p4=v p5=v p6=v p7=v p8=v p9=v p10=v
+p11=v p12=v p13=v p14=v p15=v p16=v
+])
+AT_CHECK(ZFARTEST, 0, [example.com;
+ p1=v p2=v p3=v p4=v p5=v p6=v p7=v p8=v p9=v p10=v p11=v p12=v p13=v p14=v p15=v p16=v
+], [])
+AT_DATA([a_r], [example.com;p1=v p2=v p3=v p4=v p5=v p6=v p7=v p8=v p9=v p10=v
+p11=v p12=v p13=v p14=v p15=v p16=v p17=v
+])
+AT_CHECK(ZFARTEST, 1, [example.com;
+], [])
 AT_CLEANUP
 

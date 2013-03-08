@@ -342,6 +342,7 @@ a_r_parse(char const *a_r, int (*cb)(void*, int, name_val*, size_t), void *cbv)
 	} while (rtc == 0 && tok.end_delimiter != 0 &&
 		n < sizeof resinfo / sizeof resinfo[0]);
 
+	if (rtc == 0 && tok.end_delimiter != 0) rtc = -4;
 	rtc = (*cb)(cbv, rtc, NULL, 0); // last call
 
 	free(s);
@@ -436,7 +437,7 @@ int main(int argc, char *argv[])
 					printf("scanning %s", buf);
 
 				rtc = a_r_parse(buf, &my_cb, NULL);
-				if (verbose || rtc)
+				if (verbose)
 					printf("a_r_parse returned %d\n", rtc);
 			}
 

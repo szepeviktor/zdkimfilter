@@ -234,6 +234,10 @@ all_mode = @zdkimfilter_mode@
 #
 # The default is "list.dnswl.zone".  Unless you know a different operator that
 # does the same service, it shouldn't be necessary to modify this default,
-# because the lookup has to be configured in Courier's sysconfdir/esmtpd before
-# it can be 
+# because the lookup has to be configured in Courier's sysconfdir/esmtpd.  If
+# you use a local server, e.g. downloading rbldns data from dnswl.org, you can
+# configure the correct display zone rather than change this default.  For
+# example:
+#   -allow=dnswl.local=list.dnswl.org,DNSWL,
+# (note the trailing comma, which is necessary to query the TXT record too.)
 
