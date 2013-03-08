@@ -245,11 +245,11 @@ a_r_parse(char const *a_r, int (*cb)(void*, int, name_val*, size_t), void *cbv)
 * arguments:
 *
 * 1 (void*) the cbv given on entry,
-* 2 (int) -1 for authserv-id, 0, 1, ... for each "resinfo" stanza,
+* 2 (int) -1 for authserv-id, 0, 1, ... for "resinfo" stanzas, rtc for last call
 * 3 (name_val*) an array of name=value pairs, and
 * 4 (size_t) the number of elements in the array.
 *
-* The value is null for authserv-id.
+* The value is null for authserv-id.  The array itself is null on the last call.
 */
 {
 	assert(a_r);
@@ -342,6 +342,8 @@ a_r_parse(char const *a_r, int (*cb)(void*, int, name_val*, size_t), void *cbv)
 	} while (rtc == 0 && tok.end_delimiter != 0 &&
 		n < sizeof resinfo / sizeof resinfo[0]);
 
+	rtc = (*cb)(cbv, rtc, NULL, 0); // last call
+
 	free(s);
 	return rtc;
 }
@@ -361,6 +363,9 @@ static int my_cb(void *v, int step, name_val* nv, size_t nv_count)
 	if (verbose)
 		printf("%3zu value%s at %d\n", nv_count, nv_count > 1? "s": "", step);
 
+	if (nv == NULL)
+		return step;
+
 	if (step < 0)
 		printf("%s;\n", nv[0].name);
 	else
@@ -369,6 +374,7 @@ static int my_cb(void *v, int step, name_val* nv, size_t nv_count)
 			printf(" %s=%s", nv[i].name, nv[i].value);
 		putchar('\n');
 	}
+
 	return 0;
 }
 

@@ -237,7 +237,7 @@ assign_array(void *parm, config_conf const *c, char*s)
 static config_conf const conf[] =
 {
 	CONFIG(parm_t, all_mode, "Y/N", assign_char),
-	CONFIG(parm_t, dont_trust_a_r, "Y/N", assign_char),
+	CONFIG(parm_t, trust_a_r, "Y/N", assign_char),
 	CONFIG(parm_t, verbose, "int", assign_int),
 	CONFIG(parm_t, domain_keys, "key's directory", assign_ptr),
 	CONFIG(parm_t, header_canon_relaxed, "Y/N, N for simple", assign_char),
@@ -265,6 +265,7 @@ static config_conf const conf[] =
 	CONFIG(parm_t, reputation_pass, "low int", assign_int),
 	CONFIG(parm_t, reputation_root, "lookup host", assign_ptr),
 	CONFIG(parm_t, trusted_vouchers, "space-separated, no colon", assign_array),
+	CONFIG(parm_t, trusted_dnswl, "space-separated dns.zones", assign_array),
 	CONFIG(parm_t, dns_timeout, "secs", assign_int),
 
 	CONFIG(db_parm_t, db_backend, "conn", assign_ptr),

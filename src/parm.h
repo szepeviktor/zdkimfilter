@@ -50,6 +50,7 @@ typedef struct parm_t
 	const char **skip_hfields;
 	const char **key_choice_header;
 	const char **trusted_vouchers;
+	const char **trusted_dnswl;
 
 	// end of pointers (some malloc'd but never free'd)
 	int verbose;
@@ -57,7 +58,7 @@ typedef struct parm_t
 	int reputation_fail, reputation_pass;
 	int max_signatures;
 
-	char dont_trust_a_r;
+	char trust_a_r;
 	char add_a_r_anyway;
 	char report_all_sigs;
 	char no_spf;

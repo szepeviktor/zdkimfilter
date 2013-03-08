@@ -151,7 +151,7 @@ static inline u_char **
 cast_u_char_parm_array(char **a) {return (u_char **)a;}
 
 static char const parm_z_domain_keys[] = COURIER_SYSCONF_INSTALL "/filters/keys";
-static char const *parm_z_reputation_root =
+static char const *const parm_z_reputation_root =
 #if defined DKIM_REP_ROOT
 	DKIM_REP_ROOT;
 #elif defined DKIM_REP_DEFROOT
@@ -159,6 +159,7 @@ static char const *parm_z_reputation_root =
 #else
 	NULL;
 #endif
+static char const *const parm_z_trusted_dnswl[] = {"list.dnswl.org", NULL};
 
 static void config_default(dkimfl_parm *parm) // only non-zero...
 {
@@ -168,6 +169,7 @@ static void config_default(dkimfl_parm *parm) // only non-zero...
 	parm->z.reputation_pass = -32768;
 	parm->z.verbose = 3;
 	parm->z.max_signatures = 128;
+	parm->z.trusted_dnswl = (char const**)parm_z_trusted_dnswl;
 }
 
 static void config_cleanup_default(dkimfl_parm *parm)
@@ -176,6 +178,8 @@ static void config_cleanup_default(dkimfl_parm *parm)
 		parm->z.domain_keys = NULL;
 	if (parm->z.reputation_root == parm_z_reputation_root)
 		parm->z.reputation_root = NULL;
+	if (parm->z.trusted_dnswl == parm_z_trusted_dnswl)
+		parm->z.trusted_dnswl = NULL;
 }
 
 
@@ -1954,6 +1958,125 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	(void)nsigs; // only used in assert
 }
 
+typedef struct a_r_reader_parm
+{
+	char const *authserv_id, *discarded; // only valid during the call
+	char *dnswl_domain; // strdupped output
+	dkimfl_parm *parm; // input param
+	int resinfo_count, dnswl_count;
+} a_r_reader_parm;
+
+static int a_r_reader(void *v, int step, name_val* nv, size_t nv_count)
+{
+	a_r_reader_parm *arp = (a_r_reader_parm*)v;
+
+	assert(arp);
+
+	int rtc = 0;
+
+	if (nv == NULL) // last call
+	{
+		rtc = step;
+
+		if (arp->dnswl_domain) // found at least one
+		{
+			if (arp->discarded && arp->parm->z.verbose >= 6)
+				fl_report(LOG_INFO,
+					"id=%s: discarded %s and other %d zone(s) in "
+						"Authentication-Results by %s",
+					arp->parm->dyn.info.id,
+					arp->discarded,
+					arp->dnswl_count - 2,
+					arp->authserv_id? arp->authserv_id: "(null authserv-id)");
+		}
+		else if (arp->parm->z.verbose >= 2)
+		/*
+		* ALLOW_EXCLUSIVE and trust_a_r should mirror each other.
+		* ALLOW_EXCLUSIVE is configured in Courier's sysconfdir/esmtpd.
+		* For mumbling on further alternatives, see the comments after
+		* maybe_attack and dkim_unrename, below.
+		*/
+			fl_report(rtc? LOG_ERR: LOG_NOTICE,
+				"id=%s: Authentication-Results by %s: %s",
+				arp->parm->dyn.info.id,
+				arp->authserv_id? arp->authserv_id: "(null authserv-id)",
+				rtc != 0 ? "unparseable data":
+					arp->resinfo_count <= 0? "empty":
+						"please check ALLOW_EXCLUSIVE");
+	}
+	else if (step < 0)
+	{
+		arp->authserv_id = nv[0].name;
+	}
+	else
+	{
+		arp->resinfo_count += 1;
+
+		if (nv_count > 0 &&
+			stricmp(nv[0].name, "dnswl") == 0 &&
+			stricmp(nv[0].value, "pass") == 0)
+		{
+			arp->dnswl_count += 1;
+
+			char const *dns_zone = NULL, *policy_txt = NULL;
+			for (size_t i = 1; i < nv_count; ++i)
+			{
+				if (stricmp(nv[i].name, "dns.zone") == 0)
+					dns_zone = nv[i].value;
+				else if (stricmp(nv[i].name, "policy.txt") == 0)
+					policy_txt = nv[i].value;
+			}
+
+			if (arp->dnswl_domain)
+			{
+				if (arp->discarded == NULL)
+					arp->discarded = dns_zone;
+			}
+			else
+			{
+				char const **const zone = arp->parm->z.trusted_dnswl;
+				if (zone && dns_zone && policy_txt)
+				{
+					int trusted = 0;
+					for (size_t i = 0; zone[i] != NULL; ++i)
+						if (stricmp(zone[i], dns_zone) == 0)
+						{
+							trusted = 1;
+							break;
+						}
+
+					if (trusted)
+					{
+						char cp[64]; // domain length
+						for (size_t i = 0; i < sizeof cp; ++i)
+						{
+							int const ch = *(unsigned char*)&policy_txt[i];
+							if (ch == 0 || isspace(ch))
+							{
+								if (i > 0)
+								{
+									cp[i] = 0;
+									arp->dnswl_domain = strdup(cp);
+									if (arp->parm->z.verbose >= 6)
+										fl_report(LOG_INFO,
+											"id=%s: domain %s whitelisted by %s",
+											arp->parm->dyn.info.id, cp, dns_zone);
+								}
+								break;
+							}
+							if (isalnum(ch) || strchr(".-_", ch) != NULL)
+								cp[i] = ch;
+							else
+								break;
+						}
+					}
+				}
+			}
+		}
+	}
+	return rtc;
+}
+
 static int verify_headers(verify_parms *vh)
 // return parm->dyn.rtc = -1 for unrecoverable error,
 // parm->dyn.rtc (0) otherwise
@@ -2007,6 +2130,7 @@ static int verify_headers(verify_parms *vh)
 		* process it
 		*/
 		int zap = 0;
+		size_t dkim_unrename = 0;
 		char *s;
 
 		// malformed headers can go away...
@@ -2016,50 +2140,64 @@ static int verify_headers(verify_parms *vh)
 		// A-R fields
 		else if ((s = hdrval(start, "Authentication-Results")) != NULL)
 		{
-			if ((s = skip_cfws(s)) == NULL)
-				zap = 1; // bogus
-			else
+			if (!parm->z.trust_a_r)
 			{
-				char *const authserv_id = s;
-				int ch;
-				while (isalnum(ch = *(unsigned char*)s) ||
-					strchr(".-_", ch) != NULL)
-						++s;
-				if (s == authserv_id)
+				if ((s = skip_cfws(s)) == NULL)
 					zap = 1; // bogus
-				else  if (parm->z.dont_trust_a_r)
+				else
 				{
-					int maybe_attack = 0;
-					*s = 0;
-					/*
-					* Courier puts A-R after "Received" (but before Received-SPF).
-					* After first "Received", if the authserv_id matches it may
-					* be an attack.
-					*/
-					if (parm->dyn.authserv_id &&
-						stricmp(authserv_id, parm->dyn.authserv_id) == 0)
-							maybe_attack = zap = 1;
-					if (dkim == NULL && parm->z.verbose >= 2) // log on 2nd pass only
+					char *const authserv_id = s;
+					int ch;
+					while (isalnum(ch = *(unsigned char*)s) ||
+						strchr(".-_", ch) != NULL)
+							++s;
+					if (s == authserv_id)
+						zap = 1; // bogus
+					else
 					{
-						if (maybe_attack)
-							fl_report(LOG_NOTICE,
-								"id=%s: removing Authentication-Results from %s",
-								parm->dyn.info.id, authserv_id);
-						else if (parm->z.verbose >= 6)
-							fl_report(LOG_INFO,
-								"id=%s: found Authentication-Results by %s",
-								parm->dyn.info.id, authserv_id);
+						int maybe_attack = 0;
+						*s = 0;
+						/*
+						* Courier puts A-R after "Received" (but before Received-SPF).
+						* After "Received", a matching authserv_id might be malicious.
+						* For the time being, we discard it.
+						*
+						* A further possibility is to check the Received-SPF, assuming
+						* that it is configured and thus always present:  If Courier's
+						* A-R is before that, then it is authentic.  The advantage to
+						* do so would be to keep trusted A-R fields.
+						*/
+						if (parm->dyn.authserv_id &&
+							stricmp(authserv_id, parm->dyn.authserv_id) == 0)
+								maybe_attack = zap = 1;
+						if (dkim == NULL && parm->z.verbose >= 2) // log on 2nd pass
+						{
+							if (maybe_attack)
+								fl_report(LOG_NOTICE,
+									"id=%s: removing Authentication-Results from %s",
+									parm->dyn.info.id, authserv_id);
+							else if (parm->z.verbose >= 6)
+								fl_report(LOG_INFO,
+									"id=%s: found Authentication-Results by %s",
+									parm->dyn.info.id, authserv_id);
+						}
+						// TODO: check a list of trusted/untrusted id's
+						*s = ch;
 					}
-					// TODO: check a list of trusted/untrusted id's
-					*s = ch;
 				}
-				else if (dkim) // acquire trusted results on 1st pass
-				{
-				}
+			}
+			// acquire trusted results on 1st pass
+			else if (dkim && vh->dnswl_domain == NULL)
+			{
+				a_r_reader_parm arp;
+				memset(&arp, 0, sizeof arp);
+				arp.parm = parm;
+				if (a_r_parse(s, &a_r_reader, &arp) == 0 && arp.dnswl_domain)
+					vh->dnswl_domain = arp.dnswl_domain;
 			}
 		}
 		
-		// Only on first step, acquire relevant header info
+		// Only on first step, acquire relevant header info, and unrename
 		else if (dkim)
 		{
 			// cache courier's SPF results, get authserv_id, count Received
@@ -2159,6 +2297,21 @@ static int verify_headers(verify_parms *vh)
 							parm->dyn.info.id, s);
 				}
 			}
+
+			/*
+			* unrename Authentication-Results:  There are different
+			* opinions on signing such fields, or the "X-Original-"
+			* variant thereof.  To the opposite, the "Old-" variant
+			* seems to be specific of Courier or servers acting in
+			* a similar fashion.  Thus, the probability that unrenaming
+			* can break a signature seems to be lower than the one that
+			* not doing so.
+			*/
+			else if ((s = hdrval(start, "Old-Authentication-Results")) != NULL)
+			{
+				dkim_unrename = 4;
+			}
+
 			// (only if stats enabled)
 			// save stats' content_type and content_encoding, check mailing_list
 			else if (parm->dyn.stats)
@@ -2169,9 +2322,12 @@ static int verify_headers(verify_parms *vh)
 		{
 			int err = 0;
 			DKIM_STAT status;
-			size_t const len = eol - start;
+			size_t const len = eol - start - dkim_unrename;
 			if (dkim)
-				err = (status = dkim_header(dkim, start, len)) != DKIM_STAT_OK;
+			{
+				status = dkim_header(dkim, start + dkim_unrename, len);
+				err = status != DKIM_STAT_OK;
+			}
 			else
 			{
 				err = fwrite(start, len + 1, 1, out) != 1;
