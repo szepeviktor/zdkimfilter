@@ -271,10 +271,10 @@ a_r_parse(char const *a_r, int (*cb)(void*, int, name_val*, size_t), void *cbv)
 	// it just happens that the elements that expect an '=' have a joint
 	// to be considered.
 	static const int joint[] = {
-		0,   // a_r_server,
+		'/', // a_r_server,
 		'/', // a_r_method,
 		'.', // a_r_name,
-		0 	  //a_r_value
+		'@'  //a_r_value
 	};
 
 	int count = 0;

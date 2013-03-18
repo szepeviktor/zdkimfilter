@@ -2108,5 +2108,17 @@ p11=v p12=v p13=v p14=v p15=v p16=v p17=v
 ])
 AT_CHECK(ZFARTEST, 1, [example.com;
 ], [])
+AT_DATA([a_r], [example.com/8b / 12345678901234567890;
+ spf=pass reason = "various tests that \"may\" occur" smtp.mailfrom=bounce.example.org;
+ dkim=pass header.i=@example.org;
+ dkim=pass header.i = thebox (whatch for this) @ example.org;
+ dkim=pass header.i = "the ugly box" (whatch for this) @ example.org
+])
+AT_CHECK(ZFARTEST, 0, [example.com/8b/12345678901234567890;
+ spf=pass reason=various tests that "may" occur smtp.mailfrom=bounce.example.org
+ dkim=pass header.i=@example.org
+ dkim=pass header.i=thebox@example.org
+ dkim=pass header.i=the ugly box@example.org
+], [])
 AT_CLEANUP
 
