@@ -1325,6 +1325,9 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 		for (domain_prescreen *dps = info->domain_head;
 			dps != NULL; dps = dps->next)
 		{
+			if (dps->u.all == 0) // skip unverified signatures
+				continue;
+
 			int comma = 0;
 			authbuf[0] = 0;
 			if (dps->u.f.is_from)
