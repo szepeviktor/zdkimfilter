@@ -1298,9 +1298,9 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 	*/
 	if (rc >= 0 && info->domain_head != NULL)
 	{
-		// author,spf,spf_helo,dkim,vbr,rep,rep_s
-		// 12345678901234567890123456789012345678
-		char authbuf[40];
+		// author,spf,spf_helo,dkim,vbr,rep,rep_s,dnswl
+		// 12345678901234567890123456789012345678901234
+		char authbuf[48];
 		dwa->var[auth_type_variable] = authbuf;
 		var_flag_t bit2 = 1 << auth_type_variable | 1 << domain_variable;
 		bitflag |= bit2;
@@ -1347,6 +1347,8 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 				comma_copy(authbuf, "rep", &comma);
 			if (dps->u.f.is_reputed_signer)
 				comma_copy(authbuf, "rep_s", &comma);
+			if (dps->u.f.is_dnswl)
+				comma_copy(authbuf, "dnswl", &comma);
 
 			char rep_buf[8*sizeof(int)/3 + 3];
 			sprintf(rep_buf, "%d", dps->reputation);
@@ -1606,7 +1608,7 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 #include <sys/types.h>
 #include <unistd.h>
 
-static int autoargip(db_work_area *dwa, stats_info *stats)
+static int autoargip(db_work_area *dwa)
 {
 	char buf[32];
 	sprintf(buf, "192.0.2.%d", (int)(rand() & 255));
@@ -1628,7 +1630,7 @@ static int autoarg(db_work_area *dwa, stats_info *stats, int i)
 					rand() > PERC_50? "user.example" : NULL);
 			}
 
-			set_client_ip = autoargip(dwa, stats);
+			set_client_ip = autoargip(dwa);
 			break;
 		}
 		case 2:
@@ -1975,7 +1977,7 @@ int main(int argc, char*argv[])
 					set_client_ip |= autoarg(dwa, &stats, i);
 
 				if (set_client_ip == 0)
-					set_client_ip = autoargip(dwa, &stats);
+					set_client_ip = autoargip(dwa);
 			}
 
 			domain_prescreen **pdps = &stats.domain_head;
@@ -2034,6 +2036,8 @@ int main(int argc, char*argv[])
 						dps->u.f.is_reputed_signer = 1;
 						token_argument(arg, 5, &dps->reputation);
 					}
+					else if (strncmp(arg, "dnswl", 5) == 0)
+						dps->u.f.is_dnswl = 1;
 					else if (*arg)
 						printf("invalid domain token \"%s\" for %s\n", arg, dps->name);
 				}
@@ -2051,6 +2055,7 @@ int main(int argc, char*argv[])
 						dps->reputation = (rand() - RAND_MAX/2) / (RAND_MAX/1000);
 						dps->u.f.is_reputed_signer  = rand() > PERC_90;
 					}
+					dps->u.f.is_dnswl = rand() > PERC_50;
 					dps->u.f.vbr_is_ok = rand() > PERC_20;
 					if (dps->u.f.vbr_is_ok)
 					{
@@ -2095,7 +2100,7 @@ int main(int argc, char*argv[])
 			}
 
 			if (set_client_ip == 0)
-				set_client_ip = autoargip(dwa, &stats);
+				set_client_ip = autoargip(dwa);
 
 			printf("%s: %d\n", argv[i], db_is_whitelisted(dwa, argv[i]));
 		}

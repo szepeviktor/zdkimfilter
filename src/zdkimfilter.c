@@ -1357,11 +1357,13 @@ typedef struct verify_parms
 	char *dkim_domain;
 	DKIM_SIGINFO *sig, *author_sig, *vbr_sig, *whitelisted_sig;
 	domain_prescreen *dps, *author_dps, *vbr_dps, *whitelisted_dps,
-		*sender_dps, *helo_dps;
+		*sender_dps, *helo_dps, *dnswl_dps;
 	dkim_policy_t policy;
 
 	void *dkim_or_file;
 	int step;
+
+	int dnswl_count;
 
 	// number of domains, elements of domain_ptr
 	int ndoms;
@@ -1507,7 +1509,9 @@ and then conveyed to ctlfile 'f' (COMCTLFILE_FROMMTA).  E.g.
 static int
 domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 /*
-*
+* Setup the domain list (dps) that will be eventually be passed to the database.
+* Domains are drawn from the signature array and from a number of relevant
+* domain names (from, mfrom, helo, and dnswl).
 * return -1 for fatal error, number of domains otherwise
 */
 {
@@ -1517,9 +1521,12 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	char *const from = vh->dkim_domain;
 	char *const mfrom = vh->sender_domain;
 	char *const helo = vh->helo_domain;
-	char from_k = from == NULL, mfrom_k = mfrom == NULL, helo_k = helo == NULL;
+	char *const dnswl = vh->dnswl_domain;
+	char from_k = from == NULL,
+		mfrom_k = mfrom == NULL, helo_k = helo == NULL,
+		dnswl_k = dnswl == NULL;
 
-	int ndoms = nsigs + 2 - mfrom_k - helo_k;
+	int ndoms = nsigs + 3 - mfrom_k - helo_k - dnswl_k;
 	if (save_from_anyway)
 		ndoms += 1 - from_k;
 
@@ -1626,6 +1633,13 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 					}
 				}
 
+				if (dnswl_k == 0 && stricmp(dnswl, domain) == 0)
+				{
+					dnswl_k = dps->u.f.is_dnswl = 1;
+					vh->dnswl_dps = dps;
+					dps->sigval += 200;     // dnswl relay's signature
+				}
+
 				if (mfrom_k == 0 && stricmp(mfrom, domain) == 0)
 				{
 					mfrom_k = dps->u.f.is_mfrom = 1;
@@ -1637,7 +1651,7 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 				{
 					helo_k = dps->u.f.is_helo = 1;
 					vh->helo_dps = dps;
-					dps->sigval += 15;
+					dps->sigval += 15;      // ralay's signature
 				}
 				else if (helolen)
 				{
@@ -1705,14 +1719,17 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	}
 
 	/*
-	* If SPF-authenticated domains were not among the signers, add them
-	* to domain list and check whether any of them is whitelisted.
+	* If the relevant domains were not among the signers, add them to the domain
+	* list, possibly checking other relevant flags.
 	*/
 
 	free(sigs_mirror);
 	free(sigs_copy);
 
 	if (save_from_anyway && dwa && from_k == 0)
+	/*
+	* From: is just added if not authenticated
+	*/
 	{
 		domain_prescreen *dps = get_prescreen(&dps_head, from);
 		if (dps)
@@ -1725,7 +1742,28 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 			ndoms = -1;
 	}
 
+	if (ndoms >= 0 && dwa && dnswl_k == 0)
+	/*
+	* dnswl is a sort of authentication too, whitelist just for monitoring
+	*/
+	{
+		domain_prescreen *dps = get_prescreen(&dps_head, dnswl);
+		if (dps)
+		{
+			if (dps->u.all == 0)
+				domain_ptr[ndoms++] = dps;	
+			dps->u.f.is_dnswl = 1;
+			if ((dps->whitelisted = db_is_whitelisted(dwa, dps->name)) > 1)
+				dps->u.f.is_whitelisted = 1;
+		}
+		else
+			ndoms = -1;
+	}
+
 	if (ndoms >= 0 && dwa && mfrom_k == 0)
+	/*
+	* mfrom is SPF-authenticated, can be whitelisted and vouched
+	*/
 	{
 		domain_prescreen *dps = get_prescreen(&dps_head, mfrom);
 		if (dps)
@@ -1734,9 +1772,8 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 				domain_ptr[ndoms++] = dps;	
 			vh->sender_dps = dps;
 			dps->u.f.is_mfrom = 1;
-			if (dwa &&
-				(dps->whitelisted = db_is_whitelisted(dwa, dps->name)) > 1)
-					dps->u.f.is_whitelisted = 1;
+			if ((dps->whitelisted = db_is_whitelisted(dwa, dps->name)) > 1)
+				dps->u.f.is_whitelisted = 1;
 
 			vbr_info *const vbr = vbr_info_get(vh->vbr, dps->name);
 			if (vbr)
@@ -1751,6 +1788,9 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	}
 
 	if (ndoms >= 0 && dwa && helo_k == 0)
+	/*
+	* helo is SPF-authenticated, can be whitelisted but, by VBR spec, not vouched
+	*/
 	{
 		domain_prescreen *dps = get_prescreen(&dps_head, helo);
 		if (dps)
@@ -1759,9 +1799,8 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 				domain_ptr[ndoms++] = dps;
 			vh->helo_dps = dps;
 			dps->u.f.is_helo = 1;
-			if (dwa &&
-				(dps->whitelisted = db_is_whitelisted(dwa, dps->name)) > 1)
-					dps->u.f.is_whitelisted = 1;
+			if ((dps->whitelisted = db_is_whitelisted(dwa, dps->name)) > 1)
+				dps->u.f.is_whitelisted = 1;
 		}
 		else
 			ndoms = -1;
@@ -1950,7 +1989,7 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 				}
 			}
 		}
-		if (done_one && do_all == 0 && whitelisted == 0 && trusted_vbr == 0)
+		if (done_one && do_all == 0 && whitelisted <= 0 && trusted_vbr <= 0)
 			break;
 	}
 
@@ -1982,7 +2021,7 @@ static int a_r_reader(void *v, int step, name_val* nv, size_t nv_count)
 		{
 			if (arp->discarded && arp->parm->z.verbose >= 6)
 				fl_report(LOG_INFO,
-					"id=%s: discarded %s and other %d zone(s) in "
+					"id=%s: discarded %s and other %d trusted zone(s) in "
 						"Authentication-Results by %s",
 					arp->parm->dyn.info.id,
 					arp->discarded,
@@ -2002,7 +2041,7 @@ static int a_r_reader(void *v, int step, name_val* nv, size_t nv_count)
 				arp->authserv_id? arp->authserv_id: "(null authserv-id)",
 				rtc != 0 ? "unparseable data":
 					arp->resinfo_count <= 0? "empty":
-						"please check ALLOW_EXCLUSIVE");
+						"please check ALLOW settings");
 	}
 	else if (step < 0)
 	{
@@ -2016,8 +2055,6 @@ static int a_r_reader(void *v, int step, name_val* nv, size_t nv_count)
 			stricmp(nv[0].name, "dnswl") == 0 &&
 			stricmp(nv[0].value, "pass") == 0)
 		{
-			arp->dnswl_count += 1;
-
 			char const *dns_zone = NULL, *policy_txt = NULL;
 			for (size_t i = 1; i < nv_count; ++i)
 			{
@@ -2027,25 +2064,22 @@ static int a_r_reader(void *v, int step, name_val* nv, size_t nv_count)
 					policy_txt = nv[i].value;
 			}
 
-			if (arp->dnswl_domain)
+			char const **const zone = arp->parm->z.trusted_dnswl;
+			if (zone && dns_zone)
 			{
-				if (arp->discarded == NULL)
-					arp->discarded = dns_zone;
-			}
-			else
-			{
-				char const **const zone = arp->parm->z.trusted_dnswl;
-				if (zone && dns_zone && policy_txt)
-				{
-					int trusted = 0;
-					for (size_t i = 0; zone[i] != NULL; ++i)
-						if (stricmp(zone[i], dns_zone) == 0)
-						{
-							trusted = 1;
-							break;
-						}
+				int trusted = 0;
+				for (size_t i = 0; zone[i] != NULL; ++i)
+					if (stricmp(zone[i], dns_zone) == 0)
+					{
+						trusted = 1;
+						break;
+					}
 
-					if (trusted)
+				if (trusted)
+				{
+					arp->dnswl_count += 1;
+
+					if (policy_txt && arp->dnswl_domain == NULL)
 					{
 						char cp[64]; // domain length
 						for (size_t i = 0; i < sizeof cp; ++i)
@@ -2069,6 +2103,11 @@ static int a_r_reader(void *v, int step, name_val* nv, size_t nv_count)
 							else
 								break;
 						}
+					}
+					else if (arp->dnswl_domain)
+					{
+						if (arp->discarded == NULL)
+							arp->discarded = dns_zone;
 					}
 				}
 			}
@@ -2192,8 +2231,12 @@ static int verify_headers(verify_parms *vh)
 				a_r_reader_parm arp;
 				memset(&arp, 0, sizeof arp);
 				arp.parm = parm;
-				if (a_r_parse(s, &a_r_reader, &arp) == 0 && arp.dnswl_domain)
-					vh->dnswl_domain = arp.dnswl_domain;
+				if (a_r_parse(s, &a_r_reader, &arp) == 0)
+				{
+					if (arp.dnswl_domain)
+						vh->dnswl_domain = arp.dnswl_domain;
+					vh->dnswl_count += arp.dnswl_count;
+				}
 			}
 		}
 		
@@ -2303,9 +2346,9 @@ static int verify_headers(verify_parms *vh)
 			* opinions on signing such fields, or the "X-Original-"
 			* variant thereof.  To the opposite, the "Old-" variant
 			* seems to be specific of Courier or servers acting in
-			* a similar fashion.  Thus, the probability that unrenaming
-			* can break a signature seems to be lower than the one that
-			* not doing so.
+			* a similar fashion.  Thus, the probability of breaking
+			* a signature by unrenaming seems to be lower than that
+			* of breaking it by not doing so.
 			*/
 			else if ((s = hdrval(start, "Old-Authentication-Results")) != NULL)
 			{
@@ -2632,7 +2675,7 @@ static void verify_message(dkimfl_parm *parm)
 	}
 
 	/*
-	* If no DKIM domain is vouched but SPF passed, try that
+	* If no DKIM domain is vouched but SPF passed, try VBR for it.
 	*/
 	if (parm->dyn.rtc == 0 &&
 		vh.vbr_dps == NULL &&
@@ -2642,8 +2685,8 @@ static void verify_message(dkimfl_parm *parm)
 			vh.vbr_dps = vh.sender_dps;
 
 	/*
-	* If no DKIM domain is whitelisted but SPF passed, try that
-	* SPF helo is ok!
+	* If whitelisted_dps was not set during DKIM processing (dkim_sig_final) but
+	* SPF passed, check whether mailfrom of helo are whitelisted.
 	*/
 	if (parm->dyn.rtc == 0 && vh.whitelisted_dps == NULL &&
 		(vh.sender_dps || vh.helo_dps))
@@ -2714,7 +2757,8 @@ static void verify_message(dkimfl_parm *parm)
 					vh.policy == DKIM_POLICY_DISCARDABLE;
 				parm->dyn.stats->adsp_fail = adsp_fail;
 				parm->dyn.stats->adsp_whitelisted = adsp_fail &&
-					(vh.vbr_dps != NULL || vh.whitelisted_dps != NULL);
+					(vh.vbr_dps != NULL || vh.whitelisted_dps != NULL ||
+						vh.dnswl_count > 0);
 			}
 
 			/*
@@ -2759,6 +2803,15 @@ static void verify_message(dkimfl_parm *parm)
 							vh.vbr_result.vbr->md,
 							vh.vbr_result.mv,
 							vh.vbr_dps->u.f.sig_is_ok? "DKIM": "SPF");
+					else if (vh.dnswl_count > 0)
+						fl_report(LOG_INFO,
+							"id=%s: %s %s, but I found %d DNSWL record(s) --%s",
+							parm->dyn.info.id,
+							log_reason,
+							vh.dkim_domain,
+							vh.dnswl_count,
+							vh.dnswl_domain?
+								vh.dnswl_domain: "no domain name, though");
 					else
 						fl_report(LOG_INFO,
 							"id=%s: %s %s, no VBR and no whitelist",
@@ -2767,7 +2820,8 @@ static void verify_message(dkimfl_parm *parm)
 							vh.dkim_domain);
 				}
 
-				if (vh.vbr_dps == NULL && vh.whitelisted_dps == NULL)
+				if (vh.vbr_dps == NULL && vh.whitelisted_dps == NULL &&
+					vh.dnswl_count <= 0)
 				{
 					if (smtp_reason) //reject
 					{

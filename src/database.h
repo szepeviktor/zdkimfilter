@@ -63,6 +63,7 @@ typedef struct domain_prescreen
 			unsigned int is_whitelisted:1; // whitelisted > 1
 			unsigned int is_known:1;       // whitelisted > 0
 			unsigned int is_from:1;        // author_domain
+			unsigned int is_dnswl:1;       // domain of dnswl address
 			unsigned int is_mfrom:1;       // spf authenticated
 			unsigned int is_helo:1;        // spf_helo auth
 			unsigned int looks_like_helo:1;
