@@ -252,7 +252,9 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign and verify my signature])
-ZF_CONFIG(6)
+ZF_CONFIG(6, [add_auth_pass
+sign_hfields Date From To Subject Authentication-Results
+])
 ZF_PRIVATEKEY([example.com])
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctls], [Msignmsg
@@ -290,6 +292,7 @@ ZF_RUN,
 [250 Ok.
 ],
 [INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@example.com, stat=0) rep=0
+INFO:zdkimfilter[[0]]:id=verifymsg: found Authentication-Results by example.com
 INFO:zdkimfilter[[0]]:id=verifymsg: found Authentication-Results by mail.example.com
 INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
 ])
