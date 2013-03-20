@@ -485,6 +485,28 @@ static void collect_stats(dkimfl_parm *parm, char const *start)
 }
 
 // outgoing
+static inline int
+my_dkim_header(dkimfl_parm *parm, DKIM *dkim, char *field, size_t len)
+{
+	assert(len > 0);
+	assert(dkim);
+
+	DKIM_STAT status = dkim_header(dkim, field, len);
+	if (status != DKIM_STAT_OK)
+	{
+		if (parm->z.verbose)
+		{
+			char const *err = dkim_getresultstr(status);
+			fl_report(LOG_CRIT,
+				"id=%s: signing dkim_header failed on %zu bytes: %s (%d)",
+				parm->dyn.info.id, len,
+				err? err: "unknown", (int)status);
+		}
+		return parm->dyn.rtc = -1;
+	}
+
+	return 0;
+}
 
 static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 // return parm->dyn.rtc = -1 for unrecoverable error,
@@ -496,7 +518,6 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 	var_buf *vb = &parm->dyn.vb;
 	FILE* fp = fl_get_file(parm->fl);
 	assert(fp);
-	DKIM_STAT status;
 	
 	for (;;)
 	{
@@ -531,19 +552,8 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 		/*
 		* full field is in buffer (dkim_header does not want the trailing \n)
 		*/
-		if (keep && dkim &&
-			(status = dkim_header(dkim, start, keep)) != DKIM_STAT_OK)
-		{
-			if (parm->z.verbose)
-			{
-				char const *err = dkim_getresultstr(status);
-				fl_report(LOG_CRIT,
-					"id=%s: signing dkim_header failed on %zu bytes: %s (%d)",
-					parm->dyn.info.id, keep,
-					err? err: "unknown", (int)status);
-			}
+		if (keep && dkim && my_dkim_header(parm, dkim, start, keep) < 0)
 			return parm->dyn.rtc = -1;
-		}
 
 		if (!cont)
 			break;
@@ -559,7 +569,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
 	
 	if (dkim)
 	{
-		status = dkim_eoh(dkim);
+		DKIM_STAT status = dkim_eoh(dkim);
 		if (status != DKIM_STAT_OK)
 		{
 			if (parm->z.verbose >= 3)
@@ -1145,6 +1155,15 @@ static inline void stats_outgoing(dkimfl_parm *parm)
 	}
 }
 
+static inline void chomp_cr(char *hdr)
+{
+	unsigned char *s = hdr, *d = hdr;
+	int ch;
+	while ((ch = *s++) != 0)
+		if (ch != '\r') *d++ = ch;
+	*d = 0;
+}
+
 static void sign_message(dkimfl_parm *parm)
 /*
 * possibly sign the message, set rtc 1 if signed, -1 if failed,
@@ -1276,6 +1295,31 @@ static void sign_message(dkimfl_parm *parm)
 
 		stats_outgoing(parm);
 
+		// A-R with auth=pass; if signed, must get hashed before sign_headers
+		static char const auth_pass_fmt[] =
+			"Authentication-Results: %s;%s auth=pass (details omitted)";
+		char *auth_pass = NULL;
+		if (parm->z.add_auth_pass)
+		{
+			char const *nl = "";
+			size_t l = strlen(parm->dyn.domain) + sizeof auth_pass_fmt;
+			if (l > 77)
+			{
+				nl = "\r\n";
+				l += 2;
+			}
+			if ((auth_pass = malloc(l)) == NULL)
+			{
+				fl_report(LOG_ALERT, "MEMORY FAULT");
+				parm->dyn.rtc = -1;
+			}
+			else
+			{
+				l = sprintf(auth_pass, auth_pass_fmt, parm->dyn.domain, nl);
+				my_dkim_header(parm, dkim, auth_pass, l);
+			}
+		}
+
 		// (not)TODO: if parm.no_signlen, instead of copy_body, stop at either
 		// "-- " if plain text, or end of first mime alternative otherwise
 		if (parm->dyn.rtc == 0 &&
@@ -1312,16 +1356,22 @@ static void sign_message(dkimfl_parm *parm)
 				dkim_free(dkim);
 				return;
 			}
-			
-			unsigned char *s = hdr, *d = hdr;
-			int ch;
-			while ((ch = *s++) != 0)
-				if (ch != '\r') *d++ = ch;
-			*d = 0;
-			
+
+			// Write signature as first field
+			chomp_cr(hdr);
 			fprintf(fp, DKIM_SIGNHEADER ": %s\n", hdr);
 			dkim_free(dkim);
 			dkim = NULL;
+
+			// A-R, possibly signed, is second field
+			if (auth_pass)
+			{
+				chomp_cr(auth_pass);
+				fputs(auth_pass, fp);
+				fputc('\n', fp);
+				free(auth_pass);
+				auth_pass = NULL;
+			}
 
 			FILE *in = fl_get_file(parm->fl);
 			assert(in);
@@ -1429,6 +1479,7 @@ static void clean_vh(verify_parms *vh)
 	vbr_info_clear(vh->vbr);
 	free(vh->sender_domain);
 	free(vh->helo_domain);
+	free(vh->dnswl_domain);
 	free(vh->domain_ptr);
 	free(vh->vbr_result.resp);
 }

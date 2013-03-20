@@ -205,7 +205,7 @@ search_var(char *p, flags_var *flags, char **q, size_t *sz, stmt_part *part)
 static int count_vars(flags_var *flags, char *src, size_t *sz, stmt_part *part)
 {
 	int count = 0;
-	char *p = src, *dest;
+	char *p = src, *dest /* compiler happy */ = NULL;
 
 	if (part)
 		dest = part->snippet;

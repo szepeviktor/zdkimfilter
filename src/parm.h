@@ -60,6 +60,7 @@ typedef struct parm_t
 
 	char trust_a_r;
 	char add_a_r_anyway;
+	char add_auth_pass;
 	char report_all_sigs;
 	char no_spf;
 	char no_signlen;

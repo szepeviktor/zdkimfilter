@@ -256,6 +256,7 @@ static config_conf const conf[] =
 	CONFIG(parm_t, no_spf, "Y/N", assign_char),
 	CONFIG(parm_t, save_from_anyway, "Y/N", assign_char),
 	CONFIG(parm_t, add_a_r_anyway, "Y/N", assign_char),
+	CONFIG(parm_t, add_auth_pass, "Y/N", assign_char),
 	CONFIG(parm_t, report_all_sigs, "Y/N", assign_char),
 	CONFIG(parm_t, max_signatures, "int", assign_int),
 	CONFIG(parm_t, honor_author_domain, "Y=enable ADSP", assign_char),
