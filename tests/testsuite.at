@@ -131,7 +131,7 @@ $3$4][ZF_MESSAGE_BODY])
 # message with up to 3 signatures and SPF none
 m4_define([ZF_MESSAGE_NOSPF],
 [$1Received: from server.example by test.example with ESMTP
-Received-SPF: none SPF=MAILFROM sender=someone@sender.example;
+$4Received-SPF: none SPF=MAILFROM sender=someone@sender.example;
 $2Received: from mail.example.com by server.example with ESMTPA
 $3][ZF_MESSAGE_BODY])
 
@@ -156,6 +156,12 @@ rlKqG0nWxNFVhVzXsgeNUTDCmVm3cdODa94wXn9WNvY=
 m4_if([$#], [1],, m4_foreach([link], [$2],
 [$LN_S $1 link
 ]))
+])
+
+# DNSWL authenticated address
+m4_define([ZF_DNSWL], [Authentication-Results: test.example;
+ dnswl=pass dns.zone=list.dnswl.org policy.ip=127.0.10.0
+ policy.txt="sender.example http://www.dnswl.example/"
 ])
 
 # default parms
@@ -2119,6 +2125,64 @@ AT_CHECK(ZFARTEST, 0, [example.com/8b/12345678901234567890;
  dkim=pass header.i=@example.org
  dkim=pass header.i=thebox@example.org
  dkim=pass header.i=the ugly box@example.org
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([DNSWL sender, non-existent From: domain])
+ZF_CONFIG(3, [reject_on_nxdomain
+trust_a_r
+])
+ZF_KEYFILE
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(, ZF_SIGSENDER, ZF_SIGOTHER, ZF_DNSWL)])
+AT_DATA([ctl], [Musenetmsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but I found 1 DNSWL record(s) --sender.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim=pass header.i=@sender.example;
+  dkim-adsp=nxdomain header.from=user@author.example
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([DNSWL sender domain logged to the database])
+ZF_CONFIG(3, [trust_a_r
+db_backend test
+db_sql_insert_msg_ref dummy
+])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(,,, ZF_DNSWL)])
+AT_DATA([ctl], [Mdnswlmsg
+usmtp
+])
+ZF_POLICYFILE
+ZF_BATCH([test3
+mail
+ctl
+
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK( ZF_RUN, 0, [250 not filtered.
+], [])
+AT_CHECK([grep 'domain: ' database_dump], 0, [domain: sender.example
+], [])
+AT_CHECK([grep 'auth_type: ' database_dump], 0, [auth_type: dnswl
 ], [])
 AT_CLEANUP
 
