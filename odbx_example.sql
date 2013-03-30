@@ -30,7 +30,7 @@ CREATE TABLE msg_ref (
   message_in INT UNSIGNED NOT NULL COMMENT 'Foreign key to message_in',
   domain INT UNSIGNED NOT NULL COMMENT 'Foreign key to domain',
   reputation INT NOT NULL,
-  auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s') NOT NULL,
+  auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s', 'dnswl') NOT NULL,
   vbr ENUM ('spamhaus', 'who_else') NOT NULL,
   INDEX by_dom_msg(domain, message_in)
 )
@@ -115,7 +115,7 @@ DROP PROCEDURE IF EXISTS recv_from_domain//
 CREATE PROCEDURE recv_from_domain (
 	IN m_mi INT UNSIGNED,
 	IN m_domain VARCHAR(63),
-	IN m_auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s'),
+	IN m_auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s', 'dnswl'),
 	IN m_vbr VARCHAR(63),
 	IN m_rep INT)
 	MODIFIES SQL DATA

@@ -83,7 +83,7 @@ such domain, according to the other configuration options.
 
 This sets the envelope sender in the ctlfile.  The value is only relevant for
 I<--db-filter>, since the ctlfile is used for signing only.  If this option is
-not specified, <I<domain> is used as envelope sender as well, if it contains a
+not specified, I<domain> is used as envelope sender as well, if it contains a
 C<@>.
 
 

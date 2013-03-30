@@ -1,22 +1,47 @@
 Database changes:
+================
+The table msg_ref has an additional flag "dnswl" in colum auth.  The diff is:
 
-The table msg_ref has an additional flag "dnswl" in colum auth.  In MySQL, if
-the table was created as exemplified in the zfilter_db man page, the flag can
-be added like so:
+--- odbx_example-1.1.sql	2012-12-01 10:58:36.000000000 +0100
++++ odbx_example.sql	2013-03-21 12:31:36.000000000 +0100
+@@ -30,7 +30,7 @@
+   message_in INT UNSIGNED NOT NULL COMMENT 'Foreign key to message_in',
+   domain INT UNSIGNED NOT NULL COMMENT 'Foreign key to domain',
+   reputation INT NOT NULL,
+-  auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s') NOT NULL,
++  auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s', 'dnswl') NOT NULL,
+   vbr ENUM ('spamhaus', 'who_else') NOT NULL,
+   INDEX by_dom_msg(domain, message_in)
+ )
+@@ -115,7 +115,7 @@
+ CREATE PROCEDURE recv_from_domain (
+ 	IN m_mi INT UNSIGNED,
+ 	IN m_domain VARCHAR(63),
+-	IN m_auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s'),
++	IN m_auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s', 'dnswl'),
+ 	IN m_vbr VARCHAR(63),
+ 	IN m_rep INT)
+ 	MODIFIES SQL DATA
+
+The first hunk can be done in mysql by:
 
    ALTER TABLE msg_ref MODIFY COLUMN auth SET \
     ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s', 'dnswl') \
      NOT NULL;
 
+The second hunk, unless you use mysql-admin, requires SHOW CREATE PROCEDURE,
+DROP PROCEDURE, and then CREATE PROCEDURE anew.
 
-Config file change:
 
+Config file changes:
+===================
 New options: trust_a_r and trusted_dnswl.  They have to be set according to the
 ALLOW_EXCLUSIVE and BLACKLISTS settings in Courier esmtpd.  With that setup, it
-is possible to whitelist SPF and ADSP.  To use dnswl.org, I suggest setting as
-follows:
+is possible to whitelist SPF and ADSP.  In addition, the TXT record contains a
+domain name that can be used for abuse reporting.  To use dnswl.org, I suggest
+the following setup:
 
-Courier esmtpd: (don't override BLOCK, ask for TXT record too --trailing comma)
+Courier esmtpd: (don't override BLOCK, get TXT records too --trailing comma)
 BLACKLISTS="-allow=list.dnswl.org,DNSWL, -block=...
 ALLOW_EXCLUSIVE=1
 
@@ -29,14 +54,21 @@ trust_a_r
 See the zdkimfilter.conf and couriertcpd man pages for details.
 
 
-Another new option: add_auth_pass
-
-Internal mail is signed but not verified, but with this new option one can
-still have an Authentication-Results, for example to color unauthenticated
-messages:
+Another new option: add_auth_pass.  Internal mail is signed but not verified,
+but with this new option one can still have an Authentication-Results, for
+example to color unauthenticated messages:
 
    if (!/^Authentication-Results:.*=pass\b/:h)
    {
       KEYWORDS='nopass';
    }
+
+
+Bug fixes:
+=========
+Database logging used to add entries in msg_ref with an empty auth column, for
+example due to an unverified signature.  Now they are skipped.
+
+dkimsign missed a --sender option, to allow specifying an envelope sender, for
+database logging purposes.  Added.
 

@@ -10,8 +10,8 @@ B<redact> (I<option> [I<option-arg>]) ...
 
 =head1 DESCRIPTION
 
-B<redact> can encode or decode strings.  It is not so much concerned in
-unbreakable security, as in providing a consistent way to obfuscate some
+B<redact> can encode or decode strings.  It is NOT secure, as it uses an easily
+breakable algorithm.  Yet, it provides a consistent way to obfuscate some
 tokens without losing the possibility to retrieve their original values.  The
 items that this tool is meant to obfuscate, such as authenticated user-id's,
 may be considered correct, even de rigueur, to divulge.  However, they can be

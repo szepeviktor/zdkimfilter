@@ -252,7 +252,8 @@ AT_CLEANUP
 
 #
 AT_SETUP([Sign and verify my signature])
-ZF_CONFIG(6, [add_auth_pass
+ZF_CONFIG(6, [trust_a_r
+add_auth_pass
 sign_hfields Date From To Subject Authentication-Results
 ])
 ZF_PRIVATEKEY([example.com])
@@ -273,6 +274,9 @@ ZF_RUN,
 [INFO:zdkimfilter[[0]]:id=signmsg: signing for user@example.com with domain example.com, selector s
 INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
 ])
+# make a modified copy of mail for later
+AT_CHECK([sed '/^Authentication-Results:/s/^/Old-/' mail > mail2])
+# verify mail normally
 AT_DATA([ctlv], [Mverifymsg
 usmtp
 ])
@@ -291,9 +295,24 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
+[INFO:zdkimfilter[[0]]:id=verifymsg: Authentication-Results by example.com: please check ALLOW settings
+INFO:zdkimfilter[[0]]:id=verifymsg: Authentication-Results by mail.example.com: empty
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@example.com, stat=0) rep=0
+INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
+])
+# now repeat the test with modified mail
+ZF_BATCH([test2
+test3
+mail2
+ctlv
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
 [INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@example.com, stat=0) rep=0
-INFO:zdkimfilter[[0]]:id=verifymsg: found Authentication-Results by example.com
-INFO:zdkimfilter[[0]]:id=verifymsg: found Authentication-Results by mail.example.com
 INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
 ])
 AT_CLEANUP

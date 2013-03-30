@@ -118,6 +118,8 @@ all_mode = @zdkimfilter_mode@
 # NOTE: don't configure for signing Received: or changing it will break the
 # signature.
 #
+# NOTE: the scrambling used for obfuscation is NOT cryptographically secure.
+#
 # To enable this behavior, specify some secret text (1 to 256 chars) here.
 # For example:
 #  redact_received_auth = This is the secret text (change and uncomment)
@@ -181,9 +183,10 @@ all_mode = @zdkimfilter_mode@
 #
 # When ADSP is enabled, the filter honors author domain's policy --that is, the
 # second and third cases above cause reject and drop respectively-- unless an
-# authenticated domain is whitelisted or vouched by a trusted VBR (see the next
-# option).  Any of SPF and DKIM authentications are valid to establish
-# whitelisting, but only "MAIL FROM" SPF and DKIM can be used for VBR.
+# authenticated domain is whitelisted in the database, vouched by a trusted VBR
+# (see the next option), or authenticated by dnswl=pass.  Any of SPF and DKIM
+# authentications are valid to establish whitelisting, but only "MAIL FROM" SPF
+# and DKIM can be used for VBR.
 #
 # Rejecting on nxdomain can be enabled separately.  This catches invalid From:
 # like <john.doe@NOSPAM.example.com>, typical of some mailing lists.
@@ -196,8 +199,8 @@ all_mode = @zdkimfilter_mode@
 # If any user may subscribe to a mailing list, enabling ADSP will result in
 # malfunctions when someone publishes a non-default ADSP policy.  Conversely,
 # unless you can prevent your users from subscribing to mailing lists, don't
-# publish an ADSP policy different from "unknown".  (Publishing "unknown"
-# results in better caching, though.)
+# publish an ADSP policy different from "unknown".  (Publishing "unknown" may
+# result in better caching, though.)
 
 # do_reputation (bool)
 # make a query to dkim-reputation.org for the signer and author domain.  The
