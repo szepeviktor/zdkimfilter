@@ -124,6 +124,12 @@ all_mode = @zdkimfilter_mode@
 # For example:
 #  redact_received_auth = This is the secret text (change and uncomment)
 
+# add_auth_pass (bool)
+# Add an A-R field to signed outgoing messages.  The field just says auth=pass,
+# with the signing domain name, and no other details.  I can be signed (see
+# sign_hfields).  It may be useful for messages delivered on the same server,
+# which would get no A-R field otherwise.
+
 # tmp (string)
 # Temporary directory. libopendkim uses /var/tmp by default.
 # If you specify a value like /tmp/*, then zdkimfilter attempts to mkdir of
@@ -151,12 +157,6 @@ all_mode = @zdkimfilter_mode@
 
 # add_a_r_anyway (bool)
 # Add an A-R field also if no signature nor other results had been found.
-
-# add_auth_path (bool)
-# Add an A-R field to signed outgoing messages.  The field just says auth=pass,
-# with the signing domain name, and no other details.  I can be signed (see
-# sign_hfields).  It may be useful for messages delivered on the same server,
-# which would get no A-R field otherwise.
 
 # report_all_sigs (bool)
 # If multiple signatures are found, normally only the most important ones
