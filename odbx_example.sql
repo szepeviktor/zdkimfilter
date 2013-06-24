@@ -245,6 +245,14 @@ FROM domain AS d, msg_ref AS r, message_in AS m
 WHERE d.id = r.domain AND r.message_in = m.id AND (d.since > NOW() - INTERVAL 1 DAY);
 
 
+# find what messages authenticated by a given domain have been received recently
+SELECT CONCAT_WS('.', LPAD(HEX(m.ino), 16, '0'), LPAD(HEX(m.mtime), 16, '0'), LPAD(HEX(m.pid), 8, '0')) AS id,
+ m.date AS date, FROM_UNIXTIME(m.mtime) AS time, INET_NTOA(CONV(HEX(m.ip),16,10)) AS ip
+FROM domain AS d, msg_ref AS r, message_in AS m
+WHERE d.id = r.domain AND r.message_in = m.id AND d.domain='mailtrust.com'
+ORDER BY m.mtime DESC  LIMIT 4;
+
+
 # delete incoming messages older than 1 month
 DELETE r, m FROM msg_ref AS r, message_in AS m
 WHERE r.message_in = m.id AND m.mtime < UNIX_TIMESTAMP(NOW() - INTERVAL 1 MONTH);

@@ -389,10 +389,10 @@ static int my_mkstemp(int is_msg, char *tmp, char **fname)
 	if (f[dlen - 1] != '/')
 		strcat(f, "/");
 	strcat(strcat(strcat(f, fname_templ1), is_msg? "msg": "ctl"), fname_templ2);
-	
+
 	int const fd = mkstemp(f);
 	if (fd < 0)
-		(*do_report)(LOG_CRIT, "mkstemp failure: %s", strerror(errno));
+		(*do_report)(LOG_CRIT, "mkstemp(%s) failure: %s", f, strerror(errno));
 
 	return fd;
 }

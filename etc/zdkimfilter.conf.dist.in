@@ -126,7 +126,7 @@ all_mode = @zdkimfilter_mode@
 
 # add_auth_pass (bool)
 # Add an A-R field to signed outgoing messages.  The field just says auth=pass,
-# with the signing domain name, and no other details.  I can be signed (see
+# with the signing domain name, and no other details.  It can be signed (see
 # sign_hfields).  It may be useful for messages delivered on the same server,
 # which would get no A-R field otherwise.
 
