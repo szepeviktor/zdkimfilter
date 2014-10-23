@@ -17,7 +17,7 @@ CREATE TABLE domain (
   whitelisted TINYINT NOT NULL DEFAULT 0,
   since TIMESTAMP NOT NULL DEFAULT NOW(),
   last TIMESTAMP NOT NULL DEFAULT 0,
-  UNIQUE INDEX by_dom(domain)
+  INDEX by_dom(domain(16))
 )
 ENGINE = MyISAM
 CHARACTER SET ascii COLLATE ascii_general_ci;
@@ -30,7 +30,7 @@ CREATE TABLE msg_ref (
   message_in INT UNSIGNED NOT NULL COMMENT 'Foreign key to message_in',
   domain INT UNSIGNED NOT NULL COMMENT 'Foreign key to domain',
   reputation INT NOT NULL,
-  auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s', 'dnswl') NOT NULL,
+  auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s') NOT NULL,
   vbr ENUM ('spamhaus', 'who_else') NOT NULL,
   INDEX by_dom_msg(domain, message_in)
 )
@@ -105,6 +105,7 @@ ENGINE = MyISAM
 CHARACTER SET ascii COLLATE ascii_general_ci;
 
 
+
 delimiter //
 
 # Called by db_sql_insert_msg_ref:
@@ -114,32 +115,22 @@ DROP PROCEDURE IF EXISTS recv_from_domain//
 CREATE PROCEDURE recv_from_domain (
 	IN m_mi INT UNSIGNED,
 	IN m_domain VARCHAR(63),
-	IN m_auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s', 'dnswl'),
+	IN m_auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s'),
 	IN m_vbr VARCHAR(63),
 	IN m_rep INT)
 	MODIFIES SQL DATA
 BEGIN
 	DECLARE d_id INT UNSIGNED;
 	DECLARE d_white TINYINT;
-	BEGIN
-		DECLARE Empty_set CONDITION FOR 1329;
-		DECLARE CONTINUE HANDLER FOR Empty_set
-			BEGIN
-				# meanwhile, domain might have been inserted by another child
-				DECLARE Duplicate_entry CONDITION FOR 1062;
-				DECLARE CONTINUE HANDLER FOR Duplicate_entry
-					SELECT id, whitelisted INTO d_id, d_white
-						FROM domain WHERE domain = m_domain;
-				SET d_white = 0;
-				SET d_id = 0;
-				INSERT INTO domain SET domain = m_domain;
-				IF d_id = 0 THEN
-					SELECT LAST_INSERT_ID() INTO d_id;
-				END IF;
-			END;
-			SELECT id, whitelisted INTO d_id, d_white
-				FROM domain WHERE domain = m_domain;
-	END;
+	DECLARE Empty_set CONDITION FOR 1329;
+	DECLARE CONTINUE HANDLER FOR Empty_set
+		BEGIN
+			INSERT INTO domain SET domain = m_domain;
+			SELECT LAST_INSERT_ID() INTO d_id;
+			SET d_white = 0;
+		END;
+	SELECT id, whitelisted INTO d_id, d_white
+		FROM domain WHERE domain = m_domain;
 	IF d_white < 1 AND FIND_IN_SET('dkim', m_auth) THEN
 		# whitelisted=1 just affects the order of signature validation attempts
 		UPDATE domain SET whitelisted = 1,
@@ -252,17 +243,6 @@ GROUP BY d.id, r.auth ORDER BY cnt DESC LIMIT 10;
 SELECT count(*)
 FROM domain AS d, msg_ref AS r, message_in AS m
 WHERE d.id = r.domain AND r.message_in = m.id AND (d.since > NOW() - INTERVAL 1 DAY);
-
-
-# find how many domains are stored for each authentication method
-SELECT COUNT(*) as cnt, auth FROM msg_ref GROUP BY auth ORDER BY cnt DESC;
-
-# find what messages authenticated by a given domain have been received recently
-SELECT CONCAT_WS('.', LPAD(HEX(m.ino), 16, '0'), LPAD(HEX(m.mtime), 16, '0'), LPAD(HEX(m.pid), 8, '0')) AS id,
- m.date AS date, FROM_UNIXTIME(m.mtime) AS time, INET_NTOA(CONV(HEX(m.ip),16,10)) AS ip
-FROM domain AS d, msg_ref AS r, message_in AS m
-WHERE d.id = r.domain AND r.message_in = m.id AND d.domain='mailtrust.com'
-ORDER BY m.mtime DESC  LIMIT 4;
 
 
 # delete incoming messages older than 1 month

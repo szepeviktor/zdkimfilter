@@ -17,7 +17,7 @@ CREATE TABLE domain (
   whitelisted TINYINT NOT NULL DEFAULT 0,
   since TIMESTAMP NOT NULL DEFAULT NOW(),
   last TIMESTAMP NOT NULL DEFAULT 0,
-  UNIQUE INDEX by_dom(domain)
+  INDEX by_dom(domain(16))
 )
 ENGINE = MyISAM
 CHARACTER SET ascii COLLATE ascii_general_ci;
@@ -105,6 +105,7 @@ ENGINE = MyISAM
 CHARACTER SET ascii COLLATE ascii_general_ci;
 
 
+
 delimiter //
 
 # Called by db_sql_insert_msg_ref:
@@ -121,25 +122,15 @@ CREATE PROCEDURE recv_from_domain (
 BEGIN
 	DECLARE d_id INT UNSIGNED;
 	DECLARE d_white TINYINT;
-	BEGIN
-		DECLARE Empty_set CONDITION FOR 1329;
-		DECLARE CONTINUE HANDLER FOR Empty_set
-			BEGIN
-				# meanwhile, domain might have been inserted by another child
-				DECLARE Duplicate_entry CONDITION FOR 1062;
-				DECLARE CONTINUE HANDLER FOR Duplicate_entry
-					SELECT id, whitelisted INTO d_id, d_white
-						FROM domain WHERE domain = m_domain;
-				SET d_white = 0;
-				SET d_id = 0;
-				INSERT INTO domain SET domain = m_domain;
-				IF d_id = 0 THEN
-					SELECT LAST_INSERT_ID() INTO d_id;
-				END IF;
-			END;
-			SELECT id, whitelisted INTO d_id, d_white
-				FROM domain WHERE domain = m_domain;
-	END;
+	DECLARE Empty_set CONDITION FOR 1329;
+	DECLARE CONTINUE HANDLER FOR Empty_set
+		BEGIN
+			INSERT INTO domain SET domain = m_domain;
+			SELECT LAST_INSERT_ID() INTO d_id;
+			SET d_white = 0;
+		END;
+	SELECT id, whitelisted INTO d_id, d_white
+		FROM domain WHERE domain = m_domain;
 	IF d_white < 1 AND FIND_IN_SET('dkim', m_auth) THEN
 		# whitelisted=1 just affects the order of signature validation attempts
 		UPDATE domain SET whitelisted = 1,

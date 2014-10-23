@@ -814,16 +814,17 @@ static int read_fname(fl_parm* fl)
 #endif
 
 	unsigned p = read(fd, prof.buf, sizeof prof.buf);
-	for (prof.count = 0; prof.count < p;)
-	{
-		unsigned const len = prof.count + 1;
-		process_read_fname(&prof, fl);
-		if (prof.count == 0)
+	if (p != (unsigned) -1)
+		for (prof.count = 0; prof.count < p;)
 		{
-			p -= len;
-			memmove(&prof.buf[0], &prof.buf[len], p);
+			unsigned const len = prof.count + 1;
+			process_read_fname(&prof, fl);
+			if (prof.count == 0)
+			{
+				p -= len;
+				memmove(&prof.buf[0], &prof.buf[len], p);
+			}
 		}
-	}
 
 	if (fl->verbose >= 8)
 		fl_report(LOG_DEBUG, "reading %d names%s completed by first call",
