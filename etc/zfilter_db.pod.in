@@ -40,7 +40,7 @@ The first group controls the connection itself:
 
 =item B<db_backend>
 
-This is one of the DB engines supported bu OpenDBX, which include C<firebird>,
+This is one of the DB engines supported by OpenDBX, which include C<firebird>,
 C<mssql>, C<mysql>, C<oracle>, C<pgsql>, C<sqlite>, C<sqlite3>, and C<sybase>.
 The name C<test> is recognized internally and not passed to OpenDBX.
 
@@ -184,6 +184,9 @@ C<domain_ref>.
 This query is only issued if the previous query didn't return the key.  It can
 return the key too, if multi-statements are allowed.  If it doesn't, a second
 call to I<db_sql_select_domain> will be made.
+
+Be wary of double insertions, as multiple filters can be active at the same
+time.
 
 =item B<db_sql_update_domain>
 
@@ -654,7 +657,7 @@ Same as above, with a DKIM signature and a VBR vouch:
   $ zfilter_db -f test.conf \
   > --set-stats i example.com,dkim,vbr:dwl.spamhaus.org:all
 
-IN each case, the configured db queries are displayed.  Their effect can be
+In each case, the configured db queries are displayed.  Their effect can be
 verified using mysql client:
 
   mysql> SELECT INET_NTOA(CONV(HEX(m.ip),16,10)) AS ip,

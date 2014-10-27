@@ -11,7 +11,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010-2012 Alessandro Vesely
+Copyright (C) 2010-2014 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -103,8 +103,10 @@ struct filter_lib_struct
 
 	fl_callback filter_fn;
 	fl_callback after_filter;
+	sigset_t blockmask, allowset;
 
 	int ctl_count;
+	unsigned int all_mode:4;
 	unsigned int verbose:4;
 	unsigned int testing:4;
 	unsigned int batch_test:4;
@@ -355,13 +357,18 @@ FILE *fl_get_write_file(fl_parm *fl)
 			if (sz < 0 || (unsigned)sz >= sizeof buf ||
 				(fl->write_fname = strdup(buf)) == NULL)
 			{
-				fputs("ALERT:" THE_FILTER ": writename\n", stderr);
+				fl_report(LOG_CRIT, "writename %s", strerror(errno));
 				return NULL;
 			}
 		}
-		
+
 		if ((fl->write_fp = fopen(fl->write_fname, "w")) == NULL)
-			perror("ALERT:" THE_FILTER ": openwritename");
+		{
+			fl_report(LOG_CRIT, "cannot fopen %s: %s",
+				fl->write_fname, strerror(errno));
+			free(fl->write_fname);
+			fl->write_fname = NULL;
+		}
 	}
 	
 	return fl->write_fp;
@@ -814,11 +821,14 @@ static int read_fname(fl_parm* fl)
 #endif
 
 	unsigned p = read(fd, prof.buf, sizeof prof.buf);
-	if (p != (unsigned) -1)
+	if (p != (unsigned)(-1))
 		for (prof.count = 0; prof.count < p;)
 		{
 			unsigned const len = prof.count + 1;
 			process_read_fname(&prof, fl);
+			if (prof.empty)
+				break;
+
 			if (prof.count == 0)
 			{
 				p -= len;
@@ -883,7 +893,7 @@ static int read_fname(fl_parm* fl)
 	return rtc;
 }
 
-void fl_reset_signal(void)
+static void fl_reset_signal(void)
 {
 	struct sigaction act;
 	memset(&act, 0, sizeof act);
@@ -903,7 +913,7 @@ void fl_reset_signal(void)
 	sigaction(SIGUSR2, &act, NULL);
 }
 
-void fl_init_signal(init_signal_arg arg)
+static void fl_init_signal(fl_parm* fl)
 {
 	struct sigaction act;
 	memset(&act, 0, sizeof act);
@@ -911,26 +921,29 @@ void fl_init_signal(init_signal_arg arg)
 	
 	signal_timed_out = signal_break = signal_hangup = 0;
 	
-	if (!arg)
-	{
-		act.sa_flags = SA_NOCLDSTOP;
-		act.sa_handler = child_reaper;
-		sigaction(SIGCHLD, &act, NULL);
-		act.sa_flags = 0;
-	}
+	act.sa_flags = SA_NOCLDSTOP | SA_RESTART;
+	act.sa_handler = child_reaper;
+	sigaction(SIGCHLD, &act, NULL);
+	act.sa_flags = 0;
 	
+	act.sa_flags = SA_RESTART;
 	act.sa_handler = sig_catcher;
 	sigaction(SIGALRM, &act, NULL);
-	if (!arg)
-	{
-		sigaction(SIGPIPE, &act, NULL);
-		sigaction(SIGINT, &act, NULL);
-		sigaction(SIGTERM, &act, NULL);
-		sigaction(SIGHUP, &act, NULL);
-		sigaction(SIGUSR2, &act, NULL);
-		act.sa_handler = SIG_IGN;
-	}
-	sigaction(SIGUSR1, &act, NULL);
+	sigaction(SIGPIPE, &act, NULL);
+	sigaction(SIGINT, &act, NULL);
+	sigaction(SIGTERM, &act, NULL);
+	sigaction(SIGHUP, &act, NULL);
+	sigaction(SIGUSR2, &act, NULL);
+	sigaction(SIGUSR1, &act, NULL); // sigign?
+
+	sigemptyset(&fl->blockmask);
+	sigaddset(&fl->blockmask, SIGALRM);
+	sigaddset(&fl->blockmask, SIGPIPE);
+	sigaddset(&fl->blockmask, SIGINT);
+	sigaddset(&fl->blockmask, SIGTERM);
+	sigaddset(&fl->blockmask, SIGHUP);
+	sigaddset(&fl->blockmask, SIGUSR1);
+	sigaddset(&fl->blockmask, SIGUSR2);
 }
 
 static void do_the_real_work(fl_parm* fl)
@@ -1152,16 +1165,17 @@ static void fl_runchild(fl_parm* fl)
 		perror("ALERT:" THE_FILTER ": fork");
 }
 
-static int my_lf_accept(int listensock)
+static int my_lf_accept(int listensock, sigset_t *allowset)
 /*
 ** copied from courier/filters/libfilter/libfilter.c
 ** changed: different return code for shutting down (0 instead of -1)
+** changed: use pselect if available; assume signals are blocked on entry
 */
 {
 	struct sockaddr_un ssun;
 	fd_set fd0;
 	int fd;
-	int sunlen;
+	socklen_t sunlen;
 
 	if (listensock <= 0)
 		return 0;
@@ -1172,10 +1186,16 @@ static int my_lf_accept(int listensock)
 		FD_SET(0, &fd0);
 		FD_SET(listensock, &fd0);
  
-		if (select(listensock+1, &fd0, 0, 0, 0) < 0)
-		{
+#if HAVE_PSELECT
+		if (pselect(listensock+1, &fd0, 0, 0, 0, allowset) < 0)
+#else
+		sigset_t blockset;
+		sigprocmask(SIG_SETMASK, allowset, &blockset);
+		int rtc = select(listensock+1, &fd0, 0, 0, 0);
+		sigprocmask(SIG_SETMASK, &blockset, NULL);
+		if (rtc < 0)
+#endif
 			return -1;
-		}
 
 		if (FD_ISSET(0, &fd0))
 		{
@@ -1190,7 +1210,11 @@ static int my_lf_accept(int listensock)
 
 		sunlen = sizeof ssun;
 		if ((fd = accept(listensock, (struct sockaddr*)&ssun, &sunlen)) < 0)
+		{
+			if (errno == EAGAIN || errno == EINTR)
+				return -1; // changed for 1.3, was continue in any case;
 			continue;
+		}
 
 		fcntl(fd, F_SETFL, 0);  /* Take out of NDELAY mode */
 		break;
@@ -1487,41 +1511,71 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 	return rtc;
 }
 
-static int fl_init_socket(int all_mode)
+static int fl_init_socket(fl_parm *fl)
 {
-	int listensock;
-	const char *sockname, *tmpsockname;
-	struct sockaddr_un ssun;
-		
-	if (all_mode)
+	assert(fl);
+	assert(fl->argv0);
+
+	int listensock = -1;
+
+	char const *name = strrchr(fl->argv0, '/');
+	if (name) ++name;
+	else name = fl->argv0;
+
+	static const char dir[] = FILTERSOCKETDIR,
+		alldir[] = ALLFILTERSOCKETDIR;
+	size_t len = strlen(name) + 2 + sizeof alldir;
+	typedef int compiletime_assert_alldir_is_longer
+		[sizeof alldir >= sizeof dir? 1: -1];
+
+	char *sockname = malloc(len),
+		*tmpsockname = malloc(len),
+		*othername = malloc(len);
+	if (sockname && tmpsockname && othername)
 	{
-		sockname = ALLFILTERSOCKETDIR "/" THE_FILTER;
-		tmpsockname = ALLFILTERSOCKETDIR "/." THE_FILTER;
-		unlink(FILTERSOCKETDIR "/" THE_FILTER);
+		if (fl->all_mode)
+		{
+			strcat(strcat(strcpy(sockname, alldir), "/"), name);
+			strcat(strcat(strcpy(tmpsockname, alldir), "/."), name);
+			strcat(strcat(strcpy(othername, dir), "/"), name);
+		}
+		else
+		{
+			strcat(strcat(strcpy(sockname, dir), "/"), name);
+			strcat(strcat(strcpy(tmpsockname, dir), "/."), name);
+			strcat(strcat(strcpy(othername, alldir), "/"), name);
+		}
+
+		struct sockaddr_un ssun;
+		ssun.sun_family=AF_UNIX;
+		strcpy(ssun.sun_path, tmpsockname);
+		unlink(ssun.sun_path);
+		if ((listensock=socket(PF_UNIX, SOCK_STREAM, 0)) < 0 ||
+			bind(listensock, (struct sockaddr *)&ssun, sizeof(ssun)) < 0 ||
+			listen(listensock, SOMAXCONN) < 0 ||
+			chmod(ssun.sun_path, 0660) ||
+			rename (tmpsockname, sockname) ||
+			fcntl(listensock, F_SETFL, O_NDELAY) < 0)
+		{
+			fl_report(LOG_ALERT, "fl_init_socket failed: %s", strerror(errno));
+			if (listensock >= 0)
+			{
+				close(listensock);
+				listensock = -1;
+			}
+		}
+		else if (unlink(othername) && errno != ENOENT)
+			fl_report(LOG_ERR, "unlink(%s) failed: %s",
+				othername, strerror(errno));
+
+		if (listensock >= 0 && fl->verbose >= 6)
+			fl_report(LOG_INFO, "listening on %s", sockname);
 	}
-	else
-	{
-		sockname = FILTERSOCKETDIR "/" THE_FILTER;
-		tmpsockname = FILTERSOCKETDIR "/." THE_FILTER;
-		unlink(ALLFILTERSOCKETDIR "/" THE_FILTER);
-	}
-	
-	ssun.sun_family=AF_UNIX;
-	strcpy(ssun.sun_path, tmpsockname);
-	unlink(ssun.sun_path);
-	if ((listensock=socket(PF_UNIX, SOCK_STREAM, 0)) < 0 ||
-		bind(listensock, (struct sockaddr *)&ssun, sizeof(ssun)) < 0 ||
-		listen(listensock, SOMAXCONN) < 0 ||
-		chmod(ssun.sun_path, 0660) ||
-		rename (tmpsockname, sockname) ||
-		fcntl(listensock, F_SETFL, O_NDELAY) < 0)
-	{
-		perror("ALERT:" THE_FILTER ": fl_init_socket failed");
-		if (listensock >= 0)
-			close(listensock);
-		return (-1);
-	}
-	
+	// else malloc failure on init...
+
+	free(sockname);
+	free(tmpsockname);
+	free(othername);
 	return listensock;
 }
 
@@ -1582,7 +1636,8 @@ int fl_main(fl_init_parm const*fn, void *parm,
 	fl.parm = parm;
 	fl.verbose = sig_verbose = verbose;
 	fl.filter_fn = fn ? fn->filter_fn : NULL;
-	fl.argv0 = argv[0];
+	fl.argv0 = argv[0]? argv[0]: THE_FILTER;
+	fl.all_mode = all_mode != 0;
 	
 	for (i = 1; i < argc; ++i)
 	{
@@ -1611,7 +1666,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			}
 			else
 			{
-				fl_init_signal(init_signal_all);
+				fl_init_signal(&fl);
 				int (*const fl_fn)(fl_parm*, int, int, char*[]) =
 					fl.no_fork? &fl_runstdio: &fl_runtest;
 
@@ -1629,7 +1684,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		if (strcmp(arg, "--batch-test") == 0)
 		{
 			fl.batch_test = fl.testing = 1;
-			fl_init_signal(init_signal_all);
+			fl_init_signal(&fl);
 			if (fn->on_fork)
 				(*fn->on_fork)(&fl);
 			if (isatty(fileno(stdout)))
@@ -1670,8 +1725,8 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			fprintf(stderr, THE_FILTER ": cannot set process group\n");
 		*/
 
-		fl_init_signal(init_signal_all);
-		listensock = fl_init_socket(all_mode);
+		fl_init_signal(&fl);
+		listensock = fl_init_socket(&fl);
 
 		if (listensock < 0)
 			return 1;
@@ -1687,6 +1742,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		/*
 		* main loop
 		*/
+		sigprocmask(SIG_BLOCK, &fl.blockmask, &fl.allowset);
 		for (;;)
 		{
 			int fd;
@@ -1699,7 +1755,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 				run_sig_function(fn, &fl, sig);
 			}
 			
-			if ((fd = my_lf_accept(listensock)) <= 0)
+			if ((fd = my_lf_accept(listensock, &fl.allowset)) <= 0)
 			{
 				if (fd < 0) /* select interrupted */
 				{
@@ -1720,13 +1776,18 @@ int fl_main(fl_init_parm const*fn, void *parm,
 				break;
 			}
 			signal_timed_out = signal_break = 0;
+			sigprocmask(SIG_SETMASK, &fl.allowset, NULL);
+
 			fl.in = fl.out = fd;
 			fl.whence = fl_whence_before_fork;
 			if (fn->on_fork)
 				(*fn->on_fork)(&fl);
 			fl_runchild(&fl);
 			close(fd);
-		}
+
+			sigprocmask(SIG_BLOCK, &fl.blockmask, NULL);
+		} // end of loop
+		sigprocmask(SIG_SETMASK, &fl.allowset, NULL);
 	}
 
 	if ((fl.testing == 0 && fl.verbose >= 3 || fl.verbose >= 8) &&
