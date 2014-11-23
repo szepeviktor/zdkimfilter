@@ -2315,7 +2315,8 @@ static int verify_headers(verify_parms *vh)
 									++s;
 								char *const authserv_id = s;
 								int ch;
-								while (isalnum(ch = *(unsigned char*)s) || ch == '.')
+								while (isalnum(ch = *(unsigned char*)s) ||
+									strchr(".-_", ch) != NULL)
 									++s;
 								char *ea = s;
 								while (isspace(*(unsigned char*)s))
