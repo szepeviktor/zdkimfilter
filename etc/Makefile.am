@@ -8,8 +8,6 @@ CLEANFILES = zdkimfilter.conf.pod zdkimfilter.conf.5 zdkimfilter.8 \
  zfilter_db.1 dkimsign.1 redact.1
 
 if BUILD_DOC
-zdkimfilter.conf.pod: zdkimfilter.conf.dist $(srcdir)/conf2pod.pl
-	$(PERL) $(srcdir)/conf2pod.pl zdkimfilter.conf.dist
 
 .pod.1:
 	$(POD2MAN) @POD2MAN_OPTIONS@ --section=1 --name=$* $< $@
@@ -27,7 +25,7 @@ zdkimfilter.conf.pod: zdkimfilter.conf.dist $(srcdir)/conf2pod.pl
 
 endif
 
-sysfilterconfDATA_INSTALL = $(INSTALL) -m 640@PROGRAM_OWNER@
+INSTALL = /bin/sh $(top_builddir)/myinstall.sh
 
 sysfilterconfdir = @COURIER_SYSCONF_INSTALL@/filters
 sysfilterconf_DATA = zdkimfilter.conf.dist
@@ -40,8 +38,10 @@ install-data-hook:
 			echo existing $(DESTDIR)$(sysfilterconfdir)/zdkimfilter.conf preserved; \
 			echo --------------------------------------------------------------; \
 		else \
-			cp -p $(DESTDIR)$(sysfilterconfdir)/zdkimfilter.conf.dist \
-				$(DESTDIR)$(sysfilterconfdir)/zdkimfilter.conf; \
+			echo --------------------------------------------------------------; \
+			echo installed  $(DESTDIR)$(sysfilterconfdir)/zdkimfilter.conf.dist;  \
+			echo copy it to $(DESTDIR)$(sysfilterconfdir)/zdkimfilter.conf and edit; \
+			echo --------------------------------------------------------------; \
 		fi; \
 	fi
 

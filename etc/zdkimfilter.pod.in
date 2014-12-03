@@ -61,7 +61,8 @@ C<Received:> header field.  If the I<redact_received_auth> configuration option
 is set, zdkimfilter obscures it.  See L<redact(1)>.
 
 After signing an outgoing message, zdkimfilter logs to the database the list of
-domains that appeared in any RCPT command.  See L<zfilter_db(1)> for more
+domains that appeared in any RCPT command.  The database can be used for
+whitelisting and for rate-limiting users.  See L<zfilter_db(1)> for more
 details.
 
 =head2 Verifying

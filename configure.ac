@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.67])
-AC_INIT([zdkimfilter for courier],[1.2],[vesely@tana.it],[zdkimfilter])
+AC_INIT([zdkimfilter for courier],[1.3],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -10,7 +10,7 @@ AC_LANG([C])
 AC_USE_SYSTEM_EXTENSIONS
 AM_INIT_AUTOMAKE
 # dnl AC_PROG_MAKE_SET
-AC_CONFIG_HEADER([config.h])
+AC_CONFIG_HEADERS([config.h])
 
 # Checks for programs, this may alter CFLAGS
 AC_PROG_CC
@@ -510,11 +510,13 @@ AC_CONFIG_TESTDIR([tests], [src])
 AM_MISSING_PROG([AUTOM4TE], [autom4te])
 
 AC_CONFIG_FILES([Makefile
+                 myinstall.sh
                  src/Makefile
                  src/filedefs.h
                  etc/Makefile
                  etc/zdkimfilter.conf.dist
                  etc/zdkimfilter.pod
+                 etc/zdkimfilter.conf.pod
                  etc/dkimsign.pod
                  etc/redact.pod
                  etc/zfilter_db.pod

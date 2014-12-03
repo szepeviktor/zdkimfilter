@@ -1370,7 +1370,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 			
 			if (sleep_arg == 0)
 			{
-				if (isatty(fileno(stdout)))
+				if (isatty(fileno(stdout)) && isatty(fileno(stdin)))
 				{
 					fprintf(stdout, "%d: ", total);
 					fflush(stdout);
@@ -1687,7 +1687,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			fl_init_signal(&fl);
 			if (fn->on_fork)
 				(*fn->on_fork)(&fl);
-			if (isatty(fileno(stdout)))
+			if (isatty(fileno(stdout)) && isatty(fileno(stdout)))
 				fprintf(stdout,
 					THE_FILTER ": batch test. Type `?' for help.\n");
 			rtc = fl_run_batchtest(fn, &fl);

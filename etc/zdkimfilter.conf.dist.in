@@ -1,11 +1,9 @@
 # Config file for zdkimfilter
 # Syntax of each line: [ "#" comment ] | name [ "=" ] [ value ]
 # Backslashes ("\") can be used to wrap multiple physical lines into a single
-# logical one, also comments.  Valid names are shown below.
-# Value types can be strings, array of strings, integers, or boolean,
-# depending on the name.
-# Valid names (and types) are shown at the beginning of each comment; all
-# boolean values default to "N", and "Y" is assumed if the value is omitted.
+# logical one, also comments.  Only a few name/value settings are shown below,
+# see zdkimfilter.conf(5) and zfilter_db(1) man pages for a comprehensive list.
+#
 # NOTE: stop and reload zdkimfilter for any change to this file to take effect.
 
 # all_mode (bool)
@@ -14,239 +12,21 @@
 # global filter can whitelist the filters running after it.
 all_mode = @zdkimfilter_mode@
 
-# trust_a_r
+# trust_a_r (bool)
 # Don't remove any Authentication-Results: (A-R) header field.
 # Courier renames existing A-R fields since 0.71.0, if ALLOW_EXCLUSIVE is set.
 # Set this after enabling ALLOW_EXCLUSIVE.
 
 # verbose (int)
-# Loosely control the amount of output.
-# The filter prints to stderr, assuming that courier's logger will capture it
-# and send to syslog. Hence log entries can also be filtered by severity.
-# Verbosity and severity are not strictly related. Verbosity is tentatively
-# being used as follows (each level includes the preceding ones):
-#  0: startup issues or totally unexpected errors
-#  1: failures or unexpected events
-#  2: unexpected A-R found on verify, missing domain on sign
-#  3: start/stop info, relevant verify results, sign errors, response except 250
-#  4: response returned to courier for each message
-#  5: verify errors except no signature
-#  6: domain/selector used on signing, any A-R field found
-#  7: no key on signing; no signature and count of A-R written on verify
-#  8: more debugging
-# default:
-# verbose = 3
+# default: verbose = 3
 
 # domain_keys (string)
-# Directory for domain private keys.
-# File names should be identical to the domain name:
-# If user@example.com sends via authenticated smtp, then zdkimfilter looks
-# for a file named example.com in this directory.
+# Directory for domain private keys.  See zdkimfilter(8) for examples.
 # Default: domain_keys = @COURIER_SYSCONF_INSTALL@/filters/keys
 
-# header_canon_relaxed (bool)
-# body_canon_relaxed (bool)
-# Canonicalization for header/body can be simple or relaxed.
-
-# sign_rsa_sha1 (bool)
-# The signing algorithm can be either rsa-sha1 or rsa-sha256.  RFC 6376 says
-# signers should use rsa-sha256, which is the default (sign_rsa_sha1 0).
-
-# key_choice_header (string)
-# Header fields from where to determine the signing domain.  This is an array
-# of strings, empty by default.  The elements of this array can be header
-# fields names or one the special symbols dash ("-") and star ("*"), in order
-# of decreasing preference.
-# Field names are searched in the message's header, and the domain name is
-# derived from any mailbox specification in their value.  For star ("*"), the
-# domain name is derived from the authenticated user id, if it contains a "@",
-# otherwise the default_domain is used.  For dash ("-"), the default_domain is
-# used.  A list of domain names and corresponding keys is obtained that way,
-# the first key, if any, is used for signing.  For example, with
-#
-#  key_choice_header = from -
-#
-# then if a key and possibly a selector are defined for the domain in the From
-# header field, then they are used for signing, otherwise the default domain
-# (defined below) is used, irrespectively of the authenticated user id.
-#
-# The default value of this option is:
-# key_choice_header *
-
-# default_domain (string)
-# It is used if no domain can be derived from authenticated user id or dash
-# ("-") specified in the previous option.  Empty by default.
-
-# selector (string)
-# In case a selector cannot be determined following a soft link, then the
-# selector specified here, if any, or the constant "s" will be used.
-
-# sign_hfields (array)
-# header fields to be signed.
-# This is a space-separated list of header field names.
-# The default value is implemented in OpenDKIM according to RFC 6376 Sec. 5.4:
-#  sign_hfields = From Reply-To Subject Date To Cc In-Reply-To References \
-#    Resent-Date Resent-From Resent-Sender Resent-To Resent-Cc \
-#    List-Id List-Help List-Unsubscribe List-Subscribe List-Post List-Owner \
-#    List-Archive
-
-# skip_hfields (array)
-# header fields not to be signed; they are discarded at an earlier stage.
-# This is a space-separated list of header field names.
-# The default value is implemented in OpenDKIM according to RFC 6376 Sec. 5.4:
-#  skip_hfields = Return-Path Received Comments Keywords
-
-# no_signlen (bool)
-# Set this to avoid specifying the l= parameter of the body length.  Specifying
-# the length allows the addition of text at the bottom of messages, so it is
-# considered more permissive.
-
-# redact_received_auth (string)
-# Rewrite the value of AUTH: in Courier's Received: header field.  That value
-# is the login id, so it is useful to know it.  However, it may be a privacy
-# violation and it may help password crackers.  Full-featured redaction
-# provides for replacing the given value with an obscured string obtained by
-# scrambling the original value and a secret text.  In that case, the redact
-# utility can reconstruct the value, possibly up to character case, if the
-# secret text did not change.  If the redaction is not fully functional,
-# because it was not compiled in, a warning is logged on startup and the
-# obscured string is a constant.
-#
-# Just the first Received: field where AUTH: matches the authenticated user
-# is changed.
-#
-# NOTE: don't configure for signing Received: or changing it will break the
-# signature.
-#
-# NOTE: the scrambling used for obfuscation is NOT cryptographically secure.
-#
-# To enable this behavior, specify some secret text (1 to 256 chars) here.
-# For example:
-#  redact_received_auth = This is the secret text (change and uncomment)
-
-# add_auth_pass (bool)
-# Add an A-R field to signed outgoing messages.  The field just says auth=pass,
-# with the signing domain name, and no other details.  It can be signed (see
-# sign_hfields).  It may be useful for messages delivered on the same server,
-# which would get no A-R field otherwise.
-
-# tmp (string)
-# Temporary directory. libopendkim uses /var/tmp by default.
-# If you specify a value like /tmp/*, then zdkimfilter attempts to mkdir of
-# it if it cannot stat it, on loading.
-
-# tempfail_on_error (bool)
-# On some errors, e.g. out of memory, return 432 to have the sender retry;
-# otherwise, just let the msg through unfiltered.
-
-# blocked_user_list (string)
-# Filename of the list of blocked users.  Users on this list can only send to
-# the postmaster at the signing domain, if they authenticate.  This list is
-# automatically updated when the query db_sql_check_user returns a non-zero
-# reason.  It can be updated at any time (creating a temporary file and then
-# moving it can avoid race conditions.)  zdkimfilter keeps the file in memory
-# and reloads it when it realizes that it changed.
-
-# no_spf (bool)
-# If Courier sets Received-SPF: pass for sender or helo, that is reported in
-# A-R.  This option may prevent such behavior.
-
-# save_from_anyway (bool)
-# Use the From: header field even if it's not authenticated.  This allows to
-# insert more messages in the database.
-
-# add_a_r_anyway (bool)
-# Add an A-R field also if no signature nor other results had been found.
-
-# report_all_sigs (bool)
-# If multiple signatures are found, normally only the most important ones
-# are reported in the A-R field.  By enabling this option, all the signatures
-# are reported, in order of decreasing importance.
-
-# max_signatures (int)
-# The abolutely maximum number of signatures.  Messages having more signatures
-# than that are considered denial of service (DoS) attacks and rejected
-# outright.  The default value is 128.
-
-# honor_author_domain (bool)
-# reject_on_nxdomain (bool)
-# The filter may reject or drop messages according to ADSP.  The three
-# conditions that may cause this behavior are as follows:
-#
-#   nxdomain:    the author's address, as given in the "From:" header, contains
-#                a non-existing domain name.
-#   all:         the author domain specifies a policy whereby all messages must
-#                have an author domain signature, but this messages has none.
-#   discardable: as case all, but the author domain further asks that
-#                non-compliant messages be just discarded, in order to avoid
-#                useless backscatter.
-#
-# When ADSP is enabled, the filter honors author domain's policy --that is, the
-# second and third cases above cause reject and drop respectively-- unless an
-# authenticated domain is whitelisted in the database, vouched by a trusted VBR
-# (see the next option), or authenticated by dnswl=pass.  Any of SPF and DKIM
-# authentications are valid to establish whitelisting, but only "MAIL FROM" SPF
-# and DKIM can be used for VBR.
-#
-# Rejecting on nxdomain can be enabled separately.  This catches invalid From:
-# like <john.doe@NOSPAM.example.com>, typical of some mailing lists.
-#
-# When ADSP is disabled, the filter never rejects nor drops messages.  If one
-# of the cases above is detected, the A-R field will have a line specifying
-# the result as dkim-adsp=nxdomain (for nxdomain), dkim-adsp=fail (for all), or
-# dkim-adsp=discard (for discardable).
-#
-# If any user may subscribe to a mailing list, enabling ADSP will result in
-# malfunctions when someone publishes a non-default ADSP policy.  Conversely,
-# unless you can prevent your users from subscribing to mailing lists, don't
-# publish an ADSP policy different from "unknown".  (Publishing "unknown" may
-# result in better caching, though.)
-
-# do_reputation (bool)
-# make a query to dkim-reputation.org for the signer and author domain.  The
-# result is reported in A-R for method "x-dkim-rep" according to the next two
-# options.
-
-# reputation_fail (int)
-# Any values greater or equal than this are reported as "fail".
-# Default: reputation_fail = 32767
-
-# reputation_pass (int)
-# Any values less or equal to this are reported as "pass".
-# Values V in between, reputation_pass < V < reputation_fail, are reported
-# as "neutral". According to dkim-reputation.org, 0 is neutral and positive
-# values give an estimate of the spamminess of a given user. They reserve
-# negative values for whitelisting. Their range is thus -1000 <= rep <= 1000.
-# Default: reputation_pass = -32768
-
-# reputation_root (string)
-# The host to be queried for reputation.  Default as defined in libopendkim.
-# See http://www.dkim-reputation.org.
-
-# trusted_vouchers (array)
-# A space-separated list of trusted vouchers.  If a message has VBR-Info
-# header fields with trusted vouchers (mv) and the domain is authenticated by
-# DKIM or SPF (md), then the vouchers are queried to confirm the vouch and
-# "pass" of "fail" results are written for the "vbr" method of A-R.  See
-# RFC 5518 and RFC 6212.  The default is an empty string, which skips VBR-Info
-# processing altogether (in previous version:  no_dwl = Y.)
-#
-# For example, to enable Spamhaus' Domain White List add their mv value here:
-#  trusted_vouchers = dwl.spamhaus.org
-# See http://www.spamhauswhitelist.com/en/about.html for more info.
-
-# trusted_dnswl (array)
-# A space-separated list of trusted dns zones.  When an A-R field that contains
-# "dnswl=pass" is found, if the dns.zone is trusted and the result contains a
-# policy.txt with a domain name in it, the domain in the policy.txt is
-# associated to the message.  At most one domain can get associated this way.
-#
-# The default is "list.dnswl.zone".  Unless you know a different operator that
-# does the same service, it shouldn't be necessary to modify this default,
-# because the lookup has to be configured in Courier's sysconfdir/esmtpd.  If
-# you use a local server, e.g. downloading rbldns data from dnswl.org, you can
-# configure the correct display zone rather than change this default.  For
-# example:
-#   -allow=dnswl.local=list.dnswl.org,DNSWL,
-# (note the trailing comma, which is necessary to query the TXT record too.)
+# Canonicalization for header or body can be simple or relaxed.  Set it to
+# relaxed in order to lower the likelihood of breaking signatures.  Uncomment
+# the following two lines to do so.
+# header_canon_relaxed
+# body_canon_relaxed
 

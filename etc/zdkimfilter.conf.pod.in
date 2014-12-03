@@ -1,0 +1,479 @@
+=pod
+
+=head1 NAME
+
+zdkimfilter.conf - zdkimfilter(8) configuration file
+
+=head1 SYNTAX
+
+The file consists of zero or more lines. 
+
+I<logic line> = [ C<#> I<comment> ] | I<name> [ C<=> ] [ I<value> ]
+
+Backslashes (C<\>) can be used to wrap multiple physical lines into a single 
+logical one, also comments.  Valid names are shown below.
+Value types can be strings, array of strings, integers, or boolean, 
+depending on the name. 
+
+=head1 NOTE
+
+For any change to the configuration file to take effect, zdkimfilter has
+to be restarted.  It is currently unable to re-read the configuration,
+hence it is necessary to do, for example, I<courierfilter stop> and then
+I<courierfilter start>.  Use I<dkimsign>(1) to check if the file is valid.
+
+
+=head1 OPTIONS
+
+Valid names and their types are listed below.  All boolean values 
+default to C<N>, while C<Y> is assumed if the name is specified but the 
+value is omitted.  Most values default to NULL, but the program behaves 
+differently.  For other cases, the default values are mentioned after 
+the relevant description.
+
+
+The database options, C<db_*>, are documented in I<zfilter_db>(1).
+
+=over
+
+
+=item B<all_mode> bool
+
+Courier runs all-mode filters after non-all-mode ones, in alphabetical order. 
+Non-all-mode filters can be whitelisted by local filters. In addition, any 
+global filter can whitelist the filters running after it. 
+
+
+=item B<trust_a_r> bool
+
+Don't remove any Authentication-Results: (A-R) header field. 
+Courier renames existing A-R fields since 0.71.0, if ALLOW_EXCLUSIVE is set. 
+Set this option after enabling ALLOW_EXCLUSIVE in Courier's I<esmtpd>.
+
+
+=item B<verbose> int
+
+Additional control on the amount of output.
+The filter prints to stderr, assuming that Courier's logger will capture it and
+send to syslog. Hence the amount of output can also be filtered by severity. 
+Verbosity and severity are not strictly related.  Verbosity is tentatively 
+being used as follows (each level includes the preceding ones): 
+
+=over
+
+=item B<0>
+
+Startup issues and totally unexpected errors.
+
+=item B<1>
+
+Failures and unexpected events.
+
+=item B<2>
+
+Unexpected Authentication-Results fields found on verifying.
+Missing domain on signing.
+
+=item B<3>
+
+Start/stop info, relevant verify results, sign errors, responses except 250.
+
+=item B<4>
+
+Response returned to Courier for each message.
+
+=item B<5>
+
+Verify errors, except no signature found.
+
+=item B<6>
+
+Domain/selector used on signing, any A-R field found.
+
+=item B<7>
+
+No key on signing.  No signature and count of Authentication-Results fields
+written on verifying.
+
+=item B<8>
+
+More debugging; for example, I<key_choice_header> processing.
+
+=back
+
+default: verbose = 3.
+
+
+=item B<domain_keys> string
+
+Directory for domain private keys.
+
+File names should match the domain name; for example, when signing for
+user@example.com, zdkimfilter looks for a file named F<example.com> in this
+directory.  If the file is a symbolic link, the basename of the target file
+is be used as the selector.  See the I<signing> section of zdkimfilter(8) for
+examples.
+
+Default: domain_keys = @COURIER_SYSCONF_INSTALL@/filters/keys 
+
+=item B<header_canon_relaxed> bool
+
+=item B<body_canon_relaxed> bool
+
+Canonicalization for header/body can be simple or relaxed. 
+
+
+=item B<sign_rsa_sha1> bool
+
+The signing algorithm can be either rsa-sha1 or rsa-sha256.  RFC 6376 says 
+signers should use rsa-sha256, which is the default (sign_rsa_sha1 0). 
+
+
+=item B<key_choice_header> string
+
+Header fields that determine the signing domain.  This is an array 
+of strings.  An element of the array can be either a header field name
+leading to a mailbox name, or one two special tokens, dash (C<->) and star
+(C<*>), which have the following meaning:
+
+=over
+
+=item B<->
+
+Dash refers to the I<default_domain>.
+
+=item B<*>
+
+Star refers to the user domain, if any, or the I<default_domain>.  The user
+domain is found in the authenticated user id, if it contains a C<@>.  The
+authenticated user id is determined by the relevant authentication module (it
+may or may not equal the id that an authenticated user typed).
+
+=back
+
+The array elements are in order of decreasing preference.  Field names are
+looked up in the message header, and the domain name is derived from any
+mailbox specification found in their value.
+
+For example, with 
+
+=over
+
+key_choice_header = from -
+
+=back
+
+then if a key and possibly a selector are defined for the domain in the From: 
+header field, then they are used for signing, otherwise the default domain 
+is used, irrespectively of the authenticated user id.
+
+If the array is empty, the default, the user domain is used.  That is, the
+filter behaves as if:
+
+=over
+
+key_choice_header *
+
+=back
+
+Z<>
+
+=item B<default_domain> string
+
+It is used if no domain can be derived from authenticated user id or dash 
+(C<->) specified in the previous option.  Empty by default. 
+
+
+=item B<selector> string
+
+In case a selector cannot be determined following a soft link, then the 
+selector specified here, if any, or the constant C<s> will be used. 
+
+
+=item B<sign_hfields> array
+
+header fields to be signed. 
+This is a space-separated list of header field names.
+The default value is implemented in OpenDKIM according to RFC 6376 Sec. 5.4: 
+
+=over
+
+sign_hfields = From Reply-To Subject Date To Cc In-Reply-To References 
+Resent-Date Resent-From Resent-Sender Resent-To Resent-Cc 
+List-Id List-Help List-Unsubscribe List-Subscribe List-Post List-Owner 
+List-Archive
+
+
+=back
+
+Z<>
+
+=item B<skip_hfields> array
+
+header fields not to be signed; they are discarded at an earlier stage. 
+This is a space-separated list of header field names. 
+The default value is implemented in OpenDKIM according to RFC 6376 Sec. 5.4: 
+
+
+=over
+
+skip_hfields = Return-Path Received Comments Keywords
+
+
+=back
+
+Z<>
+
+=item B<no_signlen> bool
+
+Set this to avoid specifying the l= parameter of the body length.  Specifying 
+the length allows the addition of text at the bottom of messages, so it is 
+considered more permissive. 
+
+
+=item B<redact_received_auth> string
+
+Rewrite the value of AUTH: in Courier's Received: header field.  That value 
+is the login id, so it is useful to know it.  However, it may be a privacy 
+violation and it may help password crackers.  Full-featured redaction 
+provides for replacing the given value with an obscured string obtained by 
+scrambling the original value and a secret text.  In that case, the redact 
+utility can reconstruct the value, possibly up to character case, if the 
+secret text did not change.  If the redaction is not fully functional, 
+because it was not compiled in, a warning is logged on startup and the 
+obscured string is a constant. 
+
+
+Just the first Received: field where AUTH: matches the authenticated user 
+is changed. 
+
+
+NOTE: don't configure for signing Received: or changing it will break the 
+signature. 
+
+
+NOTE: the scrambling used for obfuscation is NOT cryptographically secure. 
+
+
+To enable this behavior, specify some secret text (1 to 256 chars) here. 
+For example: 
+
+
+=over
+
+redact_received_auth = This is the secret text (change and uncomment)
+
+
+=back
+
+Z<>
+
+=item B<add_auth_pass> bool
+
+Add an A-R field to signed outgoing messages.  The field just says auth=pass, 
+with the signing domain name, and no other details.  It can be signed (see 
+sign_hfields).  It may be useful for messages delivered on the same server, 
+which would get no A-R field otherwise. 
+
+
+=item B<tmp> string
+
+Temporary directory. libopendkim uses /var/tmp by default. 
+If you specify a value like /tmp/*, then zdkimfilter attempts to mkdir of 
+it if it cannot stat it, on loading. 
+
+
+=item B<tempfail_on_error> bool
+
+On some errors, e.g. out of memory, return 432 to have the sender retry; 
+otherwise, just let the msg through unfiltered. 
+
+
+=item B<blocked_user_list> string
+
+Filename of the list of blocked users.  Users on this list can only send to 
+the postmaster at the signing domain, if they authenticate.  This list is 
+automatically updated when the query db_sql_check_user returns a non-zero 
+reason.  It can be updated at any time (creating a temporary file and then 
+moving it can avoid race conditions.)  zdkimfilter keeps the file in memory 
+and reloads it when it realizes that it changed. 
+
+
+=item B<no_spf> bool
+
+If Courier sets Received-SPF: pass for sender or helo, that is reported in 
+A-R.  This option may prevent such behavior. 
+
+
+=item B<save_from_anyway> bool
+
+Use the From: header field even if it's not authenticated.  This allows to 
+insert more messages in the database. 
+
+
+=item B<add_a_r_anyway> bool
+
+Add an A-R field also if no signature nor other results had been found. 
+
+
+=item B<report_all_sigs> bool
+
+If multiple signatures are found, normally only the most important ones 
+are reported in the A-R field.  By enabling this option, all the signatures 
+are reported, in order of decreasing importance. 
+
+
+=item B<max_signatures> int
+
+The abolutely maximum number of signatures.  Messages having more signatures 
+than that are considered denial of service (DoS) attacks and rejected 
+outright.  The default value is 128. 
+
+
+=item B<honor_author_domain> bool
+
+=item B<reject_on_nxdomain> bool
+
+The filter may reject or drop messages according to ADSP.  The three 
+conditions that may cause this behavior are as follows: 
+
+
+=over
+
+
+=item B<nxdomain>
+
+the author's address, as given in the C<From:> header, contains 
+a non-existing domain name. 
+
+=item B<all>
+
+the author domain specifies a policy whereby all messages must 
+have an author domain signature, but this messages has none. 
+
+=item B<discardable>
+
+as case all, but the author domain further asks that 
+non-compliant messages be just discarded, in order to avoid 
+useless backscatter. 
+
+=back
+
+
+When ADSP is enabled, the filter honors author domain's policy --that is, the 
+second and third cases above cause reject and drop respectively-- unless an 
+authenticated domain is whitelisted in the database, vouched by a trusted VBR 
+(see the next option), or authenticated by dnswl=pass.  Any of SPF and DKIM 
+authentications are valid to establish whitelisting, but only "MAIL FROM" SPF 
+and DKIM can be used for VBR. 
+
+
+Rejecting on nxdomain can be enabled separately.  This catches invalid From: 
+like E<lt>john.doe@NOSPAM.example.comE<gt>, typical of some mailing lists. 
+
+
+When ADSP is disabled, the filter never rejects nor drops messages.  If one 
+of the cases above is detected, the A-R field will have a line specifying 
+the result as dkim-adsp=nxdomain (for nxdomain), dkim-adsp=fail (for all), or 
+dkim-adsp=discard (for discardable). 
+
+
+If any user may subscribe to a mailing list, enabling ADSP will result in 
+malfunctions when someone publishes a non-default ADSP policy.  Conversely, 
+unless you can prevent your users from subscribing to mailing lists, don't 
+publish an ADSP policy different from C<unknown>.  (Publishing C<unknown> may 
+result in better caching, though.) 
+
+
+=item B<do_reputation> bool
+
+make a query to dkim-reputation.org for the signer and author domain.  The 
+result is reported in A-R for method C<x-dkim-rep> according to the next two 
+options. 
+
+
+=item B<reputation_fail> int
+
+Any values greater or equal than this are reported as C<fail>. 
+Default: reputation_fail = 32767 
+
+
+=item B<reputation_pass> int
+
+Any values less or equal to this are reported as C<pass>. 
+Values V in between, reputation_pass E<lt> V E<lt> reputation_fail, are reported 
+as C<neutral>. According to dkim-reputation.org, 0 is neutral and positive 
+values give an estimate of the spamminess of a given user. They reserve 
+negative values for whitelisting. Their range is thus -1000 E<lt>= rep E<lt>= 1000. 
+Default: reputation_pass = -32768 
+
+
+=item B<reputation_root> string
+
+The host to be queried for reputation.  Default as defined in libopendkim. 
+See http://www.dkim-reputation.org. 
+
+
+=item B<trusted_vouchers> array
+
+A space-separated list of trusted vouchers.  If a message has VBR-Info 
+header fields with trusted vouchers (mv) and the domain is authenticated by 
+DKIM or SPF (md), then the vouchers are queried to confirm the vouch and 
+C<pass> of C<fail> results are written for the C<vbr> method of A-R.  See 
+RFC 5518 and RFC 6212.  The default is an empty string, which skips VBR-Info 
+processing altogether (in previous version:  no_dwl = Y.) 
+
+
+For example, to enable Spamhaus' Domain White List add their mv value here: 
+
+
+=over
+
+trusted_vouchers = dwl.spamhaus.org
+
+
+=back
+
+See http://www.spamhauswhitelist.com/en/about.html for more info. 
+
+
+=item B<trusted_dnswl> array
+
+A space-separated list of trusted dns zones.  When an A-R field that contains 
+C<dnswl=pass> is found, if the dns.zone is trusted and the result contains a 
+policy.txt with a domain name in it, the domain in the policy.txt is 
+associated to the message.  At most one domain can get associated this way. 
+
+
+The default is C<list.dnswl.zone>.  Unless you know a different operator that 
+does the same service, it shouldn't be necessary to modify this default, 
+because the lookup has to be configured in Courier's sysconfdir/esmtpd.  If 
+you use a local server, e.g. downloading rbldns data from dnswl.org, you can 
+configure the correct display zone rather than change this default.  For 
+example: 
+
+
+=over
+
+=item -allow=dnswl.local=list.dnswl.org,DNSWL,
+
+
+=back
+
+(note the trailing comma, which is necessary to query the TXT record too.) 
+
+=back
+
+
+=head1 AUTHOR
+
+
+Alessandro Vesely E<lt>vesely@tana.itE<gt>
+
+
+=head1 SEE ALSO
+
+
+B<courier>(8), B<zdkimfilter>(8), B<zfilter_db>(1)
+
+

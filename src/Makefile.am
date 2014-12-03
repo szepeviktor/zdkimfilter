@@ -11,6 +11,8 @@ filterexecdir = @COURIER_FILTER_INSTALL@
 filterexec_PROGRAMS = zdkimfilter
 filterexecPROGRAMS_INSTALL = $(INSTALL_PROGRAM)@PROGRAM_OWNER@
 
+INSTALL_PROGRAM = /bin/sh $(top_builddir)/myinstall.sh
+
 zdkimfilter_SOURCES = zdkimfilter.c filterlib.c parm.c myvbr.c redact.c \
  database.c ip_to_hex.c util.c
 zdkimfilter_LDADD = @OPENDKIM_LIB@ @RESOLVER_LIB@ @NETTLE_LIB@ @OPENDBX_LIB@
