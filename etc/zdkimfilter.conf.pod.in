@@ -288,6 +288,11 @@ it if it cannot stat it, on loading.
 On some errors, e.g. out of memory, return 432 to have the sender retry; 
 otherwise, just let the msg through unfiltered. 
 
+=item B<add_ztags> bool
+
+DKIM signatures can have a copy of signed header fields values inside the
+signature field itself, tag C<z=>.  That does not affect verification, but can
+be useful when investigating the reasons why a signature does not verify.
 
 =item B<blocked_user_list> string
 
@@ -321,6 +326,13 @@ Add an A-R field also if no signature nor other results had been found.
 If multiple signatures are found, normally only the most important ones 
 are reported in the A-R field.  By enabling this option, all the signatures 
 are reported, in order of decreasing importance. 
+
+
+=item B<verify_one_domain> bool
+
+If signatures by multiple domains are found, and database logging is enabled,
+all domains are verified.  By enabling this option, only the first domain is
+verified, in order of decreasing importance.
 
 
 =item B<max_signatures> int

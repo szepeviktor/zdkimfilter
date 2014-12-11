@@ -253,11 +253,13 @@ static config_conf const conf[] =
 	CONFIG(parm_t, add_auth_pass, "Y/N", assign_char),
 	CONFIG(parm_t, tmp, "temp directory", assign_ptr), // by dkimsign.c
 	CONFIG(parm_t, tempfail_on_error, "Y/N", assign_char),
+	CONFIG(parm_t, add_ztags, "Y/N, Y for debug z=", assign_char),
 	CONFIG(parm_t, blocked_user_list, "filename", assign_ptr),
 	CONFIG(parm_t, no_spf, "Y/N", assign_char),
 	CONFIG(parm_t, save_from_anyway, "Y/N", assign_char),
 	CONFIG(parm_t, add_a_r_anyway, "Y/N", assign_char),
 	CONFIG(parm_t, report_all_sigs, "Y/N", assign_char),
+	CONFIG(parm_t, verify_one_domain, "Y/N", assign_char),
 	CONFIG(parm_t, max_signatures, "int", assign_int),
 	CONFIG(parm_t, honor_author_domain, "Y=enable ADSP", assign_char),
 	CONFIG(parm_t, reject_on_nxdomain, "Y=procrustean ADSP", assign_char),

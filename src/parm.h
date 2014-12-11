@@ -35,7 +35,7 @@ static char const default_config_file[] =
 
 /*
 * each option has to be defined in three places: in one of the structures below,
-* in the conf[] array in parm.c, and in etc/zdkimfilter.conf.dist.in
+* in the conf[] array in parm.c, and in one of the pod.in
 */
 typedef struct parm_t
 {
@@ -62,6 +62,7 @@ typedef struct parm_t
 	char add_a_r_anyway;
 	char add_auth_pass;
 	char report_all_sigs;
+	char verify_one_domain;
 	char no_spf;
 	char no_signlen;
 	char tempfail_on_error;
@@ -73,6 +74,7 @@ typedef struct parm_t
 	char header_canon_relaxed;
 	char body_canon_relaxed;
 	char save_from_anyway;
+	char add_ztags;
 } parm_t;
 
 typedef struct db_parm_t

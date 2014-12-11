@@ -53,22 +53,22 @@ typedef struct domain_prescreen
 	int whitelisted;  // value retrieved from db
 	union flags_as_an_int_or_bitfields
 	{
-		struct flags_as_bitfields
+		struct flags_as_bitfields            // (quoted db_ flag name)
 		{
-			unsigned int sig_is_ok:1;      // dkim authenticated
+			unsigned int sig_is_ok:1;         // dkim authenticated ("dkim")
 			unsigned int has_vbr:1;
 			unsigned int vbr_is_trusted:1;
-			unsigned int vbr_is_ok:1;      // verified trusted vbr
-			unsigned int is_trusted:1;     // whitelisted > 2
-			unsigned int is_whitelisted:1; // whitelisted > 1
-			unsigned int is_known:1;       // whitelisted > 0
-			unsigned int is_from:1;        // author_domain
-			unsigned int is_dnswl:1;       // domain of dnswl address
-			unsigned int is_mfrom:1;       // spf authenticated
-			unsigned int is_helo:1;        // spf_helo auth
+			unsigned int vbr_is_ok:1;         // verified trusted vbr ("vbr")
+			unsigned int is_trusted:1;        // whitelisted > 2
+			unsigned int is_whitelisted:1;    // whitelisted > 1
+			unsigned int is_known:1;          // whitelisted > 0
+			unsigned int is_from:1;           // author_domain ("author")
+			unsigned int is_dnswl:1;          // domain of dnswl address ("dnswl")
+			unsigned int is_mfrom:1;          // spf authenticated ("spf")
+			unsigned int is_helo:1;           // spf_helo auth ("spf_helo")
 			unsigned int looks_like_helo:1;
-			unsigned int is_reputed:1;
-			unsigned int is_reputed_signer:1;
+			unsigned int is_reputed:1;        // ("rep")
+			unsigned int is_reputed_signer:1; // ("rep_s")
 		} f;
 		unsigned int all;
 	} u;

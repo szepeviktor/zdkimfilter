@@ -183,11 +183,13 @@ redact_received_auth     = NULL (any text)
 add_auth_pass            = N (Y/N)
 tmp                      = . (temp directory)
 tempfail_on_error        = N (Y/N)
+add_ztags                = N (Y/N, Y for debug z=)
 blocked_user_list        = NULL (filename)
 no_spf                   = N (Y/N)
 save_from_anyway         = N (Y/N)
 add_a_r_anyway           = N (Y/N)
 report_all_sigs          = N (Y/N)
+verify_one_domain        = N (Y/N)
 max_signatures           = 128 (int)
 honor_author_domain      = N (Y=enable ADSP)
 reject_on_nxdomain       = N (Y=procrustean ADSP)
@@ -709,6 +711,7 @@ AT_CLEANUP
 #
 AT_SETUP([Whitelisted both ways, SPF ignored])
 ZF_CONFIG(3, [reject_on_nxdomain
+verify_one_domain
 db_backend test
 db_sql_whitelisted other.example:2 sender.example:2
 ])

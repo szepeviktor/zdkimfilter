@@ -1354,6 +1354,8 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 {
 	int rtc = 0;
 	int mypipe[2];
+	int const interactive = isatty(fileno(stdout)) && isatty(fileno(stdin));
+
 	if (pipe(mypipe) == 0)
 	{
 		FILE *fp = fdopen(mypipe[1], "w");
@@ -1362,6 +1364,9 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 		
 		fl->in = mypipe[0];
 		fl->out = 1; // stdout
+		if (interactive)
+			fprintf(stdout,
+				THE_FILTER ": batch test. Type `?' for help.\n");
 
 		while (!feof(stdin) && fl_keep_running())
 		{
@@ -1370,7 +1375,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 			
 			if (sleep_arg == 0)
 			{
-				if (isatty(fileno(stdout)) && isatty(fileno(stdin)))
+				if (interactive)
 				{
 					fprintf(stdout, "%d: ", total);
 					fflush(stdout);
@@ -1687,9 +1692,6 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			fl_init_signal(&fl);
 			if (fn->on_fork)
 				(*fn->on_fork)(&fl);
-			if (isatty(fileno(stdout)) && isatty(fileno(stdout)))
-				fprintf(stdout,
-					THE_FILTER ": batch test. Type `?' for help.\n");
 			rtc = fl_run_batchtest(fn, &fl);
 			break;
 		}

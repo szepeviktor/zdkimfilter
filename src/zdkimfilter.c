@@ -1401,7 +1401,7 @@ typedef struct verify_parms
 	vbr_info *vbr;  // store of all VBR-Info fields
 
 	vbr_check_result vbr_result;  // vbr_result.resp is malloc'd
-	
+
 	// not malloc'd or maintained elsewhere
 	dkimfl_parm *parm;
 	char *dkim_domain;
@@ -1417,10 +1417,6 @@ typedef struct verify_parms
 
 	// number of domains, elements of domain_ptr
 	int ndoms;
-	
-	// dkim domains with special characteristics
-	int have_whitelisted;
-	int have_trusted_vbr;
 
 	int presult;
 	int dkim_reputation;
@@ -1560,9 +1556,16 @@ and then conveyed to ctlfile 'f' (COMCTLFILE_FROMMTA).  E.g.
 static int
 domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 /*
-* Setup the domain list (dps) that will be eventually be passed to the database.
-* Domains are drawn from the signature array and from a number of relevant
-* domain names (from, mfrom, helo, and dnswl).
+* Setup the domain prescreen that will eventually be passed to the database.
+* Domains are drawn from the signature array and from other authentication
+* methods yielding a domain name (from, mfrom, helo, and dnswl).
+*
+* vh->domain_head = dps_head is a linked list of domains, while domain_ptr is
+* an array of sorted pointers.  Two temporary arrays are used, sigs_mirror is
+* a signature-to-domain map, and sigs copy is a swap area.
+*
+* Signatures are not yet verified at this time (sort affects verify order).
+*
 * return -1 for fatal error, number of domains otherwise
 */
 {
@@ -1656,7 +1659,6 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 						}
 						dps->sigval += 500;
 						dps->u.f.is_whitelisted = 1;
-						vh->have_whitelisted += 1;
 					}
 					dps->sigval += 500;
 					dps->u.f.is_known = 1;
@@ -1679,7 +1681,6 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 						{
 							dps->sigval += vbr_factor * (vbr_count - trust) + 200;
 							dps->u.f.vbr_is_trusted = 1;
-							vh->have_trusted_vbr += 1;
 						}
 					}
 				}
@@ -1702,7 +1703,7 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 				{
 					helo_k = dps->u.f.is_helo = 1;
 					vh->helo_dps = dps;
-					dps->sigval += 15;      // ralay's signature
+					dps->sigval += 15;      // relay's signature
 				}
 				else if (helolen)
 				{
@@ -1963,17 +1964,19 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 
 	int const ndoms = vh->ndoms;
 	domain_prescreen **const domain_ptr = vh->domain_ptr;
-	
-	int whitelisted = vh->have_whitelisted;
-	int trusted_vbr = vh->have_trusted_vbr;
+
 	int const do_all = vh->parm->z.report_all_sigs;
-	int done_one = 0;
+	int const verify_all = do_all ||
+		(vh->parm->dwa != NULL && !vh->parm->z.verify_one_domain);
+	char const save_from_anyway = vh->parm->z.save_from_anyway;
+
+	int do_more_sigs = 1;
 
 	for (int c = 0; c < ndoms; ++c)
 	{
 		domain_prescreen *const dps = domain_ptr[c];
 		dps->sigval = 0; // reuse for number of verified signatures
-		if (dps->nsigs > 0) // TODO option for verifying only dps->u.all != 0
+		if (dps->nsigs > 0)
 		{
 			for (int n = 0; n < dps->nsigs; ++n)
 			{
@@ -1981,11 +1984,11 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 				assert(ndx >= 0 && ndx < nsigs);
 				DKIM_SIGINFO *const sig = sigs[ndx];
 				unsigned int const sig_flags = dkim_sig_getflags(sig);
-				if ((sig_flags & DKIM_SIGFLAG_IGNORE) == 0 &&
+				if (do_more_sigs &&
+					(sig_flags & DKIM_SIGFLAG_IGNORE) == 0 &&
 					dkim_sig_process(dkim, sig) == DKIM_STAT_OK &&
 					sig_is_good(sig))
 				{
-					done_one = 1;
 					dps->u.f.sig_is_ok = 1;
 					dps->sigval += 1;
 					if (vh->dps == NULL)
@@ -2000,48 +2003,53 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 						vh->author_dps = dps;
 					}
 
-					if (trusted_vbr > 0 && dps->u.f.vbr_is_trusted)
+					if (dps->u.f.vbr_is_trusted)
 					{
-						--trusted_vbr;
 						if (run_vbr_check(vh, dps) == 0)
 						{
 							vh->vbr_sig = sig;
 							vh->vbr_dps = dps;
 							dps->u.f.vbr_is_ok = 1;
 							dps->vbr_mv = vh->vbr_result.mv;
-							trusted_vbr = 0; // one is enough
 						}
 					}
 
-					if (whitelisted && dps->u.f.is_whitelisted)
+					if (dps->u.f.is_whitelisted)
 					{
 						vh->whitelisted_sig = sig;
 						vh->whitelisted_dps = dps;
-						whitelisted = 0;
 					}
 
 					if (!do_all)
+					{
+						do_more_sigs = verify_all;
 						break;
+					}
 				}
-				else
-				/*
-				* It was useless to check whitelisting / trusted VBR on unverified
-				* domains, and we now undo that counting.  An alternative approach
-				* could have provided for checking those after signature validation.
-				* We check whitelisting / trusted VBR in advance, and then attempt
-				* signature validation in the resulting order:  Signature validation
-				* costs more than local lookup.
-				*/
+			}
+
+			if (dps->sigval == 0)
+			/*
+			* We assumed signatures were valid and we erred.  This domain is not
+			* DKIM-authenticated, so undo flagging.  An alternative approach is to
+			* check whitelisting / trusted VBR after signature validation.  We
+			* check  in advance, and then attempt signature validation in the
+			* resulting order:  Signature validation costs more than local lookup.
+			*/
+			{
+				if (!save_from_anyway)
+					dps->u.f.is_from = 0;
+				if (dps->u.f.is_dnswl == 0 &&
+					dps->u.f.is_mfrom == 0 &&
+					dps->u.f.is_helo == 0)
 				{
-					if (dps->u.f.is_whitelisted)
-						--whitelisted;
-					if (dps->u.f.vbr_is_trusted)
-						--trusted_vbr;
+					dps->whitelisted = 0;
+					dps->u.f.is_trusted = 0;
+					dps->u.f.is_whitelisted = 0;
+					dps->u.f.is_known = 0;
 				}
 			}
 		}
-		if (done_one && do_all == 0 && whitelisted <= 0 && trusted_vbr <= 0)
-			break;
 	}
 
 	return DKIM_CBSTAT_CONTINUE;
@@ -2422,6 +2430,19 @@ static int verify_headers(verify_parms *vh)
 			{
 				status = dkim_header(dkim, start + dkim_unrename, len);
 				err = status != DKIM_STAT_OK;
+				if (err && status == DKIM_STAT_SYNTAX)
+				{
+					err = 0;
+					if (parm->z.verbose >= 5)
+					{
+						char *bad_eol = strchr(start, '\r');
+						if (bad_eol)
+							*bad_eol = 0;
+						fl_report(LOG_ERR,
+							"id=%s: bad header field \"%s\": Syntax error (5)",
+							parm->dyn.info.id, start);
+					}
+				}
 			}
 			else
 			{
@@ -3752,6 +3773,8 @@ int main(int argc, char *argv[])
 				options |= DKIM_LIBFLAGS_SIGNLEN;
 			if (!parm.z.report_all_sigs)
 				options |= DKIM_LIBFLAGS_VERIFYONE;
+			if (parm.z.add_ztags)
+				options |= DKIM_LIBFLAGS_ZTAGS;
 			nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_FLAGS,
 				&options, sizeof options) != DKIM_STAT_OK;
 		}

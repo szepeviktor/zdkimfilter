@@ -11,19 +11,15 @@ B<zfilter_db> [I<option> [I<option-arg>... ]...
 
 =head1 DESCRIPTION
 
-Signing messages, as well as publishing SPF records that result in a C<pass>,
-implies claiming some responsibility for the messages thus associated to the
-pertinent domain.  Such associations aid abuse handling by providing natural
-targets for complaints, as specified by RFC 6650.  Mail admins have to use a
-database to keep track of feedback loops, both incoming and outgoing ones.
-Moreover, counting complaints and hard bounces may result in useful metrics.
-However, it is not straightforward to devise how to integrate zdkimfilter's
-logging capabilities with either an existing database or one designed anew:
-A test environment is in order, and that's what B<zfilter_db> provides.
+This man page describes the database options of zdkimfilter, and then documents
+this tool.  A database can aid the operations of an abuse desk by keeping track
+of which domains send and receive mail.  Indexing this data by domain name
+rather than by IP number is what DKIM is all about.  Zdkimfilter can help
+maintaining the database, and can make decisions based on whitelisting.
+However, the database is not required for basic sign and verify operations.
 
 B<zfilter_db> connects to the database so as to exercise the database
-configuration options.  This man page first describes such options and
-gives an example.  Then, it describes how this tool can be used for testing.
+configuration options.  
 
 The database connection is done via OpenDBX.  See the documentation at
 http://www.linuxnetworks.de/doc/index.php/OpenDBX for how some options are
@@ -32,7 +28,7 @@ mapped to specific backends.
 
 =head1 CONFIGURATION OPTIONS
 
-The database options in zdkimfilter configuration all start with C<db_>.
+The database options in zdkimfilter configuration start with C<db_>.
 There are three groups of them:  Connection, options proper, and queries.
 The first group controls the connection itself:
 
@@ -109,8 +105,17 @@ This is the single item:
 
 =item B<db_sql_whitelisted>
 
-It can use two variables: C<domain>, an authenticated domain name; and
-C<ip>, the IP address of the client.
+It can use two variables:
+
+=over
+
+=item B<domain>
+
+An authenticated domain name.
+
+=item B<ip>
+
+The IP number of the client.
 
 =back
 
@@ -127,38 +132,115 @@ the other queries are issued after messages have been dealt with.
 =head2 Common variables
 
 There are twelve variables that can be used in all of the following queries.
-They are: C<ino>, C<mtime>, and C<pid>, as used by Courier to identify a
-message; C<from>, C<date>, C<message_id>, C<subject>, C<content_type>, and
-C<content_encoding> from the corresponding header fields in the message;
-C<mailing_list>, which is 1 if the message has some header fields that are
-typical of mailing lists; C<envelope_sender> for the bounce address; and
-C<ip> for the client IP address.
+They are:
+
+=over
+
+=item B<ino>, B<mtime>, and B<pid>
+
+These are the values used by Courier to identify a message, the inode, the date
+and the process-id.
+
+=item B<from>, B<date>, B<message_id>, B<subject>, B<content_type>, and
+B<content_encoding>
+
+These are the header fields in the message.
+
+=item B<mailing_list>
+
+This flag is 1 if the message has some header fields that are
+typical of mailing lists.  Some C<List-*> fields, C<Precedence:list>, and
+C<Mailing-List:>.
+
+=item B<envelope_sender>
+
+The bounce address, also known as envelop from or mailfrom.
+
+=item B<ip>
+
+The client IP address, as binary.
+
+=back
 
 =head2 Log of incoming messages
 
 Incoming messages, after any valid DKIM signature or SPF authentication has
-been seen, can be logged to the database by defining some or all of these
-queries.  Besides common variables, the queries in this group can log two
+been seen, can be logged to the database by defining some or all of the
+queries below.  Besides common variables, the queries in this group can log two
 additional sets of variables, one for the message as a whole, and one for each
 domain.
 
-The first set consists of C<message_status>, which is one of the three values
-C<accept>, C<reject>, and C<drop>; C<adsp_flags>, which is a comma separated
-list of one of the three possible values of the policy, C<unknown>, C<all>,
-and C<discardable>, along with C<found>, in case C<unknown> was not inferred,
-and possibly C<fail> and C<whitelisted>; C<received_count> the number of
-C<Received:> header fields; and C<signatures_count> for the number of DKIM
-signatures.
+=head3 incoming message variables
 
-The second set of variables can be only used by all but one of the queries in
-this group.  It contains the variables C<domain>, the name; C<reputation>, the
-integer found via the DKIM-reputation query, see L<zdikimfilter.conf(5)>;
-C<vbr_mv>, the one of the I<trusted_vouchers> that confirmed a VBR claim;
-C<vbr_response> the actual string returned by the VBR query; and C<auth_type>,
-a comma separated list of the following tokens:  C<author> for author domain
-signature, C<spf>, C<spf_helo>, C<dkim>, and C<vbr> for the corresponding
-authentication methods, C<rep> and C<rep_s> for domains involved in DKIM
-reputation as subjects and/or signers respectively.
+=over
+
+=item B<message_status>
+
+This is one of the three values: C<accept>, C<reject>, and C<drop>.
+
+=item B<adsp_flags>
+
+A comma separated list of tokens.  One of the three possible values of the
+policy, C<unknown>, C<all>, and C<discardable>;  along with C<found>, in case
+the (unknown) status was not inferred, and possibly C<fail> and C<whitelisted>.
+
+=item B<received_count>
+
+The number of C<Received:> header fields.
+
+=item B<signatures_count>
+
+The number of DKIM signatures.
+
+=back
+
+=head3 incoming domain variables
+
+The second set of variables can also be used by queries in this group, except
+for C<db_sql_insert_message>.
+
+=over
+
+=item B<domain>
+
+The domain name.
+
+=item B<reputation>
+
+The integer found via the DKIM-reputation query, if enabled
+(see L<zdikimfilter.conf(5)>).
+
+=item B<vbr_mv>
+
+The one of I<trusted_vouchers> that confirmed a VBR claim.
+
+=item B<vbr_response>
+
+The actual string returned by the VBR query.
+
+=item B<auth_type>
+
+A comma separated list of the following tokens:
+
+=over
+
+=item B<author>
+
+For author domain signature.
+
+=item B<spf>, B<spf_helo>, B<dkim>, B<dnswl>, and B<vbr>
+
+For the corresponding authentication methods.
+
+=item B<rep> and B<rep_s>
+
+For domains involved in DKIM reputation as subjects and/or signers respectively.
+
+=back
+
+=back
+
+=head3 incoming message queries
 
 =over
 
