@@ -37,10 +37,12 @@ To avoid losing old domain data, one can create a new table and rename it:
 In either case, replace procedure recv_from_domain.
 
 
-Bug fixes:
-=========
+Bug fixes and other changes:
+===========================
 Domains with non-alnum chars (hyphen) didn't work --thanks to Ilmar Kruis.
 
 'author' and similar flags were set in messages even if DKIM signature failed.
 
+Drop log line (verbose>=1) changed from dropped,From-MTA=... to drop msg,id=...
+at LOG_INFO (was LOG_ERR).  Other logging cleaned up a bit (see ChangeLog).
 

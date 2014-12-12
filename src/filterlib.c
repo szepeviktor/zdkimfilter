@@ -51,7 +51,7 @@ the resulting work.
 #include <errno.h>
 #include <ctype.h>
 #include <syslog.h>
-#include <stdarg.h> 
+#include <stdarg.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -124,10 +124,11 @@ static void child_reaper(int sig)
 	pid_t child;
 
 	(void)sig;
-	
+
 	while ((child = waitpid(-1, &status, WNOHANG)) > 0)
 	{
 		--live_children;
+
 #if !defined(NDEBUG)
 		if (sig_verbose >= 8)
 		{
@@ -155,7 +156,7 @@ static inline int my_getpid(void)
 static void sig_catcher(int sig)
 {
 #if !defined(NDEBUG)
-	if (sig_verbose > 0)
+	if (sig_verbose >= 1)
 	{
 		char buf[80];
 		unsigned s = snprintf(buf, sizeof buf,
@@ -180,12 +181,12 @@ static void sig_catcher(int sig)
 		case SIGUSR2:
 			signal_hangup = sig;
 			break;
-		
+
 		case SIGPIPE:
 		case SIGINT:
 		case SIGQUIT:
 		case SIGTERM:
-			signal_break = 1;
+			signal_break = sig;
 			break;
 		default:
 			break;
@@ -200,7 +201,7 @@ void fl_alarm(unsigned seconds)
 	if (sigaction(SIGALRM, NULL, &oact) != 0 ||
 		oact.sa_handler != &sig_catcher)
 			fprintf(stderr, "SIGALRM not correct!!\n");
-#endif	
+#endif
 	signal_timed_out = 0;
 	alarm(seconds);
 }
@@ -370,7 +371,7 @@ FILE *fl_get_write_file(fl_parm *fl)
 			fl->write_fname = NULL;
 		}
 	}
-	
+
 	return fl->write_fp;
 }
 
@@ -413,7 +414,7 @@ void fl_report(int severity, char const* fmt, ...)
 			logmsg = "DEBUG";
 			break;
 	}
-	
+
 	fprintf(stderr, "%s:" THE_FILTER "[%d]:", logmsg, my_getpid());
 	va_list ap;
 	va_start(ap, fmt);
@@ -628,11 +629,11 @@ char *fl_rcpt_next(fl_rcpt_enum* fre)
 
 
 /* ----- drop message ----- */
-static int count_recipients(FILE *fp, char **from_mta)
+static int count_recipients(FILE *fp, char** msgid)
 {
 	int count = 0;
 	char buf[2048];
-	
+
 	if (fseek(fp, 0, SEEK_SET) != 0)
 		return -1;
 
@@ -647,12 +648,11 @@ static int count_recipients(FILE *fp, char **from_mta)
 			while ((c = fgetc(fp)) != EOF && c != '\n')
 				continue;
 		}
-		
+
 		if (buf[0] == 'r')
 			++count;
-		else if (buf[0] == 'f' && from_mta && *from_mta == NULL)
-			*from_mta = strdup(&buf[1]);
-		
+		else if (buf[0] == 'M' && msgid && *msgid == NULL)
+			*msgid = strdup(&buf[1]);
 	}
 	if (ferror(fp) || fseek(fp, 0, SEEK_END) != 0)
 		return -1;
@@ -664,8 +664,8 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 {
 	int ctl = 0, rtc = 0;
 	time_t tt;
-	char *from_mta = NULL;
-	
+	char *msgid = NULL;
+
 	if (fl->verbose >= 7)
 	{
 		fprintf(stderr,
@@ -680,14 +680,14 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 		int irtc = 0, goterrno = 0;
 		ctl_fname_chain *cfc = cfc_shift(&fl->cfc);
 		FILE *fp;
-		
+
 		++ctl;
 		errno = 0;
 		fp = fopen(cfc->fname, "r+");
 		if (fp)
 		{
 			int i;
-			int const count = count_recipients(fp, &from_mta);
+			int const count = count_recipients(fp, &msgid);
 #if COURIERSUBMIT_WANTS_UGLY_HACK
 			/*
 			** the ugly hack: since submit writes various records
@@ -701,12 +701,12 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 			*/
 			fprintf(fp, "%254s\n", "");
 #endif
-			
+
 			for (i = 0; i < count && !ferror(fp); ++i)
 				fprintf(fp, "I%d R 250 Dropped.\nS%d %ld\n",
 					i, i, (long)tt);
 			fprintf(fp, "C%ld\n", (long)tt);
-			
+
 			if (count < 0 || ferror(fp))
 			{
 				irtc = 1;
@@ -727,7 +727,7 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 			irtc = 1;
 			goterrno = errno;
 		}
-		
+
 		if (irtc)
 		{
 			rtc = irtc;
@@ -735,24 +735,20 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 				THE_FILTER "[%d]: error on ctl file %d/%d (%s): %s\n",
 				my_getpid(), ctl, fl->ctl_count, cfc->fname, strerror(goterrno));
 		}
-		else if (fl->verbose)
+		else if (fl->verbose >= 1)
 		/*
 		** main logging function
 		** (given as error as the rest of refused messages)
 		*/
 		{
-			fprintf(stderr,
-				"ERR:dropped,From-MTA=<%s>: "
-				THE_FILTER "[%d]: %s",
-				from_mta ? from_mta : "",
-				my_getpid(),
-				reason ? reason : "w/o apparent reason\n");
+			fl_report(LOG_INFO,
+				"drop msg,id=%s: %s", msgid? msgid: "", reason? reason: "dropped");
 		}
-		
+
 		free(cfc);
 	}
-	
-	free(from_mta);
+
+	free(msgid);
 	return rtc;
 }
 
@@ -777,7 +773,7 @@ static void process_read_fname(process_fname *prof, fl_parm* fl)
 
 #if !defined(NDEBUG)
 		if (fl->verbose >= 8)
-			fprintf(stderr, THE_FILTER 
+			fprintf(stderr, THE_FILTER
 				"[%d]: piped fname[%d]: %s (len=%u)\n",
 				my_getpid(), prof->found, prof->buf, prof->count);
 #endif
@@ -820,6 +816,7 @@ static int read_fname(fl_parm* fl)
 			my_getpid(), fd);
 #endif
 
+	fl_alarm(30);
 	unsigned p = read(fd, prof.buf, sizeof prof.buf);
 	if (p != (unsigned)(-1))
 		for (prof.count = 0; prof.count < p;)
@@ -836,12 +833,11 @@ static int read_fname(fl_parm* fl)
 			}
 		}
 
-	if (fl->verbose >= 8)
-		fl_report(LOG_DEBUG, "reading %d names%s completed by first call",
-			prof.found, prof.empty == 0? " not": "");
+	if (fl->verbose >= 8 && prof.empty == 0)
+		fl_report(LOG_DEBUG, "reading %d names not completed by first call",
+			prof.found);
 
 	// read any remaining info, one byte at a time to find the empty line
-	fl_alarm(30);
 	while (prof.count < sizeof prof.buf && prof.empty == 0 && fl_keep_running())
 	{
 		p = read(fd, &prof.buf[prof.count], 1);
@@ -865,9 +861,9 @@ static int read_fname(fl_parm* fl)
 			break;
 		}
 
-		process_read_fname(&prof, fl);		
+		process_read_fname(&prof, fl);
 	}
-	
+
 	alarm(0);
 	fl->ctl_count = prof.found - 1;
 	if (!fl_keep_running() || prof.found < 2 ||
@@ -913,28 +909,28 @@ static void fl_reset_signal(void)
 	sigaction(SIGUSR2, &act, NULL);
 }
 
-static void fl_init_signal(fl_parm* fl)
+static void fl_init_signal(fl_parm *fl)
 {
 	struct sigaction act;
 	memset(&act, 0, sizeof act);
 	sigemptyset(&act.sa_mask);
-	
+
 	signal_timed_out = signal_break = signal_hangup = 0;
-	
+
 	act.sa_flags = SA_NOCLDSTOP | SA_RESTART;
 	act.sa_handler = child_reaper;
 	sigaction(SIGCHLD, &act, NULL);
-	act.sa_flags = 0;
-	
+
 	act.sa_flags = SA_RESTART;
 	act.sa_handler = sig_catcher;
+
 	sigaction(SIGALRM, &act, NULL);
 	sigaction(SIGPIPE, &act, NULL);
 	sigaction(SIGINT, &act, NULL);
 	sigaction(SIGTERM, &act, NULL);
 	sigaction(SIGHUP, &act, NULL);
-	sigaction(SIGUSR2, &act, NULL);
 	sigaction(SIGUSR1, &act, NULL); // sigign?
+	sigaction(SIGUSR2, &act, NULL);
 
 	sigemptyset(&fl->blockmask);
 	sigaddset(&fl->blockmask, SIGALRM);
@@ -1179,13 +1175,13 @@ static int my_lf_accept(int listensock, sigset_t *allowset)
 
 	if (listensock <= 0)
 		return 0;
-	
+
 	for (;;)
 	{
 		FD_ZERO(&fd0);
 		FD_SET(0, &fd0);
 		FD_SET(listensock, &fd0);
- 
+
 #if HAVE_PSELECT
 		if (pselect(listensock+1, &fd0, 0, 0, 0, allowset) < 0)
 #else
@@ -1600,7 +1596,7 @@ static int is_courierfilter(int verbose)
 		{
 			rtc = 0;
 		}
-		else if (verbose)
+		else if (verbose >= 1)
 			fprintf(stderr, THE_FILTER ": cannot fstat 3: %s\n",
 				strerror(errno));
 	}
@@ -1610,7 +1606,7 @@ static int is_courierfilter(int verbose)
 		fprintf(stderr, THE_FILTER ": fd 3 has mode=%lx size=%ld fstype=%.*s\n",
 			(unsigned long)stat.st_mode,
 			(unsigned long)stat.st_size,
-#if HAVE_ST_FSTYPE_STRING			
+#if HAVE_ST_FSTYPE_STRING
 			(int)sizeof stat.st_fstype,
 			stat.st_fstype);
 #else
@@ -1622,7 +1618,7 @@ static int is_courierfilter(int verbose)
 		if (stat.st_size > 1) // available to read
 			rtc = 0;
 	}
-	
+
 	if (rtc == 0)
 		fprintf(stderr, THE_FILTER ": bad fd3: invalid call\n");
 #else
@@ -1634,7 +1630,7 @@ static int is_courierfilter(int verbose)
 int fl_main(fl_init_parm const*fn, void *parm,
 	int argc, char *argv[], int all_mode, int verbose)
 {
-	int rtc = 0, wait_child = 5, i;
+	int rtc = 0;
 	fl_parm fl;
 
 	memset(&fl, 0, sizeof fl);
@@ -1643,8 +1639,8 @@ int fl_main(fl_init_parm const*fn, void *parm,
 	fl.filter_fn = fn ? fn->filter_fn : NULL;
 	fl.argv0 = argv[0]? argv[0]: THE_FILTER;
 	fl.all_mode = all_mode != 0;
-	
-	for (i = 1; i < argc; ++i)
+
+	for (int i = 1; i < argc; ++i)
 	{
 		char const *const arg = argv[i];
 
@@ -1754,9 +1750,13 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			if (sig != 0)
 			{
 				signal_hangup = 0;
+				sigprocmask(SIG_SETMASK, &fl.allowset, NULL);
 				run_sig_function(fn, &fl, sig);
+				sigprocmask(SIG_BLOCK, &fl.blockmask, NULL);
+				if (signal_hangup)
+					continue;
 			}
-			
+
 			if ((fd = my_lf_accept(listensock, &fl.allowset)) <= 0)
 			{
 				if (fd < 0) /* select interrupted */
@@ -1796,26 +1796,21 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		live_children == 0)
 			fl_report(LOG_INFO, "exiting");
 
-	wait_child += live_children;
+	int wait_child = 5 + live_children;
 
-#if !defined(NDEBUG)
-	i = getenv("DEBUG_FILTER") ? 1 : 0;
-	if (i == 1 && live_children == 1 &&
+	if (getenv("DEBUG_FILTER") && live_children == 1 &&
 		fl_get_test_mode(&fl) == fl_testing)
 	{
 		fprintf(stderr, THE_FILTER
 			": leaving the child running for dbg\n");
 		return rtc;
 	}
-#else
-	i = 0;
-#endif
 
-	while (live_children > 0 && wait_child >= 0)
+	while (live_children > 0 && wait_child >= 0 && signal_break == 0)
 	{
 		int nsec =  live_children*3;
 
-		if (fl.batch_test == 0 && i == 0)
+		if (fl.batch_test == 0 && fl.verbose == 0)
 			fprintf(stderr, THE_FILTER "[%d]: waiting for %d child(ren)\n",
 				my_getpid(), live_children);
 
