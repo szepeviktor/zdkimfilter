@@ -958,7 +958,7 @@ ZF_RUN,
 [050 Message dropped.
 ],
 [INFO:zdkimfilter[[0]]:id=policymsg: adsp=discardable policy: author.example, no VBR and no whitelist
-ERR:dropped,From-MTA=<TesT>: zdkimfilter[[0]]: adsp=discard
+INFO:zdkimfilter[[0]]:drop msg,id=policymsg: adsp=discard
 ])
 AT_CLEANUP
 
@@ -2211,4 +2211,38 @@ AT_CHECK([grep 'domain: ' database_dump], 0, [domain: sender.example
 AT_CHECK([grep 'auth_type: ' database_dump], 0, [auth_type: dnswl
 ], [])
 AT_CLEANUP
+
+#
+AT_SETUP([Reload config after signing])
+ZF_CONFIG(6, [default_domain example.com
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+sleep 1
+sighup
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+AT_CLEANUP
+
 

@@ -134,9 +134,10 @@ typedef struct dkimfl_parm
 	fl_parm *fl;
 	db_work_area *dwa;
 
+	char const *config_fname; // static (either default or argv)
+	parm_t z;
 	per_message_parm dyn;
 	blocked_user_list blocklist;
-	parm_t z;
 
 	// other
 	char pid_created;
@@ -328,6 +329,14 @@ static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
 		}
 	}
 
+
+	if (parm->z.verbose >= 4 &&
+		parm->z.redact_received_auth && !redact_is_fully_featured())
+			fl_report(LOG_WARNING,
+				"Option redact_received_header is set in %s,"
+				" but it is not fully featured.", fname);
+
+	parm->config_fname = fname;
 	return errs;
 }
 
@@ -2905,7 +2914,7 @@ static void verify_message(dkimfl_parm *parm)
 					else // drop, and stop filtering
 					{
 						fl_pass_message(parm->fl, "050 Message dropped.\n");
-						fl_drop_message(parm->fl, "adsp=discard\n");
+						fl_drop_message(parm->fl, "adsp=discard");
 						if (parm->dyn.stats)
 							parm->dyn.stats->drop = 1;
 					}
@@ -3381,9 +3390,17 @@ static void block_user(dkimfl_parm *parm, char *reason)
 			failed_action, fname, strerror(failed_errno));
 }
 
+static inline dkimfl_parm *get_parm(fl_parm *fl)
+{
+	assert(fl);
+	dkimfl_parm **parm = (dkimfl_parm**)fl_get_parm(fl);
+	assert(parm && *parm);
+	return *parm;
+}
+
 static void after_filter_stats(fl_parm *fl)
 {
-	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	dkimfl_parm *parm = get_parm(fl);
 
 	if (parm && parm->dwa && parm->dyn.stats)
 	{
@@ -3426,7 +3443,7 @@ static inline void enable_dwa(dkimfl_parm *parm)
 static void dkimfilter(fl_parm *fl)
 {
 	static char default_jobid[] = "NULL";
-	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	dkimfl_parm *parm = get_parm(fl);
 	parm->fl = fl;
 
 	fl_get_msg_info(fl, &parm->dyn.info);
@@ -3515,7 +3532,7 @@ static void dkimfilter(fl_parm *fl)
 */
 static void report_config(fl_parm *fl)
 {
-	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	dkimfl_parm *parm = get_parm(fl);
 
 	void *parm_target[PARM_TARGET_SIZE];
 	parm_target[parm_t_id] = &parm->z;
@@ -3533,7 +3550,7 @@ static void set_keyfile(fl_parm *fl)
 	assert(fl);
 	
 	dkim_query_t qtype = DKIM_QUERY_FILE;
-	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	dkimfl_parm *parm = get_parm(fl);
 	static char keyfile[] = "KEYFILE";
 	
 	assert(parm);
@@ -3598,7 +3615,7 @@ static void set_policyfile(fl_parm *fl)
 {
 	assert(fl);
 
-	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	dkimfl_parm *parm = get_parm(fl);
 
 	assert(parm);
 	
@@ -3622,7 +3639,7 @@ static const char pid_file[] = ZDKIMFILTER_PID_FILE;
 static void write_pid_file(fl_parm *fl)
 {
 	assert(fl);
-	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	dkimfl_parm *parm = get_parm(fl);
 	assert(parm);
 
 	FILE *fp = fopen(pid_file, "w");
@@ -3655,11 +3672,113 @@ static void check_blocked_user_list(fl_parm *fl)
 */
 {
 	assert(fl);
-	dkimfl_parm *parm = (dkimfl_parm *)fl_get_parm(fl);
+	dkimfl_parm *parm = get_parm(fl);
 	assert(parm);
 
 	parm->fl = fl;
 	update_blocked_user_list(parm);
+}
+
+static int init_dkim(dkimfl_parm *parm)
+{
+	parm->dklib = dkim_init(NULL, NULL);
+	if (parm->dklib == NULL)
+	{
+		fl_report(LOG_ERR, "dkim_init fault");
+		return 1;
+	}
+
+	int nok = 0;
+	if (!parm->z.no_signlen || !parm->z.report_all_sigs)
+	{
+		unsigned int options = 0;
+		nok |= dkim_options(parm->dklib, DKIM_OP_GETOPT, DKIM_OPTS_FLAGS,
+			&options, sizeof options) != DKIM_STAT_OK;
+		if (!parm->z.no_signlen)
+			options |= DKIM_LIBFLAGS_SIGNLEN;
+		if (!parm->z.report_all_sigs)
+			options |= DKIM_LIBFLAGS_VERIFYONE;
+		if (parm->z.add_ztags)
+			options |= DKIM_LIBFLAGS_ZTAGS;
+		nok |= dkim_options(parm->dklib, DKIM_OP_SETOPT, DKIM_OPTS_FLAGS,
+			&options, sizeof options) != DKIM_STAT_OK;
+	}
+	
+	if (parm->z.dns_timeout > 0) // DEFTIMEOUT is 10 secs
+	{
+		nok |= dkim_options(parm->dklib, DKIM_OP_SETOPT, DKIM_OPTS_TIMEOUT,
+			&parm->z.dns_timeout, sizeof parm->z.dns_timeout) != DKIM_STAT_OK;
+	}
+	
+	if (parm->z.tmp)
+	{
+		nok |= dkim_options(parm->dklib, DKIM_OP_SETOPT, DKIM_OPTS_TMPDIR,
+			parm->z.tmp, sizeof parm->z.tmp) != DKIM_STAT_OK;
+	}
+
+	nok |= dkim_set_prescreen(parm->dklib, dkim_sig_sort) != DKIM_STAT_OK;
+	nok |= dkim_set_final(parm->dklib, dkim_sig_final) != DKIM_STAT_OK;
+	nok |= dkim_options(parm->dklib, DKIM_OP_SETOPT, DKIM_OPTS_SIGNHDRS,
+		parm->z.sign_hfields?
+			cast_const_u_char_parm_array(parm->z.sign_hfields):
+			dkim_should_signhdrs,
+				sizeof parm->z.sign_hfields) != DKIM_STAT_OK;
+
+	nok |= dkim_options(parm->dklib, DKIM_OP_SETOPT, DKIM_OPTS_SKIPHDRS,
+		parm->z.skip_hfields?
+			cast_const_u_char_parm_array(parm->z.skip_hfields):
+			dkim_should_not_signhdrs,
+				sizeof parm->z.skip_hfields) != DKIM_STAT_OK;
+
+	if (nok)
+	{
+		fl_report(LOG_ERR, "Unable to set lib options");
+		dkim_close(parm->dklib);
+		parm->dklib = NULL;
+		return 1;
+	}
+
+	return 0;
+}
+
+static void reload_config(fl_parm *fl)
+/*
+* on sighup, assume installed filter --no arguments hence no no_db.
+* config_fname is retained for testing, though.
+*/
+{
+	assert(fl);
+	dkimfl_parm **parm = (dkimfl_parm**)fl_get_parm(fl);
+	assert(parm && *parm);
+
+	int rtc = 1;
+	dkimfl_parm *new_parm = calloc(1, sizeof *new_parm);
+	if (new_parm == NULL)
+		fl_report(LOG_ERR, "MEMORY FAULT");
+	else if (parm_config(new_parm, (*parm)->config_fname, 0))
+		fl_report(LOG_ERR, "Unable to read new config file");
+	else if (init_dkim(new_parm) == 0)
+	{
+		rtc = 0;
+		new_parm->pid_created = (*parm)->pid_created;
+	}
+
+	if (rtc)
+	{
+		some_cleanup(new_parm);
+		free(new_parm);
+	}
+	else
+	{
+		dkimfl_parm *old_parm = *parm;
+		*parm = new_parm;
+		dkim_close(old_parm->dklib);
+		some_cleanup(old_parm);
+		free(old_parm);
+		if (new_parm->z.verbose >= 2)
+			fl_report(LOG_INFO,
+				"New config file read from %s", (*parm)->config_fname);
+	}
 }
 
 static fl_init_parm functions =
@@ -3667,7 +3786,7 @@ static fl_init_parm functions =
 	dkimfilter,
 	write_pid_file,
 	check_blocked_user_list,
-	NULL, NULL, NULL,
+	reload_config, NULL, NULL,
 	report_config, set_keyfile, set_policyfile, set_vbrfile
 };
 
@@ -3729,24 +3848,15 @@ int main(int argc, char *argv[])
 			fl_log_no_pid = 1;
 	}
 
-	dkimfl_parm parm;
-	memset(&parm, 0, sizeof parm);
-	// parm.fl = fl;
-	if (parm_config(&parm, config_file, no_db))
+	dkimfl_parm *parm = calloc(1, sizeof *parm);
+	if (parm == NULL || parm_config(parm, config_file, no_db))
 	{
 		rtc = 2;
-		fl_report(LOG_ERR, "Unable to read config file");
+		fl_report(LOG_ERR, parm? "Unable to read config file": "MEMORY FAULT");
 	}
 
-	if (parm.z.verbose >= 4 &&
-		parm.z.redact_received_auth && !redact_is_fully_featured())
-			fl_report(LOG_WARNING,
-				"Option redact_received_header is set in %s,"
-				" but it is not fully featured.",
-					config_file? config_file: default_config_file);
-
 #if defined HAVE_LIBOPENDKIM_22
-	if (parm.z.verbose >= 2 &&
+	if (parm->z.verbose >= 2 &&
 		(unsigned long)dkim_libversion() !=	(unsigned long)(OPENDKIM_LIB_VERSION))
 			fl_report(LOG_WARNING,
 				"Mismatched library versions: compile=%#lX link=%#lX",
@@ -3754,73 +3864,26 @@ int main(int argc, char *argv[])
 				(unsigned long)dkim_libversion());
 #endif
 
-	parm.dklib = dkim_init(NULL, NULL);
-	if (parm.dklib == NULL)
-	{
-		rtc = 2;
-		fl_report(LOG_ERR, "dkim_init fault");
-	}
-
 	if (rtc == 0)
 	{
-		int nok = 0;
-		if (!parm.z.no_signlen || !parm.z.report_all_sigs)
-		{
-			unsigned int options = 0;
-			nok |= dkim_options(parm.dklib, DKIM_OP_GETOPT, DKIM_OPTS_FLAGS,
-				&options, sizeof options) != DKIM_STAT_OK;
-			if (!parm.z.no_signlen)
-				options |= DKIM_LIBFLAGS_SIGNLEN;
-			if (!parm.z.report_all_sigs)
-				options |= DKIM_LIBFLAGS_VERIFYONE;
-			if (parm.z.add_ztags)
-				options |= DKIM_LIBFLAGS_ZTAGS;
-			nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_FLAGS,
-				&options, sizeof options) != DKIM_STAT_OK;
-		}
-		
-		if (parm.z.dns_timeout > 0) // DEFTIMEOUT is 10 secs
-		{
-			nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_TIMEOUT,
-				&parm.z.dns_timeout, sizeof parm.z.dns_timeout) != DKIM_STAT_OK;
-		}
-		
-		if (parm.z.tmp)
-		{
-			nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_TMPDIR,
-				parm.z.tmp, sizeof parm.z.tmp) != DKIM_STAT_OK;
-		}
-
-		nok |= dkim_set_prescreen(parm.dklib, dkim_sig_sort) != DKIM_STAT_OK;
-		nok |= dkim_set_final(parm.dklib, dkim_sig_final) != DKIM_STAT_OK;
-		nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_SIGNHDRS,
-			parm.z.sign_hfields?
-				cast_const_u_char_parm_array(parm.z.sign_hfields):
-				dkim_should_signhdrs,
-					sizeof parm.z.sign_hfields) != DKIM_STAT_OK;
-
-		nok |= dkim_options(parm.dklib, DKIM_OP_SETOPT, DKIM_OPTS_SKIPHDRS,
-			parm.z.skip_hfields?
-				cast_const_u_char_parm_array(parm.z.skip_hfields):
-				dkim_should_not_signhdrs,
-					sizeof parm.z.skip_hfields) != DKIM_STAT_OK;
-
-		if (nok)
-		{
+		if (init_dkim(parm))
 			rtc = 2;
-			fl_report(LOG_ERR, "Unable to set lib options");
+		else
+		{
+			rtc =
+				fl_main(&functions, &parm,
+					argc, argv, parm->z.all_mode, parm->z.verbose);
+			if (parm)
+				delete_pid_file(parm);
 		}
 	}
 
-	if (rtc == 0)
+	if (parm)
 	{
-		rtc =
-			fl_main(&functions, &parm, argc, argv, parm.z.all_mode, parm.z.verbose);
-		delete_pid_file(&parm);
+		if (parm->dklib)
+			dkim_close(parm->dklib);
+		some_cleanup(parm);
+		free(parm);
 	}
-
-	if (parm.dklib)
-		dkim_close(parm.dklib);
-	some_cleanup(&parm);
 	return rtc;
 }

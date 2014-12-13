@@ -75,6 +75,7 @@ typedef struct parm_t
 	char body_canon_relaxed;
 	char save_from_anyway;
 	char add_ztags;
+	char not_used[15];
 } parm_t;
 
 typedef struct db_parm_t
@@ -96,6 +97,7 @@ typedef struct db_parm_t
 	int db_timeout; // seconds
 	char db_opt_multi_statements;
 	char db_opt_compress;
+	char not_used[30];
 } db_parm_t;
 
 typedef enum parm_target_t
