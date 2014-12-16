@@ -7,6 +7,8 @@ signing domain in the same situation, unless the new parameter is enabled.
 
 Added parameter add_ztags, to add z= in the signature, for debugging.
 
+Added parameter split_verify, to have separate filter processes.
+
 
 Database changes:
 ================
@@ -40,6 +42,8 @@ In either case, replace procedure recv_from_domain.
 Bug fixes and other changes:
 ===========================
 Domains with non-alnum chars (hyphen) didn't work --thanks to Ilmar Kruis.
+
+Config file couldn't be reloaded, this can now be done with kill -HUP.
 
 'author' and similar flags were set in messages even if DKIM signature failed.
 

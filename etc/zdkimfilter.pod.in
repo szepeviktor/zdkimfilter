@@ -11,15 +11,14 @@ filterctl (C<start> | C<stop>) B<zdkimfilter>
 
 @COURIER_FILTER_INSTALL@/B<zdkimfilter> I<OPTION>
 
-The second form can be used for scripting and testing.  See OPTIONS below.
+The second form can be used for scripting or testing.  See OPTIONS below.
 
 
 =head1 DESCRIPTION
 
 zdkimfilter is a global filter, in the sense that it works for all users.
 It works in either signing or verifying mode, based on whether the sender
-is authenticated with user-id and password.  In both cases, the relevant
-domain names can be logged to the database.
+is authenticated with user-id and password.
 
 =head2 Signing
 
@@ -53,7 +52,8 @@ on the DNS in order to make it possible for remote receivers to verify the
 signatures.  Domain owners should change selector on a regular basis, or
 whenever they think the private key might have been compromised.  The soft link
 that enables signing with a given private key should be set I<after> publishing
-the corresponding public key.  It is not necessary to restart zdkimfilter for
+the corresponding public key.  The file existence is going to be effective on
+It is not necessary to restart zdkimfilter for
 that to take effect.
 
 The user-id used for SMTP authentication is also reported in Courier's
@@ -109,9 +109,34 @@ list of authenticated domains.  See L<zfilter_db(1)> for the details.
 =head1 OPTIONS
 
 Configuration options are documented in L<zdkimfilter.conf(5)> and
-L<zfilter_db(1)>.  Most useful command-line options can be more conveniently
-used through L<dkimsign(1)>.  What remains serves for testing and debugging:
+L<zfilter_db(1)>.
 
+=head2 COURIER SETTINGS
+
+The I<esmtpd> configuration files can be tweaked to avoid rewritings that
+would break existing signatures.
+
+=over
+
+=item B<MIME>
+
+Setting MIME=none prevents rewriting the MIME structure.  If you use this,
+you may want to override it in I<esmtpd-msa>, e.g. by setting MIME=some.
+
+=item B<NOADDRREWRITE>
+
+Documented in I<esmtpd>.
+
+=back
+
+There is no setting that prevents modifying whitespace around addresses by the
+STMP client.  It is recommended to set B<header_canon_relaxed> (see
+L<zdkimfilter.conf(5)>).
+
+
+=head2 COMMANDLINE OPTIONS
+
+These are only useful for testing.
 
 =over
 
@@ -155,6 +180,14 @@ directory rather than from the DNS.
 
 =back
 
+=head1 SIGNALS
+
+The B<HUP> signal can be used to have zdkimfilter reload its configuration.
+
+Upon receiving the signal, zdkimfilter reads its configuration file and opens
+new connections to OpenDKIM library and (possibly) to the database.  If no
+error occurs, it then cleans up the old area, closing old connections, and
+writes LOG_INFO if verbosity is 2 or higher.
 
 =head1 BUGS
 
@@ -167,7 +200,15 @@ reproduce any misbehavior in a controlled fashion.
 
 =item F<@ZDKIMFILTER_PID_DIR@/zdkimfilter.pid>
 
-The id of the parent zdkimfilter process.
+The id of the parent zdkimfilter process.  The basename of this file reflects
+the command name by which the filter was loaded.
+
+=item F<@FILTERSOCKETDIR@/zdkimfilter> or F<@ALLFILTERSOCKETDIR@/zdkimfilter>
+
+The socket where filter process listens to filtering requests.  This socket is
+created in one or the other directory based on C<all_mode> configuration option
+(see B<zdkimfilter.conf>(5)).    The basename of this file reflects the command
+name by which the filter was loaded.
 
 =item F<@COURIER_SYSCONF_INSTALL@/filters/keys>
 

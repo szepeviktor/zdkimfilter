@@ -65,6 +65,17 @@ the resulting work.
 #include "util.h"
 #include <assert.h>
 
+#if !PATH_MAX
+#define PATH_MAX 1024
+#endif
+
+static inline char *my_basename(char const *name) // neither GNU nor POSIX...
+{
+	char *b = strrchr(name, '/');
+	if (b)
+		return b + 1;
+	return (char*)name;
+}
 
 static void clean_stats_info_content(stats_info *stats)
 // only called by clean_stats
@@ -128,6 +139,11 @@ typedef struct per_message_parm
 	char nu[2];
 } per_message_parm;
 
+typedef enum split_filter
+{
+	split_do_both, split_verify_only, split_sign_only
+} split_filter;
+
 typedef struct dkimfl_parm
 {
 	DKIM_LIB *dklib;
@@ -135,11 +151,13 @@ typedef struct dkimfl_parm
 	db_work_area *dwa;
 
 	char const *config_fname; // static (either default or argv)
+	char const *prog_name; //static, from argv[0]
 	parm_t z;
 	per_message_parm dyn;
 	blocked_user_list blocklist;
 
 	// other
+	split_filter split;
 	char pid_created;
 	char use_dwa_after_sign, use_dwa_verifying;
 	char user_blocked;
@@ -329,7 +347,6 @@ static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
 		}
 	}
 
-
 	if (parm->z.verbose >= 4 &&
 		parm->z.redact_received_auth && !redact_is_fully_featured())
 			fl_report(LOG_WARNING,
@@ -338,6 +355,27 @@ static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
 
 	parm->config_fname = fname;
 	return errs;
+}
+
+static void check_split(dkimfl_parm *parm)
+{
+	if (parm->z.split_verify)
+	{
+		if (strcmp(my_basename(parm->z.split_verify), parm->prog_name) == 0)
+			parm->split = split_verify_only;
+		else
+			parm->split = split_sign_only;
+	}
+	else
+		parm->split = split_do_both; // 0
+
+	if (parm->split)
+	{
+		if (parm->z.verbose >= 3)
+			fl_report(LOG_INFO,
+				"%s configured to %s only", parm->prog_name,
+				parm->split == split_sign_only? "sign": "verify");
+	}
 }
 
 // functions common for both incoming and outgoing msgs
@@ -708,11 +746,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	*/
 	{
 		buf2[lsz] = 0;
-		char *name = strrchr(buf2, '/');
-		if (name)
-			++name;
-		else
-			name = buf2;
+		char *name = my_basename(buf2);
 		if (strincmp(name, fname, fl) == 0)
 		{
 			name += fl;
@@ -3452,14 +3486,15 @@ static void dkimfilter(fl_parm *fl)
 
 	if (parm->dyn.info.is_relayclient)
 	{
-		if (parm->dyn.info.authsender)
+		if (parm->split != split_verify_only &&
+			parm->dyn.info.authsender)
 		{
 			if (parm->use_dwa_after_sign)
 				enable_dwa(parm);
 			sign_message(parm);
 		}
 	}
-	else
+	else if (parm->split != split_sign_only)
 	{
 		if (vb_init(&parm->dyn.vb))
 			parm->dyn.rtc = -1;
@@ -3635,35 +3670,64 @@ static void set_vbrfile(fl_parm *fl)
 	(void)fl;
 }
 
-static const char pid_file[] = ZDKIMFILTER_PID_FILE;
-static void write_pid_file(fl_parm *fl)
+static const char pid_dir[] = ZDKIMFILTER_PID_DIR;
+
+static int pid_file_name(dkimfl_parm *parm, char *fname)
+{
+	assert(parm && parm->prog_name);
+	if (strlen(parm->prog_name) + sizeof pid_dir + 5 >= PATH_MAX)
+	{
+		errno = ENAMETOOLONG;
+		return 1;
+	}
+
+	strcpy(fname, pid_dir);
+	fname[sizeof pid_dir - 1] = '/';
+	strcat(strcpy(fname + sizeof pid_dir, parm->prog_name), ".pid");
+	return 0;
+}
+
+static void write_pid_file_and_check_split(fl_parm *fl)
+// this is init_complete, called once before fl_main loop
 {
 	assert(fl);
 	dkimfl_parm *parm = get_parm(fl);
 	assert(parm);
 
-	FILE *fp = fopen(pid_file, "w");
 	char const *failed_action = NULL;
-	if (fp)
-	{
-		fprintf(fp, "%lu\n", (unsigned long) getpid());
-		if ((ferror(fp) | fclose(fp)) != 0)
-			failed_action = "write";
-		parm->pid_created = 1;
-	}
+	char pid_file[PATH_MAX];
+	if (pid_file_name(parm, pid_file))
+		failed_action = "name";
 	else
-		failed_action = "open";
+	{
+		FILE *fp = fopen(pid_file, "w");
+		if (fp)
+		{
+			fprintf(fp, "%lu\n", (unsigned long) getpid());
+			if ((ferror(fp) | fclose(fp)) != 0)
+				failed_action = "write";
+			parm->pid_created = 1;
+		}
+		else
+			failed_action = "open";
+	}
 	if (failed_action)
-		fl_report(LOG_ALERT, "cannot %s %s: %s",
-			failed_action, pid_file, strerror(errno));
+		fl_report(LOG_ALERT, "cannot %s %s/%s.pid: %s",
+			failed_action, pid_dir, parm->prog_name, strerror(errno));
+
+	check_split(parm);
 }
 
 static void delete_pid_file(dkimfl_parm *parm)
 {
-	if (parm->pid_created &&
-		unlink(pid_file) != 0)
-			fprintf(stderr, "ERR: avfilter: cannot delete %s: %s\n",
-				pid_file, strerror(errno));
+	if (parm->pid_created)
+	{
+		char pid_file[PATH_MAX];
+		if (pid_file_name(parm, pid_file) != 0 ||
+			unlink(pid_file) != 0)
+				fprintf(stderr, "ERR: avfilter: cannot delete %s/%s.pid: %s\n",
+					pid_dir, parm->prog_name, strerror(errno));
+	}
 }
 
 static void check_blocked_user_list(fl_parm *fl)
@@ -3771,20 +3835,24 @@ static void reload_config(fl_parm *fl)
 	else
 	{
 		dkimfl_parm *old_parm = *parm;
-		*parm = new_parm;
-		dkim_close(old_parm->dklib);
+		new_parm->prog_name = old_parm->prog_name;
+		if (old_parm->dklib)
+			dkim_close(old_parm->dklib);
 		some_cleanup(old_parm);
 		free(old_parm);
+
+		*parm = new_parm;
 		if (new_parm->z.verbose >= 2)
 			fl_report(LOG_INFO,
 				"New config file read from %s", (*parm)->config_fname);
+		check_split(new_parm);
 	}
 }
 
 static fl_init_parm functions =
 {
 	dkimfilter,
-	write_pid_file,
+	write_pid_file_and_check_split,
 	check_blocked_user_list,
 	reload_config, NULL, NULL,
 	report_config, set_keyfile, set_policyfile, set_vbrfile
@@ -3854,6 +3922,8 @@ int main(int argc, char *argv[])
 		rtc = 2;
 		fl_report(LOG_ERR, parm? "Unable to read config file": "MEMORY FAULT");
 	}
+	else
+		parm->prog_name = my_basename(argv[0]);
 
 #if defined HAVE_LIBOPENDKIM_22
 	if (parm->z.verbose >= 2 &&

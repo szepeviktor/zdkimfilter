@@ -46,6 +46,7 @@ typedef struct parm_t
 	char *blocked_user_list;
 	char *redact_received_auth;
 	char *reputation_root;
+	char *split_verify;
 	const char **sign_hfields;
 	const char **skip_hfields;
 	const char **key_choice_header;

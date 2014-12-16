@@ -17,11 +17,10 @@ depending on the name.
 
 =head1 NOTE
 
-For any change to the configuration file to take effect, zdkimfilter has
-to be restarted.  It is currently unable to re-read the configuration,
-hence it is necessary to do, for example, I<courierfilter stop> and then
-I<courierfilter start>.  Use I<dkimsign>(1) to check if the file is valid.
+The configuration file can be reloaded by sending a HUP signal to the parent
+process, except for the C<all_mode> item which needs restarting the filter.
 
+Use C<dkimsign --config> to check if the file is valid.
 
 =head1 OPTIONS
 
@@ -43,6 +42,9 @@ Courier runs all-mode filters after non-all-mode ones, in alphabetical order.
 Non-all-mode filters can be whitelisted by local filters. In addition, any 
 global filter can whitelist the filters running after it. 
 
+The value of this parameter determines in which directory zdkimfilter creates
+the socket which connects it to Courier.  Therefore, changing this parameter
+will have no effect until the filter is reloaded.
 
 =item B<trust_a_r> bool
 
@@ -120,8 +122,9 @@ Default: domain_keys = @COURIER_SYSCONF_INSTALL@/filters/keys
 
 =item B<body_canon_relaxed> bool
 
-Canonicalization for header/body can be simple or relaxed. 
-
+Canonicalization for header/body can be simple or relaxed.  It is recommended
+to use C<relaxed>, especially for the header, because both Courier's SMTP
+client and some SMTP receivers alter white space in the header.
 
 =item B<sign_rsa_sha1> bool
 
@@ -287,6 +290,31 @@ it if it cannot stat it, on loading.
 
 On some errors, e.g. out of memory, return 432 to have the sender retry; 
 otherwise, just let the msg through unfiltered. 
+
+=item B<split_verify_sign> string
+
+Separate filter processes, one for verifying and one for signing.  This is
+useful if you need authentication results to be available to a third filter
+which has to run before the signing filter.
+
+The string contains the executable name of the verifying processes.
+
+For example, to install C<dkimfilter> (without "z") as a verifyier, create a
+link with that name to zdkimfilter, in @COURIER_FILTER_INSTALL@.  Then set
+
+=over
+
+split_verify = dkimfilter
+
+
+=back
+
+Z<>
+
+Invoke I<filterctl start dkimfilter> to start the second process.  Both
+processes read the same configuration file, but create sockets and pid files
+according to the executable name used to invoke them.  In this example, the
+first process stops verifying as soon as it reloads the configuration.
 
 =item B<add_ztags> bool
 

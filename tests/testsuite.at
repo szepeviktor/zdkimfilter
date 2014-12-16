@@ -183,6 +183,7 @@ redact_received_auth     = NULL (any text)
 add_auth_pass            = N (Y/N)
 tmp                      = . (temp directory)
 tempfail_on_error        = N (Y/N)
+split_verify             = NULL (exec name)
 add_ztags                = N (Y/N, Y for debug z=)
 blocked_user_list        = NULL (filename)
 no_spf                   = N (Y/N)
@@ -2242,6 +2243,30 @@ INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
 INFO:zdkimfilter[[0]]:New config file read from zftest.conf
 INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
 INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Check parsing split_verify option])
+ZF_CONFIG(3, [split_verify zdkimfilter
+])
+ZF_BATCH([sighup
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[],
+[INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+INFO:zdkimfilter[[0]]:zdkimfilter configured to verify only
+])
+ZF_CONFIG(3, [split_verify dkimfilter
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[],
+[INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+INFO:zdkimfilter[[0]]:zdkimfilter configured to sign only
 ])
 AT_CLEANUP
 
