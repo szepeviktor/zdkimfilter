@@ -204,6 +204,7 @@ END //
 DROP PROCEDURE IF EXISTS sent_to_domain //
 CREATE PROCEDURE sent_to_domain (
 	IN message_ref INT UNSIGNED,
+	IN c_flag TINYINT UNSIGNED,
 	IN m_domain VARCHAR(63))
 	MODIFIES SQL DATA
 BEGIN
@@ -214,19 +215,16 @@ BEGIN
 		BEGIN
 			INSERT INTO domain SET domain = m_domain;
 			SELECT LAST_INSERT_ID() INTO d_id;
-			SET d_white = 0;
 		END;
-	SELECT id, whitelisted INTO d_id, d_white
-		FROM domain WHERE domain = m_domain;
-	IF d_white < 2 THEN
-		# whitelisted=2 prevents ADSP discard; whitelisted=3 is not used yet
-		UPDATE domain SET whitelisted = 2,
-			sent = sent + 1,
-			last = NOW() WHERE id = d_id;
+	SELECT id INTO d_id FROM domain WHERE domain = m_domain;
+	IF c_flag = 0 THEN
+		SET d_white = 2;
 	ELSE
-		UPDATE domain SET sent = sent + 1,
-			last = NOW() WHERE id = d_id;
+		SET d_white = 0;
 	END IF;
+	UPDATE domain SET whitelisted = GREATEST(whitelisted, d_white),
+		sent = sent + 1,
+		last = NOW() WHERE id = d_id;
 	INSERT INTO msg_out_ref SET message_out = message_ref,
 		domain = d_id;
 END //

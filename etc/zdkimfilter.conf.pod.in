@@ -286,6 +286,11 @@ If you specify a value like /tmp/*, then zdkimfilter attempts to mkdir of
 it if it cannot stat it, on loading. 
 
 
+=item B<save_drop> string
+
+Quarantine directory.  If set, messages dropped will be saved here. 
+
+
 =item B<tempfail_on_error> bool
 
 On some errors, e.g. out of memory, return 432 to have the sender retry; 
@@ -326,11 +331,23 @@ be useful when investigating the reasons why a signature does not verify.
 
 Filename of the list of blocked users.  Users on this list can only send to 
 the postmaster at the signing domain, if they authenticate.  This list is 
-automatically updated when the query db_sql_check_user returns a non-zero 
+automatically updated when the query B<db_sql_check_user> returns a non-zero 
 reason.  It can be updated at any time (creating a temporary file and then 
 moving it can avoid race conditions.)  zdkimfilter keeps the file in memory 
-and reloads it when it realizes that it changed. 
+and reloads it when it realizes that it changed.
 
+A I<blocked_user_list> could be used even without defining any database option,
+but an alternative means to add users to it has to be devised in that case.  In
+any case, no mechanism is provided to remove users from such list.  The
+assumption is that user's credentials have been hijacked, so user's password
+has to be changed, queued messages canceled, bounces removed, CSIRTs of any
+third party's hacked site notified, and finally it is a nice idea to set up
+monitoring and reporting of any further spam that the botnet will unwittingly
+continue to submit using the stolen credentials.  I'm really far from
+automating such switch.
+
+Using a query, this works as an alternative to Courier's native B<ratefilter>.
+See B<zfilter_db>(8) for details on the query.
 
 =item B<no_spf> bool
 
@@ -514,6 +531,6 @@ Alessandro Vesely E<lt>vesely@tana.itE<gt>
 =head1 SEE ALSO
 
 
-B<courier>(8), B<zdkimfilter>(8), B<zfilter_db>(1)
+B<courier>(8), B<zdkimfilter>(8), B<zfilter_db>(1), B<ratefilter>(8)
 
 

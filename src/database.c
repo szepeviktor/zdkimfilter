@@ -5,7 +5,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2012 Alessandro Vesely
+Copyright (C) 2012-2014 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -391,8 +391,8 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 
 		STMT_ALLOC(db_sql_insert_domain, domain_variables);
 
-		STMT_ALLOC(db_sql_update_domain, domain_variables |
-			1 << domain_ref_variable);
+		STMT_ALLOC(db_sql_update_domain, domain_variables);
+		// domain_ref_variable used to be allowed until v1.2
 
 		STMT_ALLOC(db_sql_insert_msg_ref, domain_variables |
 			1 << domain_ref_variable | 1 << message_ref_variable);
@@ -402,7 +402,8 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 		count = 0;
 
 		const var_flag_t outgoing_variables =
-			common_variables | 1 << domain_variable | 1 << rcpt_count_variable;
+			common_variables | 1 << domain_variable |
+				1 << rcpt_count_variable |	1 << complaint_flag_variable;
 
 		// $(domain) is the local domain when selecting/checking the user
 		const var_flag_t outgoing_user_variables =
@@ -1545,6 +1546,7 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 	// that's what zeroflag is for.
 	// we assume no number takes more than 10 chars to print.
 	// safe_stop accounts for "discardable,fail,whitelisted"
+	//                         123456789012345678901234567890
 	char buf[80], *p = buf, *safe_stop = &buf[sizeof buf - 30];
 #define SET_NUMBER(N) \
 	if (p < safe_stop) { \
@@ -1581,7 +1583,10 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 		}
 	}
 	else
+	{
 		SET_NUMBER(rcpt_count);
+		SET_NUMBER(complaint_flag);
+	}
 	SET_NUMBER(mailing_list);
 #undef SET_NUMBER
 
@@ -1966,7 +1971,13 @@ int main(int argc, char*argv[])
 								*target = atoi(arg);
 								break;
 							}
-							case 10: stats.signatures_count = atoi(arg); break;
+							case 10:
+							{
+								unsigned *const target = stats.outgoing?
+									&stats.complaint_flag: &stats.signatures_count;
+								*target = atoi(arg);
+								break;
+							}
 							case 11: stats.mailing_list = atoi(arg); break;
 							case 12: stats.ino_mtime_pid = strdup(arg); break;
 							default:

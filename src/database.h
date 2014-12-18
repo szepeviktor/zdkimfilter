@@ -2,7 +2,7 @@
 * database.h - written by ale in milano on 25sep2012
 * read/write via odbx
 
-Copyright (C) 2012 Alessandro Vesely
+Copyright (C) 2012-2014 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -96,7 +96,9 @@ typedef struct stats_info
 
 	domain_prescreen* domain_head;
 
-	unsigned rcpt_count; // outgoing messages only
+	// outgoing messages only
+	unsigned rcpt_count;
+	unsigned complaint_flag;
 
 	// incoming messages only (except outgoing flag)
 	unsigned received_count;

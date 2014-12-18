@@ -2,7 +2,7 @@
 * database_variables.h - written by ale in milano on 29sep2012
 * list of variables, included multiple times
 
-Copyright (C) 2012 Alessandro Vesely
+Copyright (C) 2012-2014 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -58,4 +58,5 @@ DATABASE_VARIABLE(vbr_mv)
 DATABASE_VARIABLE(vbr_response)
 DATABASE_VARIABLE(reputation)
 DATABASE_VARIABLE(message_ref)
+DATABASE_VARIABLE(complaint_flag)
 

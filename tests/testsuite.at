@@ -182,6 +182,7 @@ no_signlen               = N (Y/N)
 redact_received_auth     = NULL (any text)
 add_auth_pass            = N (Y/N)
 tmp                      = . (temp directory)
+save_drop                = NULL (quarantine directory)
 tempfail_on_error        = N (Y/N)
 split_verify             = NULL (exec name)
 add_ztags                = N (Y/N, Y for debug z=)
@@ -2270,4 +2271,81 @@ INFO:zdkimfilter[[0]]:zdkimfilter configured to sign only
 ])
 AT_CLEANUP
 
+# produce database_dump
+m4_define([ZF_BATCH_CHECK], [ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+])
+
+#
+AT_SETUP([Check complaint_flag values])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [db_backend test
+db_sql_select_user dummy
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [suser-bounce@author.example
+Msignmsg
+uauthsmtp
+iuser@example.com
+rrecipient@another.example
+])
+ZF_BATCH_CHECK
+AT_CHECK([grep 'complaint_flag:' database_dump], 0,
+[complaint_flag: 0
+], [])
+
+AT_DATA([mail],
+[Received: from server.example by test.example with ESMTP
+Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
+Received-SPF: none SPF=HELO sender=server.sender.example;
+Message-ID: <123456@author.example>
+Date: Mon, 08 Feb 2010 13:12:55 +0100
+VBR-Info: mc=all; md=author.example; mv=author-cert.example
+VBR-Info: mc=all; md=sender.example; mv=sender-cert.example
+MIME-Version: 1.0
+From:     The (sender <faked@example.com>)
+	<postmaster@author.example>
+To: whoever is concerned:;
+Subject: This may be a complaint
+Content-Type: text/plain; charset=us-ascii
+
+hi there!
+])
+ZF_BATCH_CHECK
+AT_CHECK([grep 'complaint_flag:' database_dump], 0,
+[complaint_flag: 0
+complaint_flag: 2
+], [])
+
+AT_DATA([ctl], [s
+Msignmsg
+uauthsmtp
+iuser@example.com
+rrecipient@another.example
+])
+ZF_BATCH_CHECK
+AT_CHECK([grep 'complaint_flag:' database_dump], 0,
+[complaint_flag: 0
+complaint_flag: 2
+complaint_flag: 3
+], [])
+
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_BATCH_CHECK
+AT_CHECK([grep 'complaint_flag:' database_dump], 0,
+[complaint_flag: 0
+complaint_flag: 2
+complaint_flag: 3
+complaint_flag: 1
+], [])
+AT_CLEANUP
 

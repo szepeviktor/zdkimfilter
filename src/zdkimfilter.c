@@ -2,7 +2,7 @@
 * zdkimfilter - written by ale in milano on Thu 11 Feb 2010 03:48:15 PM CET 
 * Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010-2013 Alessandro Vesely
+Copyright (C) 2010-2014 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -1187,12 +1187,30 @@ static inline int user_is_blocked(dkimfl_parm *parm)
 		search_list(&parm->blocklist, parm->dyn.info.authsender);
 }
 
+static inline int is_postmaster(char const *from)
+{
+	char *addr;
+	if (from == NULL || (addr = strdup(from)) == NULL)
+		return 0;
+
+	char *domain, *user;
+	int rtc = dkim_mail_parse(addr,
+		cast_u_char_parm_array(&user), cast_u_char_parm_array(&domain)) == 0 &&
+			stricmp(user, "postmaster") == 0;
+	free(addr);
+	return rtc;
+}
+
 static inline void stats_outgoing(dkimfl_parm *parm)
 {
 	if (parm->dyn.stats)
 	{
 		parm->dyn.stats->outgoing = 1;
-		parm->dyn.stats->envelope_sender = fl_get_sender(parm->fl);
+		char *s = parm->dyn.stats->envelope_sender = fl_get_sender(parm->fl);
+		if (s && *s == 0)
+			parm->dyn.stats->complaint_flag |= 1;
+		if (is_postmaster(parm->dyn.stats->from))
+			parm->dyn.stats->complaint_flag |= 2;
 		if (parm->dyn.stats->rcpt_count == 0)
 			recipient_s_domains(parm);
 	}
@@ -1336,8 +1354,6 @@ static void sign_message(dkimfl_parm *parm)
 			return;
 		}
 
-		stats_outgoing(parm);
-
 		// A-R with auth=pass; if signed, must get hashed before sign_headers
 		static char const auth_pass_fmt[] =
 			"Authentication-Results: %s;%s auth=pass (details omitted)";
@@ -1386,6 +1402,8 @@ static void sign_message(dkimfl_parm *parm)
 			}
 		}
 		
+		stats_outgoing(parm);  // after sign_headers to check From:
+
 		if (parm->dyn.rtc == 0)
 		{
 			FILE *fp = fl_get_write_file(parm->fl);
@@ -2080,12 +2098,14 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 			* resulting order:  Signature validation costs more than local lookup.
 			*/
 			{
-				if (!save_from_anyway)
-					dps->u.f.is_from = 0;
+				assert(dps->u.f.vbr_is_ok == 0); // signature required
+
 				if (dps->u.f.is_dnswl == 0 &&
 					dps->u.f.is_mfrom == 0 &&
 					dps->u.f.is_helo == 0)
 				{
+					if (!save_from_anyway)
+						dps->u.f.is_from = 0;
 					dps->whitelisted = 0;
 					dps->u.f.is_trusted = 0;
 					dps->u.f.is_whitelisted = 0;

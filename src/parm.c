@@ -2,7 +2,7 @@
 * parm.c - written by ale in milano on 27sep2012
 * parameter file parsing
 
-Copyright (C) 2012-2013 Alessandro Vesely
+Copyright (C) 2012-2014 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -252,6 +252,7 @@ static config_conf const conf[] =
 	CONFIG(parm_t, redact_received_auth, "any text", assign_ptr), // by redact.c
 	CONFIG(parm_t, add_auth_pass, "Y/N", assign_char),
 	CONFIG(parm_t, tmp, "temp directory", assign_ptr), // by dkimsign.c
+	CONFIG(parm_t, save_drop, "quarantine directory", assign_ptr),
 	CONFIG(parm_t, tempfail_on_error, "Y/N", assign_char),
 	CONFIG(parm_t, split_verify, "exec name", assign_ptr),
 	CONFIG(parm_t, add_ztags, "Y/N, Y for debug z=", assign_char),
