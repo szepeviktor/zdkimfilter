@@ -441,13 +441,32 @@ unless you can prevent your users from subscribing to mailing lists, don't
 publish an ADSP policy different from C<unknown>.  (Publishing C<unknown> may 
 result in better caching, though.) 
 
+=item B<action_header> string
+
+An RFC 822 header field name that an upstream filter adds to the message to
+mark it as bad.  If that header is found, the message is dropped or rejected
+according to the next option.
+
+=item B<header_action_is_reject> bool
+
+Reject, rather than drop, if the action_header is found.
+
+=item B<save_drop> string
+
+Quarantine directory path.  Messages dropped because of the action_header are
+saved there, if set.  Saved messages are named after the content of the header.
+
+The message content is preceded by a C<pre-header>; that is, a part of the
+envelope separated by an empty line.  The part of the envelope consists of a
+possibly empty sender followed by the recipients.  The pre-header allows to
+recover the message from quarantine in case of false positives; see the scripts
+F<etc/resend-with-preheader.*> in the tarball.
 
 =item B<do_reputation> bool
 
 make a query to dkim-reputation.org for the signer and author domain.  The 
 result is reported in A-R for method C<x-dkim-rep> according to the next two 
 options. 
-
 
 =item B<reputation_fail> int
 
@@ -461,9 +480,12 @@ Any values less or equal to this are reported as C<pass>.
 Values V in between, reputation_pass E<lt> V E<lt> reputation_fail, are reported 
 as C<neutral>. According to dkim-reputation.org, 0 is neutral and positive 
 values give an estimate of the spamminess of a given user. They reserve 
-negative values for whitelisting. Their range is thus -1000 E<lt>= rep E<lt>= 1000. 
-Default: reputation_pass = -32768 
+negative values for whitelisting. Their range is thus -1000 E<lt>= rep E<lt>= 1000.
 
+A reputation value less or equal than this causes acceptance if an
+I<action_header> is found.
+
+Default: reputation_pass = -32768 
 
 =item B<reputation_root> string
 
@@ -494,6 +516,29 @@ trusted_vouchers = dwl.spamhaus.org
 See http://www.spamhauswhitelist.com/en/about.html for more info. 
 
 
+=item B<dnswl_worthiness_pass>
+
+A worthiness greater or equal than this causes acceptance if an
+I<action_header> is found.  Must be a number between 0 and 255.
+
+Default: 1 (low for dnswl.org)
+
+=item B<dnswl_invalid_ip>
+
+An invalid IP is returned in some cases, e.g. if a name server issues too many
+queries.  Finding this is logged at LOG_CRIT if verbose is 1 or greater.
+
+The ip has to be given as a 32bit integer, with the right endianness.
+
+Default: @DNSWL_ORG_INVALID_IP_ENDIAN@, which works for dnswl.org
+
+=item B<dnswl_octet_index>
+
+This is the octet in policy.ip where the worthiness value is found.
+Must be a number between 0 and 3.
+
+Default: 3, which works for dnswl.org
+
 =item B<trusted_dnswl> array
 
 A space-separated list of trusted dns zones.  When an A-R field that contains 
@@ -518,6 +563,13 @@ example:
 =back
 
 (note the trailing comma, which is necessary to query the TXT record too.) 
+
+=item B<whitelisted_pass> int
+
+A whitelisted value greater or equal than this causes acceptance if an
+I<action_header> is found.
+
+Default: 3
 
 =back
 

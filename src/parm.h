@@ -48,6 +48,7 @@ typedef struct parm_t
 	char *reputation_root;
 	char *split_verify;
 	char *save_drop;
+	char *action_header;
 	const char **sign_hfields;
 	const char **skip_hfields;
 	const char **key_choice_header;
@@ -58,12 +59,18 @@ typedef struct parm_t
 	int verbose;
 	int dns_timeout;
 	int reputation_fail, reputation_pass;
+	int dnswl_worthiness_pass;
+	int whitelisted_pass;
 	int max_signatures;
+	int dnswl_invalid_ip;
+
+	int dnswl_octet_index;
 
 	char trust_a_r;
 	char add_a_r_anyway;
 	char add_auth_pass;
 	char report_all_sigs;
+
 	char verify_one_domain;
 	char no_spf;
 	char no_signlen;
@@ -72,12 +79,14 @@ typedef struct parm_t
 	char reject_on_nxdomain;
 	char do_reputation;
 	char all_mode;
+
 	char sign_rsa_sha1;
 	char header_canon_relaxed;
 	char body_canon_relaxed;
 	char save_from_anyway;
 	char add_ztags;
-	char not_used[15];
+	char header_action_is_reject;
+	char not_used[2];
 } parm_t;
 
 typedef struct db_parm_t

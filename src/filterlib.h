@@ -5,7 +5,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010-2011 Alessandro Vesely
+Copyright (C) 2010-2014 Alessandro Vesely
 
 This file is part of zdkimfilter
 

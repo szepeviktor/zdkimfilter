@@ -164,6 +164,8 @@ m4_define([ZF_DNSWL], [Authentication-Results: test.example;
  policy.txt="sender.example http://www.dnswl.example/"
 ])
 
+m4_define([ZF_DNSWL_INVALID_IP_ENDIAN], [@S|@((DNSWL_ORG_INVALID_IP_ENDIAN + 0))])
+
 # default parms
 m4_define([ZF_DEFAULT_PARM_TMP],
 [all_mode                 = N (Y/N)
@@ -182,7 +184,6 @@ no_signlen               = N (Y/N)
 redact_received_auth     = NULL (any text)
 add_auth_pass            = N (Y/N)
 tmp                      = . (temp directory)
-save_drop                = NULL (quarantine directory)
 tempfail_on_error        = N (Y/N)
 split_verify             = NULL (exec name)
 add_ztags                = N (Y/N, Y for debug z=)
@@ -195,13 +196,20 @@ verify_one_domain        = N (Y/N)
 max_signatures           = 128 (int)
 honor_author_domain      = N (Y=enable ADSP)
 reject_on_nxdomain       = N (Y=procrustean ADSP)
+action_header            = NULL (header field name)
+header_action_is_reject  = N (Y/N)
+save_drop                = NULL (quarantine directory)
 do_reputation            = N (Y=do reputation lookup)
 reputation_fail          = 32767 (high int)
 reputation_pass          = -32768 (low int)
 reputation_root          = host.dkim-reputation.example (lookup host)
 trusted_vouchers         = NULL (space-separated, no colon)
+dnswl_worthiness_pass    = 1 (int)
+dnswl_invalid_ip         =] [ZF_DNSWL_INVALID_IP_ENDIAN] [(int)
+dnswl_octet_index        = 3 (int)
 trusted_dnswl            =  (space-separated dns.zones)
                          0 list.dnswl.org
+whitelisted_pass         = 3 (int)
 dns_timeout              = 0 (secs)
 ])
 
@@ -2347,5 +2355,363 @@ complaint_flag: 2
 complaint_flag: 3
 complaint_flag: 1
 ], [])
+AT_CLEANUP
+
+# common setup for action_header testing
+#
+# since this relies on libopendkim, it is enough to check the logs of its
+# results, rather than going down to verify file contents.
+#
+
+# message with frop-me header, dnswl, spf, author signature, other sig
+# params: policy.ip, no sigs
+m4_define([ZF_DNSWL_MESSAGE], m4_join([],
+[Received: from server.example by test.example with ESMTP
+Authentication-Results: server.example; dnswl=pass dns.zone=list.dnswl.org
+  policy.ip=$1 policy.txt="sender.example and some other stuff"
+],
+[m4_ifblank([$2], ZF_SIGAUTHOR)],
+[Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
+Received-SPF: pass SPF=HELO sender=server.sender.example;
+Drop-Me: file name
+],
+[m4_ifblank([$2], ZF_SIGOTHER)],
+[Received: from mail.example.com by server.example with ESMTPA
+],
+[ZF_MESSAGE_BODY]))
+
+#
+AT_SETUP([Verify action_header drop and 127.0.0.255])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.0.255])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[CRIT:zdkimfilter[[0]]:Zone list.dnswl.org lookup has invalid IP 127.0.0.255
+INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if worthiness 1 (signed)])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.1])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is in dnswl (1)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if worthiness 1 (not signed)])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.1], [nosigs])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is in dnswl (1)
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if whitelisted (author signature)])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted author.example:3
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is whitelisted (3)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if whitelisted (SPF auth)])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted sender.example:3
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0], [nosigs])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is whitelisted (3)
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if whitelisted (SPF auth, signed)])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted sender.example:3
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is whitelisted (3)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if vouched])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+trusted_vouchers author-cert.example
+])
+AT_DATA([VBRFILE], [author.example._vouch.author-cert.example all
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is vouched (author-cert.example)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if reputed author sig])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+do_reputation
+reputation_pass -50
+])
+AT_DATA([REPFILE], [author.example author.example -100
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is in al.dkim-reputation.org (-100)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=-100
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if reputed other sig])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+do_reputation
+reputation_pass -50
+])
+AT_DATA([REPFILE], [author.example other.example -100
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is in al.dkim-reputation.org (-100)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=-100
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify action_header reject])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+dnswl_worthiness_pass 4
+header_action_is_reject
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.3])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 drop-me.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: 550 drop-me (was: file name)
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify action_header drop and save message])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+dnswl_worthiness_pass 4
+save_drop .
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.3])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+recipient@1
+recipient@2
+recipient@3
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
+])
+[tail -n +9 zdrop-file_name* > no-preheader
+]
+AT_CHECK(cmp mail no-preheader, 0, [], [])
 AT_CLEANUP
 

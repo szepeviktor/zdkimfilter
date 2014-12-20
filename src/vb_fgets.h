@@ -2,7 +2,7 @@
 * vb_fgets.h - written by ale in milano on 21sep2012
 * variable buffer fgets
 
-Copyright (C) 2010-2012 Alessandro Vesely
+Copyright (C) 2010-2014 Alessandro Vesely
 
 This file is part of zdkimfilter
 

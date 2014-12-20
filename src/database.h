@@ -75,6 +75,7 @@ typedef struct domain_prescreen
 	char *vbr_mv;                  // trusted voucher (in parm->z) or NULL
 	struct domain_prescreen *next; // name, in alphabetic order
 	int reputation;                // if is_reputed*
+	uint8_t dnswl_value;
 	char name[];
 } domain_prescreen;
 

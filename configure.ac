@@ -195,11 +195,11 @@ AC_CACHE_CHECK([if opendkim is at least 1.2.2], [av_cv_opendkim_version_ok],
 		LIBS="$SAVE_LIBS -lopendkim"
 		save_ac_link="$ac_link"
 		ac_link="libtool --mode=link $ac_link"
-		AC_RUN_IFELSE([
+		AC_RUN_IFELSE([AC_LANG_SOURCE([
 			#include <opendkim/dkim.h>
 			int main(){unsigned long v = dkim_libversion();
 			return v < 0x01020200U;}
-			],
+			])],
 			[av_cv_opendkim_version_ok="true"], [])
 		ac_link="$save_ac_link"
 		LIBS="$SAVE_LIBS"
@@ -218,11 +218,11 @@ AC_CACHE_CHECK([if that was 2.2.0 or better], [av_cv_opendkim_version_220],
 		LIBS="$SAVE_LIBS -lopendkim"
 		save_ac_link="$ac_link"
 		ac_link="libtool --mode=link $ac_link"
-		AC_RUN_IFELSE([
+		AC_RUN_IFELSE([AC_LANG_SOURCE([
 			#include <opendkim/dkim.h>
 			int main(){unsigned long v = dkim_libversion();
 			return v < 0x02020000U;}
-			],
+			])],
 			[av_cv_opendkim_version_ok="true"], [])
 		ac_link="$save_ac_link"
 		LIBS="$SAVE_LIBS"
@@ -233,18 +233,18 @@ AC_CACHE_CHECK([cflags for opendkim],
 	av_cv_cflags_opendkim,
 	[
 	SAVE_CFLAGS="$CFLAGS"
-	AC_COMPILE_IFELSE([
+	AC_COMPILE_IFELSE([AC_LANG_SOURCE([
 		#include <opendkim/dkim.h>
-		],
+		])],
 		[av_cv_cflags_opendkim="none"],
 		[av_cv_cflags_opendkim="fail"]
 		)
 	if test "$av_cv_cflags_opendkim" = "fail"; then
 		av_cv_cflags_opendkim="`$PKG_CONFIG --cflags-only-I opendkim`"
 		CFLAGS="$av_cv_cflags_opendkim $CFLAGS"
-		AC_COMPILE_IFELSE([
+		AC_COMPILE_IFELSE([AC_LANG_SOURCE([
 			#include <opendkim/dkim.h>
-			],
+			])],
 			[],
 			[av_cv_cflags_opendkim="fail"]
 			)
@@ -267,21 +267,21 @@ AC_CACHE_CHECK([arguments for dkim_policy],
 	[
 	SAVE_CFLAGS="$CFLAGS"
 	CFLAGS="$OPENDKIM_CFLAGS $CFLAGS"
-	AC_COMPILE_IFELSE([
+	AC_COMPILE_IFELSE([AC_LANG_SOURCE([
 		#include <opendkim/dkim.h>
 		int main(){return dkim_policy((DKIM*)0,(dkim_policy_t*)0,(DKIM_PSTATE*)0)
 		== DKIM_STAT_OK? 1: 0;}
-		],
+		])],
 		[av_cv_opendkim_dkim_policy_args="three"],
 		[av_cv_opendkim_dkim_policy_args="fail"]
 		)
 	if test "$av_cv_opendkim_dkim_policy_args" = "fail"; then
-		AC_COMPILE_IFELSE([
+		AC_COMPILE_IFELSE([AC_LANG_SOURCE([
 			#include <opendkim/dkim.h>
 			int main(){return
 			dkim_policy((DKIM*)0,(dkim_policy_t*)0,(unsigned int*)0,(DKIM_PSTATE*)0)
 			== DKIM_STAT_OK? 1: 0;}
-			],
+			])],
 			[av_cv_opendkim_dkim_policy_args="four"],
 			[av_cv_opendkim_dkim_policy_args="fail"]
 			)
@@ -338,18 +338,18 @@ if $PKG_CONFIG --atleast-version=1.4.5 opendbx; then
 		av_cv_cflags_opendbx,
 		[
 		SAVE_CFLAGS="$CFLAGS"
-		AC_COMPILE_IFELSE([
+		AC_COMPILE_IFELSE([AC_LANG_SOURCE([
 			#include <opendbx/api.h>
-			],
+			])],
 			[av_cv_cflags_opendbx="none"],
 			[av_cv_cflags_opendbx="fail"]
 			)
 		if test "$av_cv_cflags_opendbx" = "fail"; then
 			av_cv_cflags_opendbx="`$PKG_CONFIG --cflags-only-I opendbx`"
 			CFLAGS="$av_cv_cflags_opendbx $CFLAGS"
-			AC_COMPILE_IFELSE([
+			AC_COMPILE_IFELSE([AC_LANG_SOURCE([
 				#include <opendbx/api.h>
-				],
+				])],
 				[],
 				[av_cv_cflags_opendbx="fail"]
 				)
@@ -497,6 +497,11 @@ AC_SUBST([MAILUSER], ["$courier_mailuser"])
 AC_SUBST([FILTERSOCKETDIR], ["${courier_localstatedir}/filters"])
 AC_SUBST([ALLFILTERSOCKETDIR], ["${courier_localstatedir}/allfilters"])
 AC_SUBST([ZDKIMFILTER_PID_DIR], ["${courier_localstatedir}/tmp"])
+
+# easier than throwing in inet_aton --0x7f0000ff as int
+AC_C_BIGENDIAN(
+	[AC_SUBST([DNSWL_ORG_INVALID_IP_ENDIAN], [2130706687])],
+	[AC_SUBST([DNSWL_ORG_INVALID_IP_ENDIAN], [-16777089])])
 
 # limit test suite entries
 AC_SUBST([HAVE_LIBOPENDKIM_220], ["${av_cv_opendkim_version_220}"])

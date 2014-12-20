@@ -252,7 +252,6 @@ static config_conf const conf[] =
 	CONFIG(parm_t, redact_received_auth, "any text", assign_ptr), // by redact.c
 	CONFIG(parm_t, add_auth_pass, "Y/N", assign_char),
 	CONFIG(parm_t, tmp, "temp directory", assign_ptr), // by dkimsign.c
-	CONFIG(parm_t, save_drop, "quarantine directory", assign_ptr),
 	CONFIG(parm_t, tempfail_on_error, "Y/N", assign_char),
 	CONFIG(parm_t, split_verify, "exec name", assign_ptr),
 	CONFIG(parm_t, add_ztags, "Y/N, Y for debug z=", assign_char),
@@ -265,12 +264,19 @@ static config_conf const conf[] =
 	CONFIG(parm_t, max_signatures, "int", assign_int),
 	CONFIG(parm_t, honor_author_domain, "Y=enable ADSP", assign_char),
 	CONFIG(parm_t, reject_on_nxdomain, "Y=procrustean ADSP", assign_char),
+	CONFIG(parm_t, action_header, "header field name", assign_ptr),
+	CONFIG(parm_t, header_action_is_reject, "Y/N", assign_char),
+	CONFIG(parm_t, save_drop, "quarantine directory", assign_ptr),
 	CONFIG(parm_t, do_reputation, "Y=do reputation lookup", assign_char),
 	CONFIG(parm_t, reputation_fail, "high int", assign_int),
 	CONFIG(parm_t, reputation_pass, "low int", assign_int),
 	CONFIG(parm_t, reputation_root, "lookup host", assign_ptr),
 	CONFIG(parm_t, trusted_vouchers, "space-separated, no colon", assign_array),
+	CONFIG(parm_t, dnswl_worthiness_pass, "int", assign_int),
+	CONFIG(parm_t, dnswl_invalid_ip, "int", assign_int),
+	CONFIG(parm_t, dnswl_octet_index, "int", assign_int),
 	CONFIG(parm_t, trusted_dnswl, "space-separated dns.zones", assign_array),
+	CONFIG(parm_t, whitelisted_pass, "int", assign_int),
 	CONFIG(parm_t, dns_timeout, "secs", assign_int),
 
 	CONFIG(db_parm_t, db_backend, "conn", assign_ptr),
