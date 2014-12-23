@@ -2715,3 +2715,22 @@ INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
 AT_CHECK(cmp mail no-preheader, 0, [], [])
 AT_CLEANUP
 
+
+# 
+AT_SETUP([Real DNS queries: vouch, reputation])
+AT_CHECK(
+[TESTmyvbr --query dwltest.com dwl.spamhaus.org
+],
+0,
+[rtc = 0 (noerror) "all"
+],
+[])
+AT_CHECK(
+[TESTmyrep test3 example.com signer.example reptest.tana.it
+],
+0,
+[rtc = 0, rep = 3.
+],
+[])
+AT_CLEANUP
+

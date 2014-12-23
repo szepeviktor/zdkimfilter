@@ -225,6 +225,8 @@ static char const *const parm_z_reputation_root =
 	DKIM_REP_ROOT;
 #elif defined DKIM_REP_DEFROOT
 	DKIM_REP_DEFROOT;
+#elif defined DKIM_REPUTATION_ROOT
+	DKIM_REPUTATION_ROOT
 #else
 	NULL;
 #endif
@@ -3420,7 +3422,7 @@ static void verify_message(dkimfl_parm *parm)
 						droperr |= fclose(fp);
 						if (droperr == 0 && parm->z.verbose >= 4 && fname)
 							fl_report(LOG_INFO,
-								"dropped message saved in %s", fname);
+								"dropped message saved in %s", my_basename(fname));
 					}
 
 					if (parm->dyn.rtc >= 0)

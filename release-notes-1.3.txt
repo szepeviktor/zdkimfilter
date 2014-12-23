@@ -1,13 +1,18 @@
 Config file changes:
 ===================
+New parameters for header-driven message drop/reject. An upstream filter can
+add a header to force drop/reject unless whitelisted. The new parameters are
+action_header, header_action_is_reject, dnswl_worthiness_pass, dnswl_invalid_ip,
+dnswl_octet_index, whitelisted_pass.
+
+New parameter split_verify, to have separate filter processes.  In this case,
+downstream filters can whitelist based on Authentication-Results.
 
 New parameter verify_one_domain.  In 1.2, unless report_all_sigs is enabled,
 only the first domain gets verified.  In 1.3, verifying is tried for each
 signing domain in the same situation, unless the new parameter is enabled.
 
 New parameter add_ztags, to add z= in the signature, for debugging.
-
-New parameter split_verify, to have separate filter processes.
 
 
 Database changes:
@@ -67,4 +72,8 @@ Config file couldn't be reloaded, this can now be done with kill -HUP.
 
 Drop log line (verbose>=1) changed from dropped,From-MTA=... to drop msg,id=...
 at LOG_INFO (was LOG_ERR).  Other logging cleaned up a bit (see ChangeLog).
+
+Reputation checking was preserved, in the hope that someone will provide it,
+but dkim-reputation.org is not working.  If you ever enabled do_reputation,
+remove it from the conf file.
 

@@ -5,7 +5,7 @@
 AM_CFLAGS = -I$(top_srcdir)
 AM_CPPFLAGS = -fno-strict-aliasing
 noinst_HEADERS = filterlib.h filedefs.h filecopy.h dkim-mailparse.h util.h\
- myvbr.h myreputation.h redact.h vb_fgets.h parm.h \
+ myvbr.h myreputation.h md5.h redact.h vb_fgets.h parm.h \
  database.h database_variables.h database_statements.h
 
 filterexecdir = @COURIER_FILTER_INSTALL@
@@ -15,7 +15,7 @@ filterexecPROGRAMS_INSTALL = $(INSTALL_PROGRAM)@PROGRAM_OWNER@
 INSTALL_PROGRAM = /bin/sh $(top_builddir)/myinstall.sh
 
 zdkimfilter_SOURCES = zdkimfilter.c filterlib.c parm.c myvbr.c redact.c \
- database.c ip_to_hex.c util.c myreputation.c
+ database.c ip_to_hex.c util.c myreputation.c md5.c
 zdkimfilter_LDADD = @OPENDKIM_LIB@ @RESOLVER_LIB@ @NETTLE_LIB@ @OPENDBX_LIB@
 zdkimfilter_CPPFLAGS = -DFILTER_NAME=zdkimfilter @OPENDKIM_CFLAGS@ @OPENDBX_CFLAGS@
 # nozdkimfilter_CCLD = libtool --mode=link $(CCLD)
@@ -29,10 +29,13 @@ zfilter_db_SOURCES = database.c ip_to_hex.c parm.c
 zfilter_db_CPPFLAGS = @OPENDBX_CFLAGS@ -DTEST_MAIN
 zfilter_db_LDADD = @OPENDBX_LIB@
 
-check_PROGRAMS = TESTmyvbr TESTutil
+check_PROGRAMS = TESTmyvbr TESTutil TESTmyrep
 TESTmyvbr_SOURCES = myvbr.c
 TESTmyvbr_CPPFLAGS = -DTEST_MAIN
 TESTmyvbr_LDADD = @RESOLVER_LIB@
 TESTutil_SOURCES = util.c
 TESTutil_CPPFLAGS = -DTEST_MAIN
+TESTmyrep_SOURCES = myreputation.c md5.c
+TESTmyrep_CPPFLAGS = -DTEST_MAIN
+TESTmyrep_LDADD = @RESOLVER_LIB@
 
