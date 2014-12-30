@@ -48,10 +48,6 @@ the resulting work.
 #define HAVE_LIBOPENDKIM_22 22
 #endif
 
-#if HAVE_DKIM_REP_DKIM_REP_H
-#include <dkim-rep/dkim-rep.h>
-#endif
-
 #include <stddef.h>
 #include <time.h>
 #include <stdbool.h>
@@ -226,7 +222,7 @@ static char const *const parm_z_reputation_root =
 #elif defined DKIM_REP_DEFROOT
 	DKIM_REP_DEFROOT;
 #elif defined DKIM_REPUTATION_ROOT
-	DKIM_REPUTATION_ROOT
+	DKIM_REPUTATION_ROOT;
 #else
 	NULL;
 #endif

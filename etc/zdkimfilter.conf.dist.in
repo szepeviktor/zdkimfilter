@@ -1,21 +1,20 @@
 # Config file for zdkimfilter
 # Syntax of each line: [ "#" comment ] | name [ "=" ] [ value ]
 # Backslashes ("\") can be used to wrap multiple physical lines into a single
-# logical one, also comments.  Only a few name/value settings are shown below,
-# see zdkimfilter.conf(5) and zfilter_db(1) man pages for a comprehensive list.
+# logical one, also comments.
 #
-# NOTE: stop and reload zdkimfilter for any change to this file to take effect.
+# Only a few name/value settings are shown below, see zdkimfilter.conf(5) and
+# zfilter_db(1) man pages for a comprehensive list.
 
 # all_mode (bool)
 # Courier runs all-mode filters after non-all-mode ones, in alphabetical order.
-# Non-all-mode filters can be whitelisted by local filters. In addition, any
-# global filter can whitelist the filters running after it.
+# This determines in which directory zdkimfilter's socket is created.
 all_mode = @zdkimfilter_mode@
 
 # trust_a_r (bool)
 # Don't remove any Authentication-Results: (A-R) header field.
 # Courier renames existing A-R fields since 0.71.0, if ALLOW_EXCLUSIVE is set.
-# Set this after enabling ALLOW_EXCLUSIVE.
+# Set this parameter after enabling ALLOW_EXCLUSIVE.
 
 # verbose (int)
 # default: verbose = 3
