@@ -2,7 +2,7 @@
 * zdkimfilter - written by ale in milano on Thu 11 Feb 2010 03:48:15 PM CET 
 * Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010-2014 Alessandro Vesely
+Copyright (C) 2010-2015 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -216,16 +216,7 @@ static inline u_char **
 cast_u_char_parm_array(char **a) {return (u_char **)a;}
 
 static char const parm_z_domain_keys[] = COURIER_SYSCONF_INSTALL "/filters/keys";
-static char const *const parm_z_reputation_root =
-#if defined DKIM_REP_ROOT
-	DKIM_REP_ROOT;
-#elif defined DKIM_REP_DEFROOT
-	DKIM_REP_DEFROOT;
-#elif defined DKIM_REPUTATION_ROOT
-	DKIM_REPUTATION_ROOT;
-#else
-	NULL;
-#endif
+static char const *const parm_z_reputation_root = NULL; // no known service
 static char const *const parm_z_trusted_dnswl[] = {"list.dnswl.org", NULL};
 
 static void config_default(dkimfl_parm *parm) // only non-zero...

@@ -2592,6 +2592,7 @@ ZF_KEYFILE
 ZF_CONFIG(3, [action_header drop-me
 do_reputation
 reputation_pass -50
+reputation_root al.dkim-reputation.org
 ])
 AT_DATA([REPFILE], [author.example author.example -100
 ])
@@ -2625,6 +2626,7 @@ ZF_KEYFILE
 ZF_CONFIG(3, [action_header drop-me
 do_reputation
 reputation_pass -50
+reputation_root al.dkim-reputation.org
 ])
 AT_DATA([REPFILE], [author.example other.example -100
 ])

@@ -11,7 +11,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010-2014 Alessandro Vesely
+Copyright (C) 2010-2015 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -125,6 +125,7 @@ static void child_reaper(int sig)
 
 	(void)sig;
 
+	int save_errno = errno;
 	while ((child = waitpid(-1, &status, WNOHANG)) > 0)
 	{
 		--live_children;
@@ -145,6 +146,7 @@ static void child_reaper(int sig)
 		}
 #endif
 	}
+	errno = save_errno;
 }
 
 int fl_log_no_pid;
@@ -1191,7 +1193,17 @@ static int my_lf_accept(int listensock, sigset_t *allowset)
 		sigprocmask(SIG_SETMASK, &blockset, NULL);
 		if (rtc < 0)
 #endif
-			return -1;
+		{
+			if (errno == EAGAIN || errno == EINTR)
+				return -1;
+
+			fl_report(LOG_CRIT,
+#if HAVE_PSELECT
+				"p"
+#endif
+				"select() error: %s", strerror(errno));
+			continue; // changed for 1.4, was return -1 in any case
+		}
 
 		if (FD_ISSET(0, &fd0))
 		{
@@ -1209,6 +1221,8 @@ static int my_lf_accept(int listensock, sigset_t *allowset)
 		{
 			if (errno == EAGAIN || errno == EINTR)
 				return -1; // changed for 1.3, was continue in any case;
+
+			fl_report(LOG_CRIT, "accept() error: %s", strerror(errno));
 			continue;
 		}
 
@@ -1761,18 +1775,11 @@ int fl_main(fl_init_parm const*fn, void *parm,
 			{
 				if (fd < 0) /* select interrupted */
 				{
-					switch (errno)
-					{
-						case EAGAIN:
-						case EINTR:
-							if (fn->on_fork)
-								(*fn->on_fork)(&fl);
-							continue;
-						default:
-							break;
-					}
-					perror("select");
-					rtc = 1;
+					assert(errno == EAGAIN || errno == EINTR);
+					if (fn->on_fork)
+						(*fn->on_fork)(&fl);
+
+					continue;
 				}
 				/* fd == 0 for clean shutdown */
 				break;

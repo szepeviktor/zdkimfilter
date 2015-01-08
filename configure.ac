@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.67])
-AC_INIT([zdkimfilter for courier],[1.3],[vesely@tana.it],[zdkimfilter])
+AC_INIT([zdkimfilter for courier],[1.4],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_CONFIG_MACRO_DIR([m4])
