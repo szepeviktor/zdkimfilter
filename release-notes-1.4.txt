@@ -1,0 +1,5 @@
+Bug fixes:
+=========
+Don't exit main process on (p)select error.
+Set reputation_root NULL by default.
+
