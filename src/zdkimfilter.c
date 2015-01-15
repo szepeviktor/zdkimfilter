@@ -3168,16 +3168,22 @@ static void verify_message(dkimfl_parm *parm)
 		case DKIM_STAT_INTERNAL:
 		case DKIM_STAT_CBTRYAGAIN:
 		case DKIM_STAT_KEYFAIL:
+		{
+			char const *const err = dkim_geterror(dkim);
 			if (parm->z.verbose >= 3)
 			{
-				char const *err = dkim_geterror(dkim);
 				fl_report(LOG_ERR,
 					"id=%s: temporary verification failure: %s",
 					parm->dyn.info.id, err? err: "NULL");
 			}
-			parm->dyn.rtc = -1;
-			// temperror
+
+			// temperror except for missing CNAME (which is permerror)
+			if (status != DKIM_STAT_KEYFAIL || 
+				err == NULL || strstr(err, "CNAME") == NULL)
+					parm->dyn.rtc = -1;
+
 			break;
+		}
 
 		case DKIM_STAT_SYNTAX:
 		default:
