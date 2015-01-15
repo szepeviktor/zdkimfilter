@@ -1229,7 +1229,7 @@ static int my_lf_accept(int listensock, sigset_t *allowset)
 		fcntl(fd, F_SETFL, 0);  /* Take out of NDELAY mode */
 		break;
 	}
-	
+
 	return fd;
 }
 
@@ -1781,6 +1781,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 
 					continue;
 				}
+
 				/* fd == 0 for clean shutdown */
 				break;
 			}

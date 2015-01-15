@@ -2966,11 +2966,16 @@ static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status,
 	vh->step = 1;
 	vh->dkim_or_file = fp;
 	rewind(fl_get_file(parm->fl));
-	if (verify_headers(vh) == 0 &&
+	int rtc = verify_headers(vh);
+	if (rtc == 0 &&
 		fputc('\n', fp) != EOF &&
 		filecopy(fl_get_file(parm->fl), fp) == 0)
 			return parm->dyn.rtc = 1;
 
+	if (rtc == 0) // verify_headers logged any error already
+		fl_report(LOG_CRIT,
+			"id=%s: file I/O error: %s",
+			parm->dyn.info.id, strerror(errno));
 	return parm->dyn.rtc = -1;
 }
 
@@ -3079,6 +3084,10 @@ static void verify_message(dkimfl_parm *parm)
 	DKIM *dkim = dkim_verify(parm->dklib, parm->dyn.info.id, NULL, &status);
 	if (dkim == NULL || status != DKIM_STAT_OK)
 	{
+		char const *err = dkim? dkim_geterror(dkim): NULL;
+		fl_report(LOG_CRIT,
+			"id=%s: cannot init OpenDKIM: %s",
+			parm->dyn.info.id, err? err: "NULL");
 		parm->dyn.rtc = -1;
 		clean_stats(parm);
 		return;
@@ -3159,6 +3168,13 @@ static void verify_message(dkimfl_parm *parm)
 		case DKIM_STAT_INTERNAL:
 		case DKIM_STAT_CBTRYAGAIN:
 		case DKIM_STAT_KEYFAIL:
+			if (parm->z.verbose >= 3)
+			{
+				char const *err = dkim_geterror(dkim);
+				fl_report(LOG_ERR,
+					"id=%s: temporary verification failure: %s",
+					parm->dyn.info.id, err? err: "NULL");
+			}
 			parm->dyn.rtc = -1;
 			// temperror
 			break;
