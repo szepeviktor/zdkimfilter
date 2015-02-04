@@ -43,10 +43,6 @@ the resulting work.
 #include <stdint.h>
 #include <fcntl.h>
 #include <opendkim/dkim.h>
-#if !defined DKIM_PRESULT_AUTHOR
-#define DKIM_PRESULT_AUTHOR DKIM_PRESULT_FOUND
-#define HAVE_LIBOPENDKIM_22 22
-#endif
 
 #include <stddef.h>
 #include <time.h>
@@ -55,6 +51,7 @@ the resulting work.
 #include "filedefs.h"
 #include "myvbr.h"
 #include "myreputation.h"
+#include "myadsp.h"
 #include "redact.h"
 #include "vb_fgets.h"
 #include "parm.h"
@@ -1480,7 +1477,6 @@ typedef struct verify_parms
 	DKIM_SIGINFO *sig, *author_sig, *vbr_sig, *whitelisted_sig;
 	domain_prescreen *dps, *author_dps, *vbr_dps, *whitelisted_dps,
 		*sender_dps, *helo_dps, *dnswl_dps;
-	dkim_policy_t policy;
 
 	void *dkim_or_file;
 	int step;
@@ -1490,6 +1486,7 @@ typedef struct verify_parms
 	// number of domains, elements of domain_ptr
 	int ndoms;
 
+	int policy;
 	int presult;
 	int dkim_reputation;
 	size_t received_spf;
@@ -2709,7 +2706,7 @@ static int print_signature_resinfo(FILE *fp, DKIM_SIGINFO *const sig,
 	char buf2[80], *id2 = NULL;
 	size_t sz2 = sizeof buf2;
 	memset(buf2, 0, sizeof buf2);
-#if defined HAVE_LIBOPENDKIM_22
+#if HAVE_DKIM_GET_SIGSUBSTRING
 // dkim_get_sigsubstring was added for version 2.1.0
 	if (dkim && dps && dps->nsigs > 1 &&
 		dkim_get_sigsubstring(dkim, sig, buf2, &sz2) == DKIM_STAT_OK &&
@@ -2920,7 +2917,7 @@ static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status,
 
 	if (*policy_result)
 	{
-#if HAVE_LIBOPENDKIM_22
+#if HAVE_DKIM_GETUSER
 		char const *const user = dkim_getuser(dkim);
 		if (user && vh->dkim_domain)
 			fprintf(fp, ";\n  dkim-adsp=%s header.from=%s@%s",
@@ -3158,17 +3155,23 @@ static void verify_message(dkimfl_parm *parm)
 			// none
 			break;
 
-		case DKIM_STAT_BADSIG:
-		case DKIM_STAT_CANTVRFY:
-		case DKIM_STAT_REVOKED:
-			// fail or neutral
-			break;
-
 		case DKIM_STAT_NORESOURCE:
 		case DKIM_STAT_INTERNAL:
 		case DKIM_STAT_CBTRYAGAIN:
 		case DKIM_STAT_KEYFAIL:
 		{
+#if HAVE_LIBOPENDKIM_2A1
+			if (parm->z.verbose >= 3)
+			{
+				char const *const err = dkim_geterror(dkim);
+				fl_report(LOG_ERR,
+					"id=%s: temporary verification failure: %s",
+					parm->dyn.info.id, err? err: "NULL");
+			}
+
+			// temperror except for missing CNAME (which is permerror)
+			parm->dyn.rtc = -1;
+#else
 			char const *const err = dkim_geterror(dkim);
 			if (parm->z.verbose >= 3)
 			{
@@ -3181,14 +3184,27 @@ static void verify_message(dkimfl_parm *parm)
 			if (status != DKIM_STAT_KEYFAIL || 
 				err == NULL || strstr(err, "CNAME") == NULL)
 					parm->dyn.rtc = -1;
-
+#endif
 			break;
 		}
 
 		case DKIM_STAT_SYNTAX:
+		case DKIM_STAT_BADSIG:
+		case DKIM_STAT_NOKEY:
+		case DKIM_STAT_CANTVRFY:
+		case DKIM_STAT_REVOKED:
 		default:
+		{
 			// permerror
+			if (parm->z.verbose >= 4)
+			{
+				char const *const err = dkim_geterror(dkim);
+				fl_report(LOG_ERR,
+					"id=%s: permanent verification failure: %s",
+					parm->dyn.info.id, err? err: "NULL");
+			}
 			break;
+		}
 	}
 
 	/*
@@ -3196,23 +3212,34 @@ static void verify_message(dkimfl_parm *parm)
 	*/
 	if (parm->dyn.rtc == 0)
 	{
-		if ((vh.dkim_domain != NULL ||
-				(vh.dkim_domain = dkim_getdomain(dkim)) != NULL) &&
-			dkim_policy(dkim, &vh.policy,
-#if OPENDKIM_DKIM_POLICY_ARGS == 4
-			/* not doing ATSP (yet) */ NULL,
-#endif
-													NULL) == DKIM_STAT_OK)
+		if (vh.dkim_domain != NULL ||
+			(vh.dkim_domain = dkim_getdomain(dkim)) != NULL)
 		{
-			vh.presult = dkim_getpresult(dkim);
+			vh.presult = my_get_adsp(vh.dkim_domain, &vh.policy);
+			if (vh.presult <= -2 &&
+				(parm->z.honor_author_domain || parm->z.reject_on_nxdomain))
+			{
+				if (parm->z.verbose >= 3)
+					fl_report(LOG_ERR,
+						"id=%s: temporary author domain verification failure: %s",
+						parm->dyn.info.id,
+						vh.presult == -2? "DNS server": "garbled data");
+				parm->dyn.rtc = -1;
+			}
+		}
+	}
+			
+	if (parm->dyn.rtc == 0)
+	{
+		if (vh.dkim_domain != NULL && vh.presult >= 0)
+		{
 			bool const adsp_fail =
 				(vh.policy == DKIM_POLICY_DISCARDABLE ||
 					vh.policy == DKIM_POLICY_ALL) &&
-				/* redundant: vh.presult == DKIM_PRESULT_AUTHOR && */
 				vh.author_sig == NULL;
 			if (parm->dyn.stats)
 			{
-				parm->dyn.stats->adsp_found = vh.presult == DKIM_PRESULT_AUTHOR;
+				parm->dyn.stats->adsp_found = vh.presult == 0;
 				parm->dyn.stats->adsp_unknown = vh.policy == DKIM_POLICY_UNKNOWN;
 				parm->dyn.stats->adsp_all = vh.policy == DKIM_POLICY_ALL;
 				parm->dyn.stats->adsp_discardable =
@@ -3229,11 +3256,11 @@ static void verify_message(dkimfl_parm *parm)
 			* discard if ADSP == discardable;
 			*/
 			if (parm->z.honor_author_domain && adsp_fail ||
-				parm->z.reject_on_nxdomain && vh.presult == DKIM_PRESULT_NXDOMAIN)
+				parm->z.reject_on_nxdomain && vh.presult == 3)
 			{
 				char const *log_reason, *smtp_reason = NULL;
 				
-				if (vh.presult == DKIM_PRESULT_NXDOMAIN)
+				if (vh.presult == 3)
 				{
 					log_reason = "invalid domain";
 					smtp_reason = "554 Invalid author domain\n";
@@ -3469,7 +3496,7 @@ static void verify_message(dkimfl_parm *parm)
 	char const *policy_type = "", *policy_result = "";
 	if (parm->dyn.rtc == 0)
 	{
-		if (vh.presult == DKIM_PRESULT_NXDOMAIN)
+		if (vh.presult == 3)
 		{
 			policy_type = " adsp=";
 			policy_result = "nxdomain";
@@ -3927,70 +3954,22 @@ static void set_keyfile(fl_parm *fl)
 		dkim_options(parm->dklib, DKIM_OP_SETOPT,
 			DKIM_OPTS_QUERYINFO, keyfile, strlen(keyfile));
 	
+	set_adsp_query_faked('k');
+
 	if (nok || parm->z.verbose >= 8)
 		fl_report(nok? LOG_ERR: LOG_INFO,
 			"DKIM query method%s set to file \"%s\"",
 			nok? " not": "", keyfile);
 }
 
-static char policyfile[] = "POLICYFILE";
-
-DKIM_CBSTAT my_policy_lookup(DKIM *dkim, unsigned char *query,
-	_Bool excheck, unsigned char *buf, size_t buflen, int *qstat)
-{
-	assert(qstat);
-	verify_parms *const vh = (verify_parms*)dkim_get_user_context(dkim);
-	if (vh && vh->parm && vh->parm->z.verbose >= 8)
-		fl_report(LOG_DEBUG, "query: %s", query);
-	
-	struct stat st;
-	if (stat(policyfile, &st) != 0 || !S_ISREG(st.st_mode))
-	{
-		if (excheck)
-		{
-			*qstat = 3; // NXDOMAIN
-			return DKIM_CBSTAT_CONTINUE;
-		}
-		return DKIM_CBSTAT_NOTFOUND;
-	}
-
-	*qstat = 0; // NOERROR
-	if (excheck)
-		return DKIM_CBSTAT_CONTINUE;
-
-	if (st.st_size >= 0 && buflen > (unsigned)st.st_size)
-	{
-		FILE *fp = fopen(policyfile, "r");
-		if (fp)
-		{
-			if (fread(buf, st.st_size, 1, fp) != 1)
-				*qstat = 2; // SERVFAIL?
-			fclose(fp);
-			buf[st.st_size] = 0;
-			return DKIM_CBSTAT_CONTINUE;
-		}
-	}
-	
-	return DKIM_CBSTAT_ERROR;
-}
-
 /*
-* using the callback above, test3 can be used to set an invalid domain
+* test3 can be used to set an invalid domain
 * in case no policyfile is found, or the policy specified therein.
 */
 static void set_policyfile(fl_parm *fl)
 {
-	assert(fl);
-
-	dkimfl_parm *parm = get_parm(fl);
-
-	assert(parm);
-	
-	DKIM_STAT status = dkim_set_policy_lookup(parm->dklib, &my_policy_lookup);
-	if (status != DKIM_STAT_OK || parm->z.verbose >= 8)
-		fl_report(status != DKIM_STAT_OK? LOG_ERR: LOG_INFO,
-			"DKIM policy method%s set to file \"%s\"",
-			status != DKIM_STAT_OK? " not": "", policyfile);
+	set_adsp_query_faked('p');
+	(void)fl;
 }
 
 /*
@@ -4220,12 +4199,12 @@ int main(int argc, char *argv[])
 #endif
 				" debugging support\n"
 				"Compiled with OpenDKIM library version: %#lX\n"
-#if defined HAVE_LIBOPENDKIM_22
+#if HAVE_DKIM_LIBVERSION
 				"Linked with OpenDKIM library version: %#lX (%smatch)\n"
 #endif
 				"Reported SSL/TLS version: %#lX\n",
 				(long)(OPENDKIM_LIB_VERSION),
-#if defined HAVE_LIBOPENDKIM_22
+#if HAVE_DKIM_LIBVERSION
 				(unsigned long)dkim_libversion(),
 				(unsigned long)dkim_libversion() ==
 					(unsigned long)(OPENDKIM_LIB_VERSION)? "": "DO NOT ",
@@ -4258,7 +4237,7 @@ int main(int argc, char *argv[])
 	else
 		parm->prog_name = my_basename(argv[0]);
 
-#if defined HAVE_LIBOPENDKIM_22
+#if HAVE_DKIM_LIBVERSION
 	if (parm->z.verbose >= 2 &&
 		(unsigned long)dkim_libversion() !=	(unsigned long)(OPENDKIM_LIB_VERSION))
 			fl_report(LOG_WARNING,

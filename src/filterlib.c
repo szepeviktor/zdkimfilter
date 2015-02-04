@@ -1727,6 +1727,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 	{
 		int listensock = -1;
 
+		setlinebuf(stderr);
 		if (fl.verbose >= 3)
 			fl_report(LOG_INFO, "running");
 		setsid();

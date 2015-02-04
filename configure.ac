@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.67])
-AC_INIT([zdkimfilter for courier],[1.4],[vesely@tana.it],[zdkimfilter])
+AC_INIT([zdkimfilter for courier],[1.5],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -184,7 +184,10 @@ AC_SUBST([SOCKET_LIB])
 
 AC_CACHE_CHECK([if opendkim.pc exists], [av_cv_opendkim_version],
 	[av_cv_opendkim_version=false
-	($PKG_CONFIG --modversion opendkim) 2>/dev/null && av_cv_opendkim_version=true])
+	if $PKG_CONFIG --modversion opendkim 2>/dev/null ; then
+		av_cv_opendkim_version=true
+	fi
+	])
 
 AC_CACHE_CHECK([if opendkim is at least 1.2.2], [av_cv_opendkim_version_ok],
 	[av_cv_opendkim_version_ok=false
@@ -210,9 +213,9 @@ if test "$av_cv_opendkim_version_ok" = "false"; then
 fi
 
 AC_CACHE_CHECK([if that was 2.2.0 or better], [av_cv_opendkim_version_220],
-	[av_cv_opendkim_version_220=false
+	[av_cv_opendkim_version_220=0
 	if test "$av_cv_opendkim_version" = "true" ; then
-		$PKG_CONFIG --atleast-version=2.2.0 opendkim && av_cv_opendkim_version_220="true"
+		$PKG_CONFIG --atleast-version=2.2.0 opendkim && av_cv_opendkim_version_220=1
 	else
 		SAVE_LIBS="$LIBS"
 		LIBS="$SAVE_LIBS -lopendkim"
@@ -223,7 +226,27 @@ AC_CACHE_CHECK([if that was 2.2.0 or better], [av_cv_opendkim_version_220],
 			int main(){unsigned long v = dkim_libversion();
 			return v < 0x02020000U;}
 			])],
-			[av_cv_opendkim_version_ok="true"], [])
+			[av_cv_opendkim_version_220=1], [])
+		ac_link="$save_ac_link"
+		LIBS="$SAVE_LIBS"
+	fi
+	])
+
+AC_CACHE_CHECK([if that was 2.10.1 or better], [av_cv_opendkim_version_2A1],
+	[av_cv_opendkim_version_2A1=0
+	if test "$av_cv_opendkim_version" = "true" ; then
+		$PKG_CONFIG --atleast-version=2.10.1 opendkim && av_cv_opendkim_version_2A1=1
+	else
+		SAVE_LIBS="$LIBS"
+		LIBS="$SAVE_LIBS -lopendkim"
+		save_ac_link="$ac_link"
+		ac_link="libtool --mode=link $ac_link"
+		AC_RUN_IFELSE([AC_LANG_SOURCE([
+			#include <opendkim/dkim.h>
+			int main(){unsigned long v = dkim_libversion();
+			return v < 0x020a0000U;}
+			])],
+			[av_cv_opendkim_version_2A1=1], [])
 		ac_link="$save_ac_link"
 		LIBS="$SAVE_LIBS"
 	fi
@@ -262,47 +285,6 @@ else
 fi
 AC_SUBST([OPENDKIM_CFLAGS])
 
-AC_CACHE_CHECK([arguments for dkim_policy],
-	av_cv_opendkim_dkim_policy_args,
-	[
-	SAVE_CFLAGS="$CFLAGS"
-	CFLAGS="$OPENDKIM_CFLAGS $CFLAGS"
-	AC_COMPILE_IFELSE([AC_LANG_SOURCE([
-		#include <opendkim/dkim.h>
-		int main(){return dkim_policy((DKIM*)0,(dkim_policy_t*)0,(DKIM_PSTATE*)0)
-		== DKIM_STAT_OK? 1: 0;}
-		])],
-		[av_cv_opendkim_dkim_policy_args="three"],
-		[av_cv_opendkim_dkim_policy_args="fail"]
-		)
-	if test "$av_cv_opendkim_dkim_policy_args" = "fail"; then
-		AC_COMPILE_IFELSE([AC_LANG_SOURCE([
-			#include <opendkim/dkim.h>
-			int main(){return
-			dkim_policy((DKIM*)0,(dkim_policy_t*)0,(unsigned int*)0,(DKIM_PSTATE*)0)
-			== DKIM_STAT_OK? 1: 0;}
-			])],
-			[av_cv_opendkim_dkim_policy_args="four"],
-			[av_cv_opendkim_dkim_policy_args="fail"]
-			)
-	fi
-	CFLAGS="$SAVE_CFLAGS"
-	])
-
-if test "$av_cv_opendkim_dkim_policy_args" = "fail"; then
-	AC_MSG_ERROR([unable to use libopendkim])
-fi
-if test "$av_cv_opendkim_dkim_policy_args" = "four"; then
-	OPENDKIM_DKIM_POLICY_ARGS="4"
-else
-	OPENDKIM_DKIM_POLICY_ARGS="3"
-fi
-AC_DEFINE_UNQUOTED([OPENDKIM_DKIM_POLICY_ARGS], [$OPENDKIM_DKIM_POLICY_ARGS], [3 OR 4])
-
-AC_CHECK_HEADERS([dkim-rep/dkim-rep.h])
-if $PKG_CONFIG --exists dkim-rep; then
-	OPENDKIM_LIB="-ldkimrep"
-fi
 
 OPENDKIM_LIB="`$PKG_CONFIG --libs-only-L opendkim` -lopendkim $OPENDKIM_LIB"
 AC_MSG_CHECKING([flags for opendkim library])
@@ -315,7 +297,6 @@ AC_MSG_CHECKING([flags for opendkim library])
 		[av_cv_flags_library_opendkim="ok"])
 	ac_link="$save_ac_link"
 	LIBS="$SAVE_LIBS"
-	LDFLAGS="$SAVE_LDFLAGS"
 
 if test "$av_cv_flags_library_opendkim" = "none"; then
 	AC_MSG_ERROR([unable to use opendkim library])
@@ -323,6 +304,17 @@ fi
 AC_MSG_RESULT([$OPENDKIM_LIB])
 AC_SUBST([OPENDKIM_LIB])
 
+
+SAVE_CFLAGS="$CFLAGS"
+CFLAGS="$OPENDKIM_CFLAGS $CFLAGS"
+SAVE_LIBS="$LIBS"
+LIBS="$SAVE_LIBS $OPENDKIM_LIB"
+save_ac_link="$ac_link"
+ac_link="libtool --mode=link $ac_link"
+AC_CHECK_FUNCS([dkim_get_sigsubstring dkim_getuser dkim_libversion])
+CFLAGS="$SAVE_CFLAGS"
+ac_link="$save_ac_link"
+LIBS="$SAVE_LIBS"
 
 #
 AC_CACHE_CHECK([opendbx version],
@@ -505,6 +497,10 @@ AC_C_BIGENDIAN(
 
 # limit test suite entries
 AC_SUBST([HAVE_LIBOPENDKIM_220], ["${av_cv_opendkim_version_220}"])
+
+# precompiler conditionals
+AC_DEFINE_UNQUOTED([HAVE_LIBOPENDKIM_220], [$av_cv_opendkim_version_220], [OpenDKIM 2.2.0 or better])
+AC_DEFINE_UNQUOTED([HAVE_LIBOPENDKIM_2A1], [$av_cv_opendkim_version_2A1], [OpenDKIM 2.10.1 or better])
 
 # LN_S used in tests/aclocal.in
 AC_PROG_LN_S

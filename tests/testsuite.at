@@ -219,7 +219,7 @@ AT_TESTED([zdkimfilter])
 
 # test only valid with libopendkim v. 2.2.0 or better
 # (need autoconf 2.64 for AT_SKIP_IF?)
-m4_define([ZF_REQUIRE_22], [AT_CHECK([$HAVE_LIBOPENDKIM_220 || exit 77])])
+m4_define([ZF_REQUIRE_22], [AT_CHECK([test "$HAVE_LIBOPENDKIM_220" = "1" || exit 77])])
 
 #
 AT_SETUP([test default parameters])
