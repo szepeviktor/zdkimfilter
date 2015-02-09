@@ -2,7 +2,7 @@
 * database_statements.h - written by ale in milano on 16oct2012
 * list of statements, included multiple times
 
-Copyright (C) 2012 Alessandro Vesely
+Copyright (C) 2012-2015 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -33,6 +33,7 @@ the resulting work.
 #endif
 
 DATABASE_STATEMENT(db_sql_whitelisted)
+DATABASE_STATEMENT(db_sql_domain_flags)
 DATABASE_STATEMENT(db_sql_select_domain)
 DATABASE_STATEMENT(db_sql_update_domain)
 DATABASE_STATEMENT(db_sql_insert_domain)

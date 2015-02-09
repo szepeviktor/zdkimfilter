@@ -2,7 +2,7 @@
 * database.h - written by ale in milano on 25sep2012
 * read/write via odbx
 
-Copyright (C) 2012-2014 Alessandro Vesely
+Copyright (C) 2012-2015 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -39,6 +39,8 @@ db_parm_t* db_parm_addr(db_work_area *dwa);
 int db_config_wrapup(db_work_area* dwa, int *in, int *out);
 int db_connect(db_work_area *dwa);
 int db_is_whitelisted(db_work_area* dwa, char /*const*/ *domain);
+int db_get_domain_flags(db_work_area* dwa, char *domain, char *org_domain,
+	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled);
 char *db_check_user(db_work_area* dwa);
 
 void db_set_authenticated_user(db_work_area *dwa,

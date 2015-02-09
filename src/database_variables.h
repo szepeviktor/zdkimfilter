@@ -2,7 +2,7 @@
 * database_variables.h - written by ale in milano on 29sep2012
 * list of variables, included multiple times
 
-Copyright (C) 2012-2014 Alessandro Vesely
+Copyright (C) 2012-2015 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -33,6 +33,7 @@ the resulting work.
 #endif
 
 DATABASE_VARIABLE(domain)
+DATABASE_VARIABLE(org_domain)
 DATABASE_VARIABLE(local_part)
 DATABASE_VARIABLE(user_ref)
 DATABASE_VARIABLE(ino)

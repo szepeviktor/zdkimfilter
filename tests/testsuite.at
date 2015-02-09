@@ -681,6 +681,20 @@ head -n 3 mail, 0,
   spf=pass smtp.mailfrom=sender.example;
   dkim-adsp=nxdomain header.from=user@author.example
 ], [])
+
+# same with db_sql_domain_flags
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_domain_flags sender.example:2
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: SPF)
+INFO:zdkimfilter[[0]]:id=usenetmsg: removing Authentication-Results from test.example
+])
 AT_CLEANUP
 
 #
@@ -753,6 +767,22 @@ head -n 4 mail, 0,
   dkim=pass (whitelisted) header.i=@sender.example;
   dkim-adsp=nxdomain header.from=user@author.example
 ], [])
+
+# same with db_sql_domain_flags
+ZF_CONFIG(3, [reject_on_nxdomain
+verify_one_domain
+db_backend test
+db_sql_domain_flags other.example:2 sender.example:2
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: DKIM)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
+INFO:zdkimfilter[[0]]:id=usenetmsg: removing Authentication-Results from test.example
+])
 AT_CLEANUP
 
 #

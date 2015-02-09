@@ -179,7 +179,7 @@ typedef struct per_message_parm
 	int rtc;
 	char db_connected;
 	char special; // never block outgoing messages to postmaster@domain only.
-	char nu[2];
+	char do_adsp, do_dmarc;
 } per_message_parm;
 
 typedef enum split_filter
@@ -1466,6 +1466,7 @@ typedef struct verify_parms
 {
 	char *sender_domain, *helo_domain; // imply SPF "pass"
 	char *dnswl_domain;
+	char *org_domain;
 	domain_prescreen *domain_head, **domain_ptr;
 	vbr_info *vbr;  // store of all VBR-Info fields
 
@@ -1717,21 +1718,32 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 					// vh->have_author_sig += 1;
 				}
 
-				if (dwa &&
-					(dps->whitelisted = db_is_whitelisted(dwa, domain)) > 0)
+				if (dwa)
 				{
-					if (dps->whitelisted > 1)
+					int dmarc, adsp, c =
+						db_get_domain_flags(dwa, domain, vh->org_domain,
+							&dps->whitelisted, &dmarc, &adsp);
+					if (c > 0)
 					{
-						if (dps->whitelisted > 2)
+						if (dps->whitelisted > 1)
 						{
+							if (dps->whitelisted > 2)
+							{
+								dps->sigval += 500;
+								dps->u.f.is_trusted = 1;
+							}
 							dps->sigval += 500;
-							dps->u.f.is_trusted = 1;
+							dps->u.f.is_whitelisted = 1;
 						}
 						dps->sigval += 500;
-						dps->u.f.is_whitelisted = 1;
+						dps->u.f.is_known = 1;
+						if (c > 1)
+						{
+							vh->parm->dyn.do_dmarc = dmarc;
+							if (c > 2)
+								vh->parm->dyn.do_adsp = adsp;
+						}
 					}
-					dps->sigval += 500;
-					dps->u.f.is_known = 1;
 				}
 
 				vbr_info *const vbr = vbr_info_get(vh->vbr, domain);

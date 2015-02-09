@@ -5,7 +5,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2012-2014 Alessandro Vesely
+Copyright (C) 2012-2015 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -368,6 +368,9 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 		STMT_ALLOC(db_sql_whitelisted,
 			1 << domain_variable | 1 << ip_variable);
 
+		STMT_ALLOC(db_sql_domain_flags,
+			1 << org_domain_variable | 1 << domain_variable | 1 << ip_variable);
+
 		const var_flag_t common_variables =
 			1 << ino_variable | 1 << mtime_variable | 1 << pid_variable |
 			1 << date_variable | 1 << message_id_variable | 1 << subject_variable |
@@ -494,7 +497,7 @@ static int dump_vars(db_work_area* dwa, stmt_id sid, var_flag_t bitflag)
 	assert(sid < total_statements);
 
 	stmt_compose const *const stmt = dwa->stmt[sid];
-	if (stmt == NULL) // db_is_whitelisted and db_check_user don't check this
+	if (stmt == NULL) // db_check_user doesn't check this
 		return 0;
 
 #if defined TEST_MAIN
@@ -1032,26 +1035,106 @@ int db_is_whitelisted(db_work_area* dwa, char *domain)
 */
 {
 	assert(dwa == NULL || dwa->handle || dwa->is_test);
+	assert(dwa == NULL || dwa->var[domain_variable] == NULL);
 	assert(domain);
 
 	if (dwa == NULL)
 		return 0;
 
-	const var_flag_t bitflag = 1 << domain_variable | 1 << ip_variable;
 	int rtc = 0;
 
-	assert(dwa->var[domain_variable] == NULL);
+	if (dwa->stmt[db_sql_whitelisted] != NULL)
+	{
+		const var_flag_t bitflag = 1 << domain_variable | 1 << ip_variable;
+		dwa->var[domain_variable] = domain;
+		if (dwa->is_test) // need our own rtc for testsuite
+		{
+			dump_vars(dwa, db_sql_whitelisted, bitflag);
+			rtc = test_whitelisted(dwa, domain);
+		}
+		else
+			stmt_run_n(dwa, db_sql_whitelisted, bitflag, -1, &rtc);
+		dwa->var[domain_variable] = NULL;
+	}
+	else if (dwa->stmt[db_sql_domain_flags] != NULL)
+	{
+		int dummy, dummier;
+		db_get_domain_flags(dwa, domain, NULL, &rtc, &dummy, &dummier);
+	}
+
+	return rtc;
+}
+
+static int test_domain_flags(db_work_area* dwa, char const* domain, int *three)
+{
+	char *const h = dwa->z.db_sql_domain_flags;
+	if (h)
+	{
+		char const *x = strstr(h, domain);
+		if (x)
+		{
+			char const *z = strchr(x, ' ');
+			if (z == NULL)
+				z = x + strlen(x);
+			int rtc = -1;
+			for (char *flag = strchr(x, ':');
+				flag && flag < z && rtc < 2; flag = strchr(flag, ':'))
+					if (++rtc >= 0)
+						three[rtc] = atoi(++flag);
+			return ++rtc;
+		}
+	}
+	return 0;
+}
+
+int db_get_domain_flags(db_work_area* dwa, char *domain, char *org_domain,
+	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled)
+/*
+* Get all domain flags needed before verifying a message.
+* If the query * is not defined, resort to db_is_whitelisted.
+* Return the number of flags retrieved, in that order, 0 if no result,
+* a negative error value otherwise.
+*/
+{
+	assert(dwa == NULL || dwa->handle || dwa->is_test);
+	assert(dwa == NULL || dwa->var[domain_variable] == NULL); 
+	assert(dwa == NULL || dwa->var[org_domain_variable] == NULL);
+	assert(domain);
+	assert(is_whitelisted);
+	assert(is_dmarc_enabled);
+	assert(is_adsp_enabled);
+
+	if (dwa == NULL)
+		return 0;
+
+	if (dwa->stmt[db_sql_domain_flags] == NULL)
+	{
+		*is_whitelisted = db_is_whitelisted(dwa, domain);
+		return 1;
+	}
+
+	int rtc;
+	const var_flag_t bitflag =
+		1 << domain_variable | 1 << ip_variable | 1 << org_domain_variable;
+
 	dwa->var[domain_variable] = domain;
+	dwa->var[org_domain_variable] = org_domain;
 
 	if (dwa->is_test) // need our own rtc for testsuite
 	{
 		dump_vars(dwa, db_sql_whitelisted, bitflag);
-		rtc = test_whitelisted(dwa, domain);
+		int three[3];
+		rtc = test_domain_flags(dwa, domain, three);
+		if (rtc > 0) *is_whitelisted = three[0];
+		if (rtc > 1) *is_dmarc_enabled = three[1];
+		if (rtc > 2) *is_adsp_enabled = three[2];
 	}
 	else
-		stmt_run(dwa, db_sql_whitelisted, bitflag, NULL, &rtc);
+		rtc = stmt_run_n(dwa, db_sql_domain_flags, bitflag,
+			-3, is_whitelisted, is_dmarc_enabled, is_adsp_enabled);
 
 	dwa->var[domain_variable] = NULL;
+	dwa->var[org_domain_variable] = NULL;
 	return rtc;
 }
 
@@ -2139,6 +2222,9 @@ int db_config_wrapup(db_work_area* dwa, int *in, int *out)
 }
 int db_connect(db_work_area *dwa) { return 0; }
 int db_is_whitelisted(db_work_area* dwa, char *domain) {return 0;}
+int db_get_domain_flags(db_work_area* dwa, char *domain,
+	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled)
+	{return 0;}
 char *db_check_user(db_work_area* dwa) {return NULL;}
 
 void db_set_authenticated_user(db_work_area *dwa,
