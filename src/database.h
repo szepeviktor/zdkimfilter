@@ -39,13 +39,15 @@ db_parm_t* db_parm_addr(db_work_area *dwa);
 int db_config_wrapup(db_work_area* dwa, int *in, int *out);
 int db_connect(db_work_area *dwa);
 int db_is_whitelisted(db_work_area* dwa, char /*const*/ *domain);
-int db_get_domain_flags(db_work_area* dwa, char *domain, char *org_domain,
+int db_get_domain_flags(db_work_area* dwa, char *domain,
 	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled);
 char *db_check_user(db_work_area* dwa);
 
 void db_set_authenticated_user(db_work_area *dwa,
 	char const *local_part, char const *domain);
 void db_set_client_ip(db_work_area *dwa, char const *ip);
+void db_set_org_domain(db_work_area *dwa, char *org_domain);
+
 
 typedef struct domain_prescreen
 {

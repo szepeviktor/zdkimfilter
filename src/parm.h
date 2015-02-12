@@ -49,6 +49,7 @@ typedef struct parm_t
 	char *split_verify;
 	char *save_drop;
 	char *action_header;
+	char *publicsuffix;
 	const char **sign_hfields;
 	const char **skip_hfields;
 	const char **key_choice_header;

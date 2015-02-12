@@ -1,7 +1,7 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ([2.67])
+AC_PREREQ([2.69])
 AC_INIT([zdkimfilter for courier],[1.5],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
@@ -461,6 +461,24 @@ else
 fi
 AC_SUBST([NETTLE_LIB])
 
+# check libunistring and libidn2
+gl_LIBUNISTRING()
+if test "$HAVE_LIBUNISTRING" = "no"; then
+	AC_MSG_ERROR([missing libunistring])
+fi
+IDN2_LIB=""
+SAVE_LIBS="$LIBS"
+AC_SEARCH_LIBS([idn2_lookup_u8], [idn2],
+	[IDN2_LIB=" -lidn2"],
+	[IDN2_LIB="no"])
+if test "$IDN2_LIB" = "no"; then
+	AC_MSG_ERROR([missing libidn2])
+fi
+LIBS="$SAVE_LIBS"
+AC_SUBST([IDN2_LIB])
+
+# effective_tld_names.dat might use off_t
+AC_TYPE_OFF_T
 
 # get mailuser/mailgroup for the executable stuff
 AC_CACHE_CHECK([user:group for courier executables],

@@ -58,6 +58,7 @@ the resulting work.
 #include "database.h"
 #include "filecopy.h"
 #include "util.h"
+#include "publicsuffix.h"
 #include <assert.h>
 
 #if !PATH_MAX
@@ -192,6 +193,7 @@ typedef struct dkimfl_parm
 	DKIM_LIB *dklib;
 	fl_parm *fl;
 	db_work_area *dwa;
+	publicsuffix_trie *pst;
 
 	char const *config_fname; // static (either default or argv)
 	char const *prog_name; //static, from argv[0]
@@ -334,6 +336,7 @@ static void some_cleanup(dkimfl_parm *parm) // parent
 		parm->dwa = NULL;
 	}
 	free(parm->blocklist.data);
+	publicsuffix_done(parm->pst);
 }
 
 static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
@@ -409,9 +412,18 @@ static void check_split(dkimfl_parm *parm)
 	if (parm->z.split_verify)
 	{
 		if (strcmp(my_basename(parm->z.split_verify), parm->prog_name) == 0)
+		{
 			parm->split = split_verify_only;
+			if (parm->dwa && parm->use_dwa_verifying == 0)
+				some_dwa_cleanup(parm);
+		}
 		else
+		{
 			parm->split = split_sign_only;
+			if (parm->dwa && parm->use_dwa_after_sign == 0)
+				some_dwa_cleanup(parm);
+		}
+		
 	}
 	else
 		parm->split = split_do_both; // 0
@@ -1493,7 +1505,8 @@ typedef struct verify_parms
 	size_t received_spf;
 	// char sig_is_author;
 	uint8_t dnswl_value;
-	char dkim_reputation_flag;
+	unsigned int dkim_reputation_flag: 1;
+	unsigned int org_domain_in_dwa: 1;
 
 } verify_parms;
 
@@ -1549,6 +1562,8 @@ static void clean_vh(verify_parms *vh)
 	free(vh->dnswl_domain);
 	free(vh->domain_ptr);
 	free(vh->vbr_result.resp);
+	if (vh->org_domain_in_dwa == 0)
+		free(vh->org_domain);
 }
 
 static int check_db_connected(dkimfl_parm *parm)
@@ -1640,8 +1655,12 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 * return -1 for fatal error, number of domains otherwise
 */
 {
+	assert(vh && vh->parm);
+
 	if (vh->dkim_domain == NULL)
 		vh->dkim_domain = dkim_getdomain(dkim);
+
+	// aliases
 	char const save_from_anyway = vh->parm->z.save_from_anyway;
 	char *const from = vh->dkim_domain;
 	char *const mfrom = vh->sender_domain;
@@ -1650,6 +1669,18 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	char from_k = from == NULL,
 		mfrom_k = mfrom == NULL, helo_k = helo == NULL,
 		dnswl_k = dnswl == NULL;
+
+	publicsuffix_trie const *const pst = vh->parm->pst;
+	db_work_area *const dwa = vh->parm->dwa;
+	if (from_k == 0 && pst)
+	{
+		vh->org_domain = org_domain(pst, from);
+		if (dwa)
+		{
+			db_set_org_domain(dwa, vh->org_domain);
+			vh->org_domain_in_dwa = 1;
+		}
+	}
 
 	int ndoms = nsigs + 3 - mfrom_k - helo_k - dnswl_k;
 	if (save_from_anyway)
@@ -1664,7 +1695,6 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 		ndoms = -1;
 	}
 
-	db_work_area *const dwa = vh->parm->dwa;
 	if (dwa && ndoms > 0 &&
 		check_db_connected(vh->parm) < 0)
 			ndoms = -1;
@@ -1721,7 +1751,7 @@ domain_sort(verify_parms *vh, DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 				if (dwa)
 				{
 					int dmarc, adsp, c =
-						db_get_domain_flags(dwa, domain, vh->org_domain,
+						db_get_domain_flags(dwa, domain,
 							&dps->whitelisted, &dmarc, &adsp);
 					if (c > 0)
 					{
@@ -4011,7 +4041,7 @@ static int pid_file_name(dkimfl_parm *parm, char *fname)
 	return 0;
 }
 
-static void write_pid_file_and_check_split(fl_parm *fl)
+static void write_pid_file_and_check_split_and_init_pst(fl_parm *fl)
 // this is init_complete, called once before fl_main loop
 {
 	assert(fl);
@@ -4040,6 +4070,8 @@ static void write_pid_file_and_check_split(fl_parm *fl)
 			failed_action, pid_dir, parm->prog_name, strerror(errno));
 
 	check_split(parm);
+	if (parm->split != split_sign_only && parm->z.publicsuffix)
+		parm->pst = publicsuffix_init(parm->z.publicsuffix, NULL);
 }
 
 static void delete_pid_file(dkimfl_parm *parm)
@@ -4149,6 +4181,17 @@ static void reload_config(fl_parm *fl)
 	{
 		rtc = 0;
 		new_parm->pid_created = (*parm)->pid_created;
+		if (new_parm->z.verbose >= 2)
+			fl_report(LOG_INFO,
+				"New config file read from %s", (*parm)->config_fname);
+		new_parm->prog_name = (*parm)->prog_name;
+		check_split(new_parm);
+		if (new_parm->z.publicsuffix && new_parm->split != split_sign_only)
+		{
+			new_parm->pst =
+				publicsuffix_init(new_parm->z.publicsuffix, (*parm)->pst);
+			(*parm)->pst = NULL;
+		}
 	}
 
 	if (rtc)
@@ -4159,24 +4202,19 @@ static void reload_config(fl_parm *fl)
 	else
 	{
 		dkimfl_parm *old_parm = *parm;
-		new_parm->prog_name = old_parm->prog_name;
 		if (old_parm->dklib)
 			dkim_close(old_parm->dklib);
 		some_cleanup(old_parm);
 		free(old_parm);
 
 		*parm = new_parm;
-		if (new_parm->z.verbose >= 2)
-			fl_report(LOG_INFO,
-				"New config file read from %s", (*parm)->config_fname);
-		check_split(new_parm);
 	}
 }
 
 static fl_init_parm functions =
 {
 	dkimfilter,
-	write_pid_file_and_check_split,
+	write_pid_file_and_check_split_and_init_pst,
 	check_blocked_user_list,
 	reload_config, NULL, NULL,
 	report_config, set_keyfile, set_policyfile, set_vbrfile

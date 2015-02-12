@@ -1059,7 +1059,7 @@ int db_is_whitelisted(db_work_area* dwa, char *domain)
 	else if (dwa->stmt[db_sql_domain_flags] != NULL)
 	{
 		int dummy, dummier;
-		db_get_domain_flags(dwa, domain, NULL, &rtc, &dummy, &dummier);
+		db_get_domain_flags(dwa, domain, &rtc, &dummy, &dummier);
 	}
 
 	return rtc;
@@ -1087,7 +1087,7 @@ static int test_domain_flags(db_work_area* dwa, char const* domain, int *three)
 	return 0;
 }
 
-int db_get_domain_flags(db_work_area* dwa, char *domain, char *org_domain,
+int db_get_domain_flags(db_work_area* dwa, char *domain,
 	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled)
 /*
 * Get all domain flags needed before verifying a message.
@@ -1098,7 +1098,6 @@ int db_get_domain_flags(db_work_area* dwa, char *domain, char *org_domain,
 {
 	assert(dwa == NULL || dwa->handle || dwa->is_test);
 	assert(dwa == NULL || dwa->var[domain_variable] == NULL); 
-	assert(dwa == NULL || dwa->var[org_domain_variable] == NULL);
 	assert(domain);
 	assert(is_whitelisted);
 	assert(is_dmarc_enabled);
@@ -1118,7 +1117,6 @@ int db_get_domain_flags(db_work_area* dwa, char *domain, char *org_domain,
 		1 << domain_variable | 1 << ip_variable | 1 << org_domain_variable;
 
 	dwa->var[domain_variable] = domain;
-	dwa->var[org_domain_variable] = org_domain;
 
 	if (dwa->is_test) // need our own rtc for testsuite
 	{
@@ -1134,7 +1132,6 @@ int db_get_domain_flags(db_work_area* dwa, char *domain, char *org_domain,
 			-3, is_whitelisted, is_dmarc_enabled, is_adsp_enabled);
 
 	dwa->var[domain_variable] = NULL;
-	dwa->var[org_domain_variable] = NULL;
 	return rtc;
 }
 
@@ -1234,6 +1231,15 @@ void db_set_client_ip(db_work_area *dwa, char const *ip)
 	if (dwa->var[ip_variable])
 		free(dwa->var[ip_variable]);
 	dwa->var[ip_variable] = ip_to_hex(ip);
+}
+
+void db_set_org_domain(db_work_area *dwa, char *org_domain)
+{
+	assert(dwa);
+
+	if (dwa->var[org_domain_variable])
+		free(dwa->var[org_domain_variable]);
+	dwa->var[org_domain_variable] = org_domain;
 }
 
 
