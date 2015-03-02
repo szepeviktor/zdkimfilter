@@ -1412,11 +1412,18 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 		// constant bit for the loop
 		bit2 = 1 << domain_ref_variable;
 
+		int special = info->special;
+
 		for (domain_prescreen *dps = info->domain_head;
 			dps != NULL; dps = dps->next)
 		{
-			if (dps->u.all == 0) // skip unverified signatures
-				continue;
+			// skip unauthenticated domains unless required
+			if (special != save_unauthenticated_always &&
+				!(special == save_unauthenticated_from && dps->u.f.is_from) &&
+				dps->u.f.sig_is_ok == 0 &&
+				dps->u.f.spf_pass == 0 &&
+				dps->u.f.is_dnswl == 0)
+					continue;
 
 			int comma = 0;
 			authbuf[0] = 0;
@@ -1664,7 +1671,7 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 			if (info->adsp_unknown && info->adsp_found)
 				strcat(p, ",found");
 			if (info->adsp_fail) strcat(p, ",fail");
-			if (info->adsp_whitelisted) strcat(p, ",whitelisted");
+			//if (info->adsp_whitelisted) strcat(p, ",whitelisted");
 			p += strlen(p) + 1;
 			var_flag_t bit = 1 << adsp_flags_variable;
 			bitflag |= bit;

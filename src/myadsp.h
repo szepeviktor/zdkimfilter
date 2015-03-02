@@ -33,35 +33,38 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #if !defined MYADSP_H_INCLUDED
 #define MYADSP_H_INCLUDED
 
-#if ! defined DKIM_POLICY_NONE
-#define DKIM_POLICY_NONE	(-1)	/* none/undefined */
+#if defined DKIM_POLICY_NONE
+#undef DKIM_POLICY_NONE
 #endif
+#define DKIM_POLICY_NONE        16
 
-#if ! defined DKIM_POLICY_UNKNOWN
-#define DKIM_POLICY_UNKNOWN	0	/* unknown */
-#endif
-
-#if ! defined DKIM_POLICY_ALL
-#define DKIM_POLICY_ALL		1	/* all */
-#endif
-
-#if ! defined DKIM_POLICY_DISCARDABLE
-#define DKIM_POLICY_DISCARDABLE	2	/* discardable */
-#endif
+#define ADSP_POLICY_UNKNOWN      0   /* unknown */
+#define ADSP_POLICY_ALL          1   /* all */
+#define ADSP_POLICY_DISCARDABLE  2   /* discardable */
+#define DMARC_POLICY_NONE        4
+#define DMARC_POLICY_QUARANTINE 12   /* not strict! */
+#define DMARC_POLICY_REJECT      6
+#define POLICY_IS_DMARC(n) (((n)&4) != 0)
+#define POLICY_IS_ADSP(n) (((n)&4) == 0)
+#define POLICY_IS_STRICT(n) (((n)&3) != 0)
 
 #if ! defined DKIM_PRESULT_NONE
 #define DKIM_PRESULT_NONE		(-1)	/* none/undefined */
 #endif
 
-#if ! defined DKIM_PRESULT_NXDOMAIN
-#define DKIM_PRESULT_NXDOMAIN		0	/* domain does not exist */
-#endif
+#include <stdint.h>
 
-#if ! defined DKIM_PRESULT_FOUND
-#define DKIM_PRESULT_FOUND		1	/* ADSP query succeeded */
-#endif
+typedef struct dmarc_rec
+{
+	char *rua;       // malloc'd
+	int effective_p; // one of the macro above
+	uint32_t ri;
+	char adkim, aspf, p, sp, pct;
+	char nu[3];
+} dmarc_rec;
 
 int set_adsp_query_faked(int mode);
 int my_get_adsp(char const *domain, int *policy);
+int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc);
 
 #endif // MYADSP_H_INCLUDED

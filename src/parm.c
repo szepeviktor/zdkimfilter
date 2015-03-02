@@ -413,6 +413,9 @@ int read_all_values(void *parm_target[PARM_TARGET_SIZE], char const *fname)
 		return -1;
 	}
 
+	int track_def[sizeof conf/sizeof conf[0]];
+	memset(&track_def[0], 0, sizeof track_def);
+
 	int errs = 0;
 	size_t keep = 0;
 	char *p;
@@ -456,7 +459,14 @@ int read_all_values(void *parm_target[PARM_TARGET_SIZE], char const *fname)
 			++errs;
 			continue;
 		}
-	
+
+		int const conf_ndx = c - &conf[0];
+		if (track_def[conf_ndx])
+			(*do_report)(LOG_WARNING,
+				"Repeated definition of %s at line %d (previous at line %d) in %s",
+				name, line_no, track_def[conf_ndx], fname);
+		track_def[conf_ndx] = line_no;
+
 		*s = ch;
 		while (isspace(ch = *(unsigned char*)s) || ch == '=')
 			++s;

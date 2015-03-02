@@ -59,78 +59,27 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #endif
 #include <assert.h>
 
-static char *skip_fws(char *s)
+#define NS_BUFFER_SIZE 1536
+
+static int do_txt_query(char *query, size_t len_d, size_t len_sub,
+	int (*parse_fn)(char*, void*), void* parse_arg)
+/*
+* query is a char buffer (1536 long) also used to parse answers,
+* len_d is the length of the query string,
+* len_sub is the length of the prefix or 0 if no base query is needed,
+* parse_fn is a parsing function, and parse_arg its argument. 
+*
+* Run query and return:
+*   >= 0 txt records successfully parsed
+*  -1  on caller's error
+*  -2  on temporary error (includes SERVFAIL)
+*  -3  on bad DNS data or other transient error
+*  -4  for NXDOMAIN if len_sub > 0, or just res_query() failed
+*/
 {
-	if (s)
-	{
-		int ch;
-		while (isspace(ch = *(unsigned char*)s))
-			++s;
-		if (ch == 0)
-			s = NULL;
-	}
-	return s;
-}
-
-static int parse_adsp(char *record, int *policy)
-{
-	int found = 0;
-
-	if (strncmp(record, "dkim", 4) == 0)
-	{
-		char *p = skip_fws(&record[4]);
-		if (*p == '=')
-		{
-			found = 1;
-
-			p = skip_fws(p + 1);
-			char *q = p;
-			int ch;
-			while (isalnum(ch = *(unsigned char*)q) || ch == '-')
-				++q;
-
-			size_t len = q - p;
-			if (policy)
-			{
-				if (len == 7 && strncmp(p, "unknown", 7) == 0)
-					*policy = DKIM_POLICY_UNKNOWN;
-				if (len == 3 && strncmp(p, "all", 3) == 0)
-					*policy = DKIM_POLICY_ALL;
-				else if (len == 11 && strncmp(p, "discardable", 11) == 0)
-					*policy = DKIM_POLICY_DISCARDABLE;
-				else
-					*policy = DKIM_POLICY_NONE;
-			}
-		}
-	}
-
-	return found;
-}
-
-
-static int
-do_adsp_query(char const *domain, int *policy)
-// run query and return:
-//   0  and a response if found
-//   1  found, but no adsp retrieved
-//   3  for NXDOMAIN
-//  -1  on caller's error
-//  -2  on temporary error (includes SERVFAIL)
-//  -3  on bad DNS data or other error
-{
-	if (domain == NULL || *domain == 0)
-		return -1;
-
-	static char const subdomain[] = "_adsp._domainkey.";
-	/* construct the query */
-	size_t len_d = strlen(domain) + sizeof subdomain;
-	char query[1536];
-
-	if (len_d >= sizeof query)
-		return -1;
-
-	memcpy(query, subdomain, sizeof subdomain);
-	strcat(&query[sizeof subdomain - 1], domain);
+	assert(query);
+	assert(len_d);
+	assert(parse_fn);
 
 #if defined TEST_MAIN
 	if (isatty(fileno(stdout)))
@@ -139,12 +88,13 @@ do_adsp_query(char const *domain, int *policy)
 
 	union dns_buffer
 	{
-		unsigned char answer[1536];
+		unsigned char answer[NS_BUFFER_SIZE];
 		HEADER h;
 	} buf;
 	
 	// res_query returns -1 for NXDOMAIN
 	unsigned int qtype;
+	char *query_cmp = query;
 	int rc = res_query(query, 1 /* Internet */, qtype = 16 /* TXT */,
 		buf.answer, sizeof buf.answer);
 
@@ -154,13 +104,16 @@ do_adsp_query(char const *domain, int *policy)
 			return h_errno == TRY_AGAIN? -2: -3;
 
 		// check the base domain exists
-		strcpy(query, domain);
-		len_d -= sizeof subdomain;
-		rc = res_query(query, 1 /* Internet */, qtype = 2 /* NS */,
+		if (len_sub == 0)
+			return -4;
+
+		len_d -= len_sub;
+		query_cmp = query + len_sub;
+		rc = res_query(query_cmp, 1 /* Internet */, qtype = 2 /* NS */,
 			buf.answer, sizeof buf.answer);
 		if (rc < 0)
 			return h_errno == TRY_AGAIN? -2:
-				h_errno == HOST_NOT_FOUND? 3: -3;
+				h_errno == HOST_NOT_FOUND? -4: -3;
 	}
 
 	size_t ancount;
@@ -176,9 +129,9 @@ do_adsp_query(char const *domain, int *policy)
 	unsigned char *const eom = &buf.answer[rc];
 
 	// question
-	char expand[1536];
+	char expand[NS_BUFFER_SIZE];
 	int n = dn_expand(buf.answer, eom, cp, expand, sizeof expand); //name
-	if (n < 0 || strncasecmp(expand, query, len_d) != 0)
+	if (n < 0 || strncasecmp(expand, query_cmp, len_d + 1) != 0)
 		return -3;
 
 	cp += n;
@@ -210,7 +163,7 @@ do_adsp_query(char const *domain, int *policy)
 		}
 
 		char *p = &query[0];  // reuse query to assemble character-strings.
-		char *const end = p + sizeof query;
+		char *const end = p + NS_BUFFER_SIZE;
 
 		// TXT-DATA consists of one or more <character-string>s.
 		// <character-string> is a single length octet followed by that number
@@ -236,49 +189,108 @@ do_adsp_query(char const *domain, int *policy)
 			if (isatty(fileno(stdout)))
 				printf("answer: %s\n", query);
 #endif
-			found = parse_adsp(query, policy);
+			int rtc = parse_fn(query, parse_arg);
+			if (rtc < 0)
+				return -3;
+
+			found += rtc;
 		}
 	}
 
-	return found != 1;
+	return found;
 }
 
-static int
-do_get_adsp(char const *domain, int* policy)
+static int (*txt_query)(char*, size_t, size_t, int (*)(char*, void*), void*) =
+	&do_txt_query;
+
+static char *skip_fws(char *s)
+{
+	if (s)
+	{
+		int ch;
+		while (isspace(ch = *(unsigned char*)s))
+			++s;
+		if (ch == 0)
+			s = NULL;
+	}
+	return s;
+}
+
+static int parse_adsp(char *record, void *v_policy)
+{
+	assert(record);
+
+	int *policy = v_policy;
+	int found = 0;
+
+	if (strncmp(record, "dkim", 4) == 0)
+	{
+		char *p = skip_fws(&record[4]);
+		if (p && *p == '=')
+		{
+			p = skip_fws(p + 1);
+			if (p)
+			{
+				found = 1;
+
+				char *q = p;
+				int ch;
+				while (isalnum(ch = *(unsigned char*)q) || ch == '-')
+					++q;
+
+				size_t len = q - p;
+				if (policy)
+				{
+					if (len == 7 && strncmp(p, "unknown", 7) == 0)
+						*policy = ADSP_POLICY_UNKNOWN;
+					else if (len == 3 && strncmp(p, "all", 3) == 0)
+						*policy = ADSP_POLICY_ALL;
+					else if (len == 11 && strncmp(p, "discardable", 11) == 0)
+						*policy = ADSP_POLICY_DISCARDABLE;
+					else
+						*policy = DKIM_POLICY_NONE;
+				}
+			}
+		}
+	}
+
+	return found;
+}
+
+static int do_adsp_query(char const *domain, int *policy)
+// run query and return:
+//   0  and a response if found
+//   1  found, but no adsp retrieved
+//   3  for NXDOMAIN
+//  -1  on caller's error
+//  -2  on temporary error (includes SERVFAIL)
+//  -3  on bad DNS data or other transient error
+{
+	if (domain == NULL || *domain == 0)
+		return -1;
+
+	static char const subdomain[] = "_adsp._domainkey.";
+	size_t len_sub = sizeof subdomain - 1;
+	size_t len_d = strlen(domain) + len_sub;
+	char query[NS_BUFFER_SIZE];
+
+	if (len_d >= sizeof query)
+		return -1;
+
+	memcpy(query, subdomain, sizeof subdomain);
+	strcat(&query[sizeof subdomain - 1], domain);
+
+	int rtc = (*txt_query)(query, len_d, len_sub, parse_adsp, policy);
+	return rtc == -4? 3: rtc >= 0? rtc != 1: rtc;
+}
+
+static int do_get_adsp(char const *domain, int* policy)
 {
 	return do_adsp_query(domain, policy);
 }
 
 static int
 (*adsp_query)(char const*, int*) = &do_get_adsp;
-
-static int
-fake_adsp_query_keyfile(char const *domain, int *policy)
-// debug function: reads data from "KEYFILE" formatted like
-//   label record
-{
-	char buf[2048];
-	FILE *fp = fopen("KEYFILE", "r");
-	if (fp == NULL)
-		return 3; // NXDOMAIN
-
-	static char const subdomain[] = "_adsp._domainkey.";
-	char *s;
-	int rtc = -1;
-	size_t const len_d = strlen(domain);
-	while ((s = fgets(buf, sizeof buf, fp)) != NULL)
-	{
-		if (strncmp(buf, subdomain, sizeof subdomain -1) == 0 &&
-			strncmp(&buf[sizeof subdomain - 1], domain, len_d) == 0)
-		{
-			rtc = parse_adsp(&buf[sizeof subdomain + len_d], policy) != 1;
-			break;
-		}
-	}
-
-	fclose(fp);
-	return rtc;
-}
 
 static int
 fake_adsp_query_policyfile(char const *domain, int *policy)
@@ -307,13 +319,56 @@ fake_adsp_query_policyfile(char const *domain, int *policy)
 	(void)domain;
 }
 
-// mode is r(eal), k(eyfile), or p(olicyfile)
-int set_adsp_query_faked(int mode)
+static int
+fake_txt_query_keyfile(char *query, size_t len_d, size_t not_used,
+	int (*parse_fn)(char*, void*), void* parse_arg)
+
+// debug function: reads data from "KEYFILE" formatted like
+//   label txt-record
 {
-	int const old_mode = adsp_query == &do_get_adsp? 'r':
-		adsp_query == &fake_adsp_query_keyfile? 'k': 'p';
-	adsp_query = mode == 'r'? &do_get_adsp:
-		mode == 'k'? &fake_adsp_query_keyfile: &fake_adsp_query_policyfile;
+	char buf[2048];
+	FILE *fp = fopen("KEYFILE", "r");
+	if (fp == NULL)
+		return 3; // NXDOMAIN
+
+	int found = 0;
+	while (fgets(buf, sizeof buf, fp) != NULL)
+	{
+		if (strncmp(buf, query, len_d) == 0 && buf[len_d] == ' ')
+			found += (*parse_fn)(&buf[len_d + 1], parse_arg);
+	}
+
+	fclose(fp);
+	return found;
+
+	(void)not_used;
+}
+
+int set_adsp_query_faked(int mode)
+// mode is r(eal), k(eyfile), or p(olicyfile)
+// this also affects dmarc.
+{
+	int const old_mode =
+		adsp_query == &fake_adsp_query_policyfile? 'p':
+		txt_query == &do_txt_query? 'r': 'k';
+	switch (mode)
+	{
+		case 'p':
+			adsp_query = &fake_adsp_query_policyfile;
+			txt_query = &fake_txt_query_keyfile;
+			break;
+
+		case 'k':
+			adsp_query = &do_adsp_query;
+			txt_query = &fake_txt_query_keyfile;
+			break;
+
+		case 'r':
+		default:
+			adsp_query = &do_adsp_query;
+			txt_query = &do_txt_query;
+			break;
+	}
 	return old_mode;
 }
 
@@ -322,13 +377,216 @@ int my_get_adsp(char const *domain, int *policy)
 	return (*adsp_query)(domain, policy);
 }
 
+//// dmarc
+
+typedef struct tag_value
+{
+	char *tag;
+	char *value;
+} tag_value;
+
+static char *next_tag(char *buf, tag_value *tv)
+{
+	assert(buf);
+	assert(tv);
+
+	// must be at tag on entry
+	char *p = tv->tag = buf;
+	int ch;
+	while (isalnum(ch = *(unsigned char*)p) ||
+		(ch != 0 && strchr("_-", ch)))
+			*p++ = tolower(ch);
+
+	if (ch != '=' && !isspace(ch))
+		return NULL;
+
+	*p++ = 0;
+	if (ch != '=')
+	{
+		p = skip_fws(p);
+		if (p == NULL || *p != '=')
+			return NULL;
+
+		++p;
+	}
+
+	if ((p = tv->value = skip_fws(p)) == NULL)
+		return NULL;
+
+	// EXCLAMATION to TILDE except SEMICOLON
+	while ((ch = *(unsigned char*)p) >= 0x21 &&
+		ch <= 0x7e && ch != ';')
+			++p;
+
+	if (ch)
+	// consume trailing white space and separator
+	{
+		*p++ = 0;
+		while (isspace(ch = *(unsigned char*)p) || ch == ';')
+			++p;
+	}
+	return p;
+}
+
+static int none_quarantine_reject(char const *p)
+{
+	static char const *nqr[3] = {"none", "quarantine", "reject"};
+	for (int i = 0; i < 3; ++i)
+		if (strcasecmp(p, nqr[i]) == 0)
+			return nqr[i][0];
+
+	return 0;
+}
+
+static inline int relax_strict(char const *p)
+{
+	int ch = tolower(*(unsigned char*)p);
+	if (p[1] == 0 && (ch == 'r' || ch == 's'))
+		return ch;
+
+	return 0;
+}
+
+static int parse_dmarc(char *record, void *v_dmarc)
+{
+	dmarc_rec *dmarc = v_dmarc;
+	int found = 0;
+
+	tag_value tv = {NULL, NULL};
+	char *p = next_tag(record, &tv);
+
+	if (p && strcmp(tv.tag, "v") == 0 && strcmp(tv.value, "DMARC1") == 0)
+	{
+		found = 1;
+		while ((p = next_tag(p, &tv)) != NULL)
+		{
+			if (strcmp(tv.tag, "p") == 0)
+			{
+				int p = none_quarantine_reject(tv.value);
+				if (p)
+					dmarc->p = p;
+			}
+			else if (strcmp(tv.tag, "pct") == 0)
+			{
+				char *t = NULL;
+				unsigned long pct = strtoul(tv.value, &t, 10);
+				if (t && *t == 0 && pct <= 100)
+					dmarc->pct = (unsigned char) pct;
+			}
+			else if (strcmp(tv.tag, "rua") == 0)
+			{
+				if (strncasecmp(tv.value, "mailto:", 7) == 0)
+				{
+					tv.value += 7;
+					if (dmarc->rua == NULL &&
+						(dmarc->rua = strdup(tv.value)) == NULL)
+							return -1;
+				}
+			}
+			else if (strcmp(tv.tag, "ri") == 0)
+			{
+				char *t = NULL;
+				unsigned long ri = strtoul(tv.value, &t, 10);
+				if (t && *t == 0 && ri <= UINT32_MAX)
+					dmarc->ri = (uint32_t) ri;
+			}
+			else if (strcmp(tv.tag, "sp") == 0)
+			{
+				int sp = none_quarantine_reject(tv.value);
+				if (sp)
+					dmarc->sp = sp;
+			}
+			else if (strcmp(tv.tag, "adkim") == 0)
+			{
+				int a = relax_strict(tv.value);
+				if (a)
+					dmarc->adkim = a;
+			}
+			else if (strcmp(tv.tag, "aspf") == 0)
+			{
+				int a = relax_strict(tv.value);
+				if (a)
+					dmarc->aspf = a;
+			}
+		}
+	}
+
+	return found;
+}
+
+/* static inline int nqr_to_int(int p)
+{
+	if (p == 'q) return DMARC_POLICY_
+} */
+
+int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
+// run query and return:
+//   0  and a response if found
+//   1  found, but no dmarc retrieved
+//   3  for NXDOMAIN
+//  -1  on caller's error
+//  -2  on temporary error (includes SERVFAIL)
+//  -3  on bad DNS data or other transient error
+{
+	assert(domain);
+	assert(dmarc);
+	assert(org_domain == NULL || strlen(org_domain) <= strlen(domain));
+
+	if (domain == NULL || *domain == 0)
+		return -1;
+
+	// clear it on entry
+	memset(dmarc, 0, sizeof *dmarc);
+
+	static char const subdomain[] = "_dmarc.";
+	size_t len_sub = sizeof subdomain - 1;
+	size_t len_d = strlen(domain) + len_sub;
+	char query[NS_BUFFER_SIZE];
+
+	if (len_d >= sizeof query)
+		return -1;
+
+	memcpy(query, subdomain, sizeof subdomain);
+	strcat(&query[len_sub], domain);
+	char const *dd = domain;
+
+	int rtc = (*txt_query)(query, len_d, len_sub, parse_dmarc, dmarc);
+	/*
+	http://tools.ietf.org/html/draft-kucherawy-dmarc-base-13#section-6.6.3
+   3.  If the set is now empty, the Mail Receiver MUST query the DNS for
+       a DMARC TXT record at the DNS domain matching the Organizational
+       Domain in place of the RFC5322.From domain in the message (if
+       different).  This record can contain policy to be asserted for
+       subdomains of the Organizational Domain.  A possibly empty set of
+       records is returned.	
+	*/
+	if (rtc == 0)
+	{
+		dmarc->effective_p = 0; // FIXME
+	}
+	else if (org_domain && *org_domain && strcmp(domain, org_domain))
+	{
+		len_d = strlen(org_domain) + len_sub;
+		memcpy(query, subdomain, sizeof subdomain);
+		strcat(&query[len_sub], domain);
+		dd = org_domain;
+		rtc = (*txt_query)(query, len_d, len_sub, parse_dmarc, dmarc);
+	}
+
+	if (rtc == 0)
+	{
+		// check subdomain policy that may apply
+		// don't check domains of rua addresses: do once on sending
+	}
+	return rtc == -4? 3: rtc >= 0? rtc != 1: rtc;
+}
 
 #if defined TEST_MAIN
 
 static char const *rtc_explain(int rtc)
 {
 	if (rtc == 0) return "found, response given";
-	if (rtc == 1) return "found, but no adsp retrieved";
+	if (rtc == 1) return "domain exists, but no adsp retrieved";
 	if (rtc == 3) return "NXDOMAIN";
 	if (rtc == -1) return "caller's error";
 	if (rtc == -2) return "temporary error (includes SERVFAIL)";

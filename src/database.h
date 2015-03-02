@@ -48,18 +48,41 @@ void db_set_authenticated_user(db_work_area *dwa,
 void db_set_client_ip(db_work_area *dwa, char const *ip);
 void db_set_org_domain(db_work_area *dwa, char *org_domain);
 
+typedef enum spf_result
+{
+	spf_none,
+	spf_fail,
+	spf_permerror,
+	spf_temperror,
+	spf_neutral,
+	spf_softfail,
+	spf_pass
+} spf_result;
+
+typedef enum dkim_result
+{
+	dkim_none,
+	dkim_pass,
+	dkim_fail,
+	dkim_policy,
+	dkim_neutral,
+	dkim_temperror,
+	dkim_permerror
+} dkim_result;
 
 typedef struct domain_prescreen
 {
-	int sigval;       // multiple uses: sort key, index, verified sigs
+	int sigval;       // multiple uses: index, verified sigs
 	int nsigs;        // total number of signatures
 	int start_ndx;    // first index in libopendkim's array of sigs
+	int first_good;   // relative ndx (0 <= fg < nsigs)) of first verified sig
 	int whitelisted;  // value retrieved from db
 	union flags_as_an_int_or_bitfields
 	{
 		struct flags_as_bitfields            // (quoted db_ flag name)
 		{
 			unsigned int sig_is_ok:1;         // dkim authenticated ("dkim")
+			unsigned int spf_pass:1;          // spf authenticated
 			unsigned int has_vbr:1;
 			unsigned int vbr_is_trusted:1;
 			unsigned int vbr_is_ok:1;         // verified trusted vbr ("vbr")
@@ -67,9 +90,10 @@ typedef struct domain_prescreen
 			unsigned int is_whitelisted:1;    // whitelisted > 1
 			unsigned int is_known:1;          // whitelisted > 0
 			unsigned int is_from:1;           // author_domain ("author")
+			unsigned int is_aligned:1;        // dmarc alignment ("")
 			unsigned int is_dnswl:1;          // domain of dnswl address ("dnswl")
-			unsigned int is_mfrom:1;          // spf authenticated ("spf")
-			unsigned int is_helo:1;           // spf_helo auth ("spf_helo")
+			unsigned int is_mfrom:1;          // spf ("spf")
+			unsigned int is_helo:1;           // spf_helo ("spf_helo")
 			unsigned int looks_like_helo:1;
 			unsigned int is_reputed:1;        // ("rep")
 			unsigned int is_reputed_signer:1; // ("rep_s")
@@ -77,9 +101,11 @@ typedef struct domain_prescreen
 		unsigned int all;
 	} u;
 	char *vbr_mv;                  // trusted voucher (in parm->z) or NULL
-	struct domain_prescreen *next; // name, in alphabetic order
+	struct domain_prescreen *next; // ordered by name
 	int reputation;                // if is_reputed*
+	spf_result spf[3];             // helo, mfrom, from
 	uint8_t dnswl_value;
+	uint16_t domain_val;           // sort key
 	char name[];
 } domain_prescreen;
 
@@ -114,11 +140,22 @@ typedef struct stats_info
 	unsigned adsp_all:2;
 	unsigned adsp_discardable:2;
 	unsigned adsp_fail:2;
-	unsigned adsp_whitelisted:2;
+	unsigned dmarc_found:2;
+	unsigned dmarc_none:2;
+	unsigned dmarc_quarantine:2;
+	unsigned dmarc_reject:2;
+	unsigned dmarc_subdomain:2;
+	unsigned dmarc_fail:2;
+	unsigned policy_overridden:2;
 	unsigned mailing_list:2;
 	unsigned reject:2;
 	unsigned drop:2;
 	unsigned outgoing:2;
+
+	enum save_unauthenticated_domains {
+		save_unauthenticated_never,
+		save_unauthenticated_from,
+		save_unauthenticated_always } special;
 } stats_info;
 
 void db_set_stats_info(db_work_area* dwa, stats_info *info);

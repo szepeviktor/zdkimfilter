@@ -849,6 +849,7 @@ AT_CHECK(
 grep 'domain: author.example' database_dump, 0,
 [domain: author.example
 domain: author.example
+domain: author.example
 ],[])
 AT_CLEANUP
 
@@ -1308,8 +1309,7 @@ AT_CHECK(
 [Received: from server.example by test.example with ESMTP
 ], [])
 ZF_REQUIRE_OPENDBX
-AT_CHECK([grep 'domain: ' database_dump], 0,
-[domain: author.example
+AT_CHECK([grep 'domain: ' database_dump], 0, [domain: author.example
 ], [])
 AT_CLEANUP
 
@@ -1602,7 +1602,7 @@ AT_CLEANUP
 
 # check A-R layout with multiple signatures: whitelisted
 AT_SETUP([Whitelisted domain reported])
-ZF_SIGREPORT([db_backend test
+ZF_SIGREPORT([# already defined: db_backend test
 db_sql_whitelisted sender.example:2
 ])
 ZF_REQUIRE_OPENDBX
@@ -1634,7 +1634,7 @@ AT_CLEANUP
 # check A-R layout with multiple signatures: whitelisted+vouched
 AT_SETUP([Whitelisted + vouched domain])
 ZF_SIGREPORT([trusted_vouchers sender-cert.example
-db_backend test
+# already defined: db_backend test
 db_sql_whitelisted sender.example:2
 ])
 ZF_REQUIRE_OPENDBX
@@ -1741,18 +1741,20 @@ ZF_RUN,
 [250 Ok.
 ],
 [])
-AT_CHECK(
+[obfuscated=`test "$HAVE_NETTLE" = "1" && echo "Xr@LC"`
+]
+AT_CHECK_NOESCAPE(
 [sed -n '/^Received: from test/,+2p' mail], 0, m4_join([],
 [Received: from test.example
  (whatever is going to be written here AUTH: method ],
- m4_ifval([$HAVE_NETTLE], [Xr@LC], []),
+ [$obfuscated],
  [, and some more)
  by submission.server.example with ESMTPA
 ]), [])
 AT_CLEANUP
 
 # test only valid with libnettle
-m4_define([ZF_REQUIRE_NETTLE], [AT_CHECK([$HAVE_NETTLE || exit 77])])
+m4_define([ZF_REQUIRE_NETTLE], [AT_CHECK([test "$HAVE_NETTLE" = "1" || exit 77])])
 
 #
 AT_SETUP([Retrieve obfuscated userid])
@@ -2248,7 +2250,7 @@ AT_CHECK( ZF_RUN, 0, [250 not filtered.
 ], [])
 AT_CHECK([grep 'domain: ' database_dump], 0, [domain: sender.example
 ], [])
-AT_CHECK([grep 'auth_type: ' database_dump], 0, [auth_type: dnswl
+AT_CHECK([grep 'auth_type: ' database_dump], 0, [auth_type: spf,dnswl
 ], [])
 AT_CLEANUP
 

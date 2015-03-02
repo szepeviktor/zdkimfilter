@@ -15,6 +15,7 @@ CREATE TABLE domain (
   recv INT UNSIGNED NOT NULL DEFAULT 0,
   sent INT UNSIGNED NOT NULL DEFAULT 0,
   whitelisted TINYINT NOT NULL DEFAULT 0,
+  prefix_len TINYINT NOT NULL DEFAULT 0,
   since TIMESTAMP NOT NULL DEFAULT NOW(),
   last TIMESTAMP NOT NULL DEFAULT 0,
   UNIQUE INDEX by_dom(domain)
@@ -31,6 +32,9 @@ CREATE TABLE msg_ref (
   domain INT UNSIGNED NOT NULL COMMENT 'Foreign key to domain',
   reputation INT NOT NULL,
   auth SET ('author', 'spf_helo', 'spf', 'dkim', 'vbr', 'rep', 'rep_s', 'dnswl') NOT NULL,
+  alignment ENUM ('none', 'match', 'equal') NOT NULL,
+  spf ENUM ('none', 'neutral', 'pass', 'fail', 'softfail', 'temperror', 'permerror') NOT NULL,
+  dkim ENUM ('none', 'pass', 'fail', 'policy', 'neutral', 'temperror', 'permerror') NOT NULL,
   vbr ENUM ('spamhaus', 'who_else') NOT NULL,
   INDEX by_dom_msg(domain, message_in)
 )
@@ -296,4 +300,24 @@ FROM domain AS d, msg_out_ref AS r, message_out AS m, user AS u
 WHERE d.id = r.domain AND r.message_out = m.id AND m.user = u.id 
 GROUP BY d.id, u.id ORDER BY cnt DESC LIMIT 10;
 
+# find aggregate authentication results of a given domain (r1.domain)
+SELECT INET_NTOA(CONV(HEX(m.ip),16,10)) AS ip, COUNT(*) AS n, FROM_UNIXTIME(MAX(m.mtime)) AS last,
+r1.auth, d1.domain AS author, d2.domain AS spf, d5.domain AS helo, d3.domain AS dkim, d4.domain AS dkim2
+FROM message_in AS m
+LEFT JOIN (msg_ref AS r1 INNER JOIN domain AS d1 ON r1.domain = d1.id)
+  ON m.id = r1.message_in AND FIND_IN_SET('author', r1.auth)
+LEFT JOIN (msg_ref AS r2 INNER JOIN domain AS d2 ON r2.domain = d2.id)
+  ON m.id = r2.message_in AND FIND_IN_SET('spf', r2.auth)
+LEFT JOIN (msg_ref AS r5 INNER JOIN domain AS d5 ON r5.domain = d5.id)
+  ON m.id = r5.message_in AND FIND_IN_SET('spf_helo', r5.auth) AND r5.id != r2.id
+LEFT JOIN (msg_ref AS r3 INNER JOIN domain AS d3 ON r3.domain = d3.id)
+  ON m.id = r3.message_in AND FIND_IN_SET('dkim', r3.auth) AND r3.id != r2.id
+LEFT JOIN (msg_ref AS r4 INNER JOIN domain AS d4 ON r4.domain = d4.id)
+  ON m.id = r4.message_in AND FIND_IN_SET('dkim', r4.auth) AND r4.id != r3.id AND r4.id != r2.id
+WHERE r1.domain = 23 AND m.mtime > UNIX_TIMESTAMP(NOW() - INTERVAL 2 DAY)
+GROUP BY ip, auth, author, spf, helo, dkim, dkim2;
+
+
+# the previous query needs an extra index
+CREATE INDEX by_msg_auth ON msg_ref (message_in, auth);
 

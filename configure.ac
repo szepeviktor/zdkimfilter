@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT([zdkimfilter for courier],[1.5],[vesely@tana.it],[zdkimfilter])
+AC_INIT([zdkimfilter for courier],[1.6],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -183,21 +183,18 @@ LIBS="$SAVE_LIBS"
 AC_SUBST([SOCKET_LIB])
 
 AC_CACHE_CHECK([if opendkim.pc exists], [av_cv_opendkim_version],
-	[av_cv_opendkim_version=false
-	if $PKG_CONFIG --modversion opendkim 2>/dev/null ; then
-		av_cv_opendkim_version=true
-	fi
+	[av_cv_opendkim_version=`$PKG_CONFIG --modversion opendkim 2>/dev/null || echo false`
 	])
 
 AC_CACHE_CHECK([if opendkim is at least 1.2.2], [av_cv_opendkim_version_ok],
 	[av_cv_opendkim_version_ok=false
-	if test "$av_cv_opendkim_version" = "true" ; then
+	if test "$av_cv_opendkim_version" != "false" ; then
 		$PKG_CONFIG --atleast-version=1.2.2 opendkim && av_cv_opendkim_version_ok="true"
 	else
 		SAVE_LIBS="$LIBS"
 		LIBS="$SAVE_LIBS -lopendkim"
 		save_ac_link="$ac_link"
-		ac_link="libtool --mode=link $ac_link"
+		ac_link="libtool --mode=link --tag=CC $ac_link"
 		AC_RUN_IFELSE([AC_LANG_SOURCE([
 			#include <opendkim/dkim.h>
 			int main(){unsigned long v = dkim_libversion();
@@ -212,7 +209,7 @@ if test "$av_cv_opendkim_version_ok" = "false"; then
 	AC_MSG_ERROR([unsupported or unrecognized opendkim library])
 fi
 
-AC_CACHE_CHECK([if that was 2.2.0 or better], [av_cv_opendkim_version_220],
+AC_CACHE_CHECK([opendkim 2.2.0 or better], [av_cv_opendkim_version_220],
 	[av_cv_opendkim_version_220=0
 	if test "$av_cv_opendkim_version" = "true" ; then
 		$PKG_CONFIG --atleast-version=2.2.0 opendkim && av_cv_opendkim_version_220=1
@@ -220,7 +217,7 @@ AC_CACHE_CHECK([if that was 2.2.0 or better], [av_cv_opendkim_version_220],
 		SAVE_LIBS="$LIBS"
 		LIBS="$SAVE_LIBS -lopendkim"
 		save_ac_link="$ac_link"
-		ac_link="libtool --mode=link $ac_link"
+		ac_link="libtool --mode=link --tag=CC $ac_link"
 		AC_RUN_IFELSE([AC_LANG_SOURCE([
 			#include <opendkim/dkim.h>
 			int main(){unsigned long v = dkim_libversion();
@@ -232,15 +229,15 @@ AC_CACHE_CHECK([if that was 2.2.0 or better], [av_cv_opendkim_version_220],
 	fi
 	])
 
-AC_CACHE_CHECK([if that was 2.10.1 or better], [av_cv_opendkim_version_2A1],
+AC_CACHE_CHECK([opendkim 2.10.1 or better], [av_cv_opendkim_version_2A1],
 	[av_cv_opendkim_version_2A1=0
-	if test "$av_cv_opendkim_version" = "true" ; then
+	if test "$av_cv_opendkim_version" != "false" ; then
 		$PKG_CONFIG --atleast-version=2.10.1 opendkim && av_cv_opendkim_version_2A1=1
 	else
 		SAVE_LIBS="$LIBS"
 		LIBS="$SAVE_LIBS -lopendkim"
 		save_ac_link="$ac_link"
-		ac_link="libtool --mode=link $ac_link"
+		ac_link="libtool --mode=link --tag=CC $ac_link"
 		AC_RUN_IFELSE([AC_LANG_SOURCE([
 			#include <opendkim/dkim.h>
 			int main(){unsigned long v = dkim_libversion();
@@ -292,7 +289,7 @@ AC_MSG_CHECKING([flags for opendkim library])
 	SAVE_LIBS="$LIBS"
 	LIBS="$SAVE_LIBS $OPENDKIM_LIB"
 	save_ac_link="$ac_link"
-	ac_link="libtool --mode=link $ac_link"
+	ac_link="libtool --mode=link --tag=CC $ac_link"
 	AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
 		[av_cv_flags_library_opendkim="ok"])
 	ac_link="$save_ac_link"
@@ -310,7 +307,7 @@ CFLAGS="$OPENDKIM_CFLAGS $CFLAGS"
 SAVE_LIBS="$LIBS"
 LIBS="$SAVE_LIBS $OPENDKIM_LIB"
 save_ac_link="$ac_link"
-ac_link="libtool --mode=link $ac_link"
+ac_link="libtool --mode=link --tag=CC $ac_link"
 AC_CHECK_FUNCS([dkim_get_sigsubstring dkim_getuser dkim_libversion])
 CFLAGS="$SAVE_CFLAGS"
 ac_link="$save_ac_link"
@@ -364,7 +361,7 @@ if $PKG_CONFIG --atleast-version=1.4.5 opendbx; then
 	SAVE_LIBS="$LIBS"
 	LIBS="$SAVE_LIBS $OPENDBX_LIB"
 	save_ac_link="$ac_link"
-	ac_link="libtool --mode=link $ac_link"
+	ac_link="libtool --mode=link --tag=CC $ac_link"
 	AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <opendbx/api.h>
 	], [odbx_t *h;
 	odbx_init(&h, "", "", "");
@@ -441,7 +438,7 @@ NETTLE_LIB=" -lnettle"
 AC_MSG_CHECKING([whether nettle is avalable])
 SAVE_LIBS="$LIBS"
 LIBS="$SAVE_LIBS $NETTLE_LIB"
-HAVE_NETTLE="false"
+HAVE_NETTLE=""
 AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <nettle/arcfour.h>
 #include <nettle/base64.h>
 ], [struct arcfour_ctx c0;
@@ -450,13 +447,14 @@ struct base64_decode_ctx c2;
 arcfour_set_key(&c0, 0, "");
 base64_decode_init(&c1);
 base64_decode_init(&c2);
-])], [HAVE_NETTLE="true"])
+])], [HAVE_NETTLE="1"])
 LIBS="$SAVE_LIBS"
 AC_SUBST([HAVE_NETTLE])
-AC_MSG_RESULT([$HAVE_NETTLE])
-if test "$HAVE_NETTLE" = "true"; then
+if test "$HAVE_NETTLE" = "1"; then
+	AC_MSG_RESULT([yes])
 	AC_DEFINE(HAVE_NETTLE, 1, [Define if using nettle])
 else
+	AC_MSG_RESULT([nope])
 	NETTLE_LIB=""
 fi
 AC_SUBST([NETTLE_LIB])
