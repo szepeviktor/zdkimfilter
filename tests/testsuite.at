@@ -32,6 +32,7 @@ m4_define([ZF_KEYFILE], [AT_DATA([KEYFILE],
 [x1._domainkey.author.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
 x2._domainkey.sender.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCz8gES8szE0tPe1NgAENU7BoVZHZRhWiPs6MdCCIYJ06RoV9vmAXlXzcHK/IM7fSHVQKYvf1E7dUwQIwCUe5S+qdkB0KxtmzCCBqjqcju8b6EEJb5e6HiMHjErS+33fNtS8qYCQNt1Xl5Ga94o1oXeZxroYSjeps8z82j/JQsPswIDAQAB
 x3._domainkey.other.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDFTpY+8YuikRLRfNLU3krD8h7lNnbK4eZ0TuPfRur6TDEg+bOQD1g1yJ1bnyQ1uCtwEkZ54Zs56C8PVpvU7jjR2/YcS92PiOhm3MXWyD3caekCZ7ezXvEkD/KaTkuKypiTmDlefQ39t5oq60fufb61/lUGzLech/kKLOexYohqEwIDAQAB
+x4._domainkey.subdomain.author.example v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDHoVBC8uC7kB90cJZBirpAxJjqv5rgWwk7yE9zjWeCsvxqisIP0hLT4ffQFSk6NcnxD6cm67FIOKKSY0jznzvObyqndBn4jNYIcjdfUY+Erq/2dtcKljeYdR63N9QNgP8un4/taLqkNBZ+H3hhFLqY5V65+CnlclAnERcpJ+wl9wIDAQAB
 $1])])
 
 # policyfile (unknown) loaded with test3
@@ -93,6 +94,16 @@ m4_define([ZF_SIGOTHER],
 	b=ejTAOxjZ1TFzdE0KT0/I/Dd7dL76iPzUq3sc4ngUt/78pFSFSL4p3nXNIMYeGHVT6
 	 7kwAhFlmpT0UgBaisyjfyGTgx4k/N2+Kbbne1NV/kYG9wYRylk9fooS08ZRkY7Ieuu
 	 K5pYsL12X5UfS1+TRnv2ONLxQDgSn+4r8ZwaEWZ8=
+])
+
+m4_define([ZF_SIGSUB],
+[DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple;
+	d=subdomain.author.example; s=x4; t=1425475173;
+	bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=; l=301;
+	h=Date:From:To:Subject;
+	b=QB5afafnvYV8ML6CPwhzNAAwt7mVdy5zUxqjKWv155g+/bZcZYQjNpj7kIIkTFQ/S
+	 XXHm7ajuXdB01ZqQnvfHe6mbDiB4VPReSIKEE8Q4znyoODdWDVmwqVBmmj1YjDHePc
+	 0CrmhdsaCX4FW+X8td1hOcopogke4e3CrWy7vr8k=
 ])
 
 # header tail and body of message
@@ -181,6 +192,7 @@ selector                 = NULL (global)
 sign_hfields             = NULL (space-separated, no colon)
 skip_hfields             = NULL (space-separated, no colon)
 no_signlen               = N (Y/N)
+min_key_bits             = 0 (int)
 redact_received_auth     = NULL (any text)
 add_auth_pass            = N (Y/N)
 tmp                      = . (temp directory)
@@ -194,7 +206,9 @@ add_a_r_anyway           = N (Y/N)
 report_all_sigs          = N (Y/N)
 verify_one_domain        = N (Y/N)
 max_signatures           = 128 (int)
-honor_author_domain      = N (Y=enable ADSP)
+publicsuffix             = NULL (filename)
+honor_dmarc              = N (Y/N)
+honor_author_domain      = N (Y/N)
 reject_on_nxdomain       = N (Y=procrustean ADSP)
 action_header            = NULL (header field name)
 header_action_is_reject  = N (Y/N)
@@ -409,10 +423,10 @@ AT_CLEANUP
 # results, rather than going down to verify file contents.
 #
 m4_define([ZF_KEYCONFIG],
-[ZF_KEYFILE
+[ZF_KEYFILE([$1])
 ZF_CONFIG(3, [db_backend test
 db_sql_insert_msg_ref dummy
-])])
+$2])])
 
 m4_define([ZF_CTLBATCH],
 [AT_DATA([ctl], [sbounces@server.example
@@ -2749,6 +2763,49 @@ INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
 AT_CHECK(cmp mail no-preheader, 0, [], [])
 AT_CLEANUP
 
+m4_define([ZF_CTLBATCHDMARC],
+[AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_BATCH([sighup
+test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[m4_join([ ],
+	[INFO:zdkimfilter[0]:New config file read from zftest.conf
+INFO:zdkimfilter[0]:id=verifymsg: verified:],
+	m4_ifblank([$2], [[spf=pass,]]),
+	[dkim=$1 rep=0
+])])])
+
+
+#
+AT_SETUP([DMARC non-none policy reported])
+ZF_KEYCONFIG([_dmarc.author.example v=DMARC1; p=quarantine; rua=mailto:dmarc-feedback@author.example
+], [publicsuffix=publicsuffix
+db_sql_domain_flags dummy
+])
+AT_DATA([publicsuffix], [example
+])
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGSUB)])
+ZF_CTLBATCHDMARC([pass (id=@subdomain.author.example, stat=0) dmarc:quarantine=pass])
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@subdomain.author.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
 
 # 
 AT_SETUP([Real DNS queries: vouch, reputation])

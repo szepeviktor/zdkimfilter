@@ -66,6 +66,7 @@ typedef struct parm_t
 	int dnswl_invalid_ip;
 
 	int dnswl_octet_index;
+	int min_key_bits;
 
 	char trust_a_r;
 	char add_a_r_anyway;
@@ -77,6 +78,7 @@ typedef struct parm_t
 	char no_signlen;
 	char tempfail_on_error;
 	char honor_author_domain;
+	char honor_dmarc;
 	char reject_on_nxdomain;
 	char do_reputation;
 	char all_mode;
@@ -87,7 +89,7 @@ typedef struct parm_t
 	char save_from_anyway;
 	char add_ztags;
 	char header_action_is_reject;
-	char not_used[2];
+	char not_used[1];
 } parm_t;
 
 typedef struct db_parm_t

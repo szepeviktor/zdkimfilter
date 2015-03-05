@@ -1,3 +1,15 @@
+# zdkimfilter.conf.pod.in - documentation of non-db configuration options.
+#
+# Each option has to be defined in three places:
+#   the parm_t structure in parm.h,
+#   the conf[] array in parm.c, and
+#   in the OPTION section below.
+#
+# To check the third place, e.g.:
+# diff -u \
+#  <(sed -nr 's/^=item B<([a-z_0-9]+)>.*/\1/p' etc/zdkimfilter.conf.pod.in) \
+#  <(src/dkimsign --config -f nosvn-tmp/test.conf | sed -nr 's/^([a-z_0-9]+) .*/\1/p')
+
 =pod
 
 =head1 NAME
@@ -21,6 +33,9 @@ The configuration file can be reloaded by sending a HUP signal to the parent
 process, except for the C<all_mode> item which needs restarting the filter.
 
 Use C<dkimsign --config> to check if the file is valid.
+
+Names in the following section are in the same order as output by the above
+command, rather than alphabetically.
 
 =head1 OPTIONS
 
@@ -49,7 +64,7 @@ will have no effect until the filter is reloaded.
 =item B<trust_a_r> bool
 
 Don't remove any Authentication-Results: (A-R) header field. 
-Courier renames existing A-R fields since 0.71.0, if ALLOW_EXCLUSIVE is set. 
+Courier renames existing A-R fields since 0.71.0 if ALLOW_EXCLUSIVE is set. 
 Set this option after enabling ALLOW_EXCLUSIVE in Courier's I<esmtpd>.
 
 
@@ -63,41 +78,41 @@ being used as follows (each level includes the preceding ones):
 
 =over
 
-=item B<0>
+=item  B<0>
 
 Startup issues and totally unexpected errors.
 
-=item B<1>
+=item  B<1>
 
 Failures and unexpected events.
 
-=item B<2>
+=item  B<2>
 
 Unexpected Authentication-Results fields found on verifying.
 Missing domain on signing.
 
-=item B<3>
+=item  B<3>
 
 Start/stop info, relevant verify results, sign errors, responses except 250.
 
-=item B<4>
+=item  B<4>
 
 Response returned to Courier for each message.
 
-=item B<5>
+=item  B<5>
 
 Verify errors, except no signature found.
 
-=item B<6>
+=item  B<6>
 
 Domain/selector used on signing, any A-R field found.
 
-=item B<7>
+=item  B<7>
 
 No key on signing.  No signature and count of Authentication-Results fields
 written on verifying.
 
-=item B<8>
+=item  B<8>
 
 More debugging; for example, I<key_choice_header> processing.
 
@@ -141,11 +156,11 @@ leading to a mailbox name, or one two special tokens, dash (C<->) and star
 
 =over
 
-=item B<->
+=item  B<->
 
 Dash refers to the I<default_domain>.
 
-=item B<*>
+=item  B<*>
 
 Star refers to the user domain, if any, or the I<default_domain>.  The user
 domain is found in the authenticated user id, if it contains a C<@>.  The
@@ -233,6 +248,11 @@ Set this to avoid specifying the l= parameter of the body length.  Specifying
 the length allows the addition of text at the bottom of messages, so it is 
 considered more permissive. 
 
+=item B<min_key_bits> int
+
+The minimal length of a DKIM key, in bits, as considered by libopendkim.
+The default value of 1024 is implemented in OpenDKIM according to
+RFC 6376 Sec. 3.3.3.
 
 =item B<redact_received_auth> string
 
@@ -286,17 +306,12 @@ If you specify a value like /tmp/*, then zdkimfilter attempts to mkdir of
 it if it cannot stat it, on loading. 
 
 
-=item B<save_drop> string
-
-Quarantine directory.  If set, messages dropped will be saved here. 
-
-
 =item B<tempfail_on_error> bool
 
 On some errors, e.g. out of memory, return 432 to have the sender retry; 
 otherwise, just let the msg through unfiltered. 
 
-=item B<split_verify_sign> string
+=item B<split_verify> string
 
 Separate filter processes, one for verifying and one for signing.  This is
 useful if you need authentication results to be available to a third filter
@@ -304,7 +319,7 @@ which has to run before the signing filter.
 
 The string contains the executable name of the verifying processes.
 
-For example, to install C<dkimfilter> (without "z") as a verifyier, create a
+For example, to install C<dkimfilter> (without "z") as a verifier, create a
 link with that name to zdkimfilter, in @COURIER_FILTER_INSTALL@.  Then set
 
 =over
@@ -386,8 +401,22 @@ The abolutely maximum number of signatures.  Messages having more signatures
 than that are considered denial of service (DoS) attacks and rejected 
 outright.  The default value is 128. 
 
+=item B<publicsuffix> string
+
+The full path to a file like F<effective_tld_names.dat> that implements the
+Public Suffix List as maintained by publicsuffix.org.
+
+The default value is NULL, which may prevent checking DMARC alignment, as well
+as discovering DMARC policy records published by the organizational domain
+(also known as registered domain) if the author domain is a subdomain thereof.
+
+=item B<honor_dmarc> bool
+
+Honor DMARC policy, if any.  This item can be changed on a per-domain basis.
 
 =item B<honor_author_domain> bool
+
+Honor ADSP policy, if any.  This item can be changed on a per-domain basis.
 
 =item B<reject_on_nxdomain> bool
 
@@ -398,17 +427,17 @@ conditions that may cause this behavior are as follows:
 =over
 
 
-=item B<nxdomain>
+=item  B<nxdomain>
 
 the author's address, as given in the C<From:> header, contains 
 a non-existing domain name. 
 
-=item B<all>
+=item  B<all>
 
 the author domain specifies a policy whereby all messages must 
 have an author domain signature, but this messages has none. 
 
-=item B<discardable>
+=item  B<discardable>
 
 as case all, but the author domain further asks that 
 non-compliant messages be just discarded, in order to avoid 

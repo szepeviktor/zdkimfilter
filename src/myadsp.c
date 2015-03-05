@@ -320,28 +320,47 @@ fake_adsp_query_policyfile(char const *domain, int *policy)
 }
 
 static int
-fake_txt_query_keyfile(char *query, size_t len_d, size_t not_used,
+fake_txt_query_keyfile(char *query, size_t len_d, size_t len_sub,
 	int (*parse_fn)(char*, void*), void* parse_arg)
 
 // debug function: reads data from "KEYFILE" formatted like
-//   label txt-record
+//   <label> <SPACE> <txt-record>
 {
 	char buf[2048];
+	char *query_cmp = query + len_sub;
+	size_t tail = len_d - len_sub;
+	int found = 0, good = 0;
 	FILE *fp = fopen("KEYFILE", "r");
-	if (fp == NULL)
-		return 3; // NXDOMAIN
-
-	int found = 0;
-	while (fgets(buf, sizeof buf, fp) != NULL)
+	if (fp)
 	{
-		if (strncmp(buf, query, len_d) == 0 && buf[len_d] == ' ')
-			found += (*parse_fn)(&buf[len_d + 1], parse_arg);
+		while (fgets(buf, sizeof buf, fp) != NULL)
+		{
+			if (strncmp(buf, query, len_d) == 0 && buf[len_d] == ' ')
+			{
+				++found;
+				good += (*parse_fn)(&buf[len_d + 1], parse_arg);
+			}
+			else if (strncmp(buf, query_cmp, tail) == 0 && buf[tail] == ' ')
+				++found;
+		}
+
+		fclose(fp);
 	}
+	return found? good: -4;
+}
 
-	fclose(fp);
-	return found;
+static int fake_txt_query_both(char *query, size_t len_d, size_t len_sub,
+	int (*parse_fn)(char*, void*), void* parse_arg)
+// allow get_dmarc to be authoritative on nxdomain
+{
+	int nu, p_rtc = adsp_query == &fake_adsp_query_policyfile?
+		fake_adsp_query_policyfile(query, &nu): -4;
+		
+	int rtc = fake_txt_query_keyfile(query, len_d, len_sub, parse_fn, parse_arg);
+	if (rtc == -4 && parse_fn != parse_adsp)
+		rtc = p_rtc;
 
-	(void)not_used;
+	return rtc;
 }
 
 int set_adsp_query_faked(int mode)
@@ -353,12 +372,12 @@ int set_adsp_query_faked(int mode)
 		txt_query == &do_txt_query? 'r': 'k';
 	switch (mode)
 	{
-		case 'p':
+		case 'p': // test3
 			adsp_query = &fake_adsp_query_policyfile;
-			txt_query = &fake_txt_query_keyfile;
+			txt_query = &fake_txt_query_both;
 			break;
 
-		case 'k':
+		case 'k': // test2
 			adsp_query = &do_adsp_query;
 			txt_query = &fake_txt_query_keyfile;
 			break;
@@ -514,10 +533,12 @@ static int parse_dmarc(char *record, void *v_dmarc)
 	return found;
 }
 
-/* static inline int nqr_to_int(int p)
+static inline int nqr_to_int(int p)
 {
-	if (p == 'q) return DMARC_POLICY_
-} */
+	if (p == 'q') return DMARC_POLICY_QUARANTINE;
+	if (p == 'r') return DMARC_POLICY_REJECT;
+	return 0;
+}
 
 int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
 // run query and return:
@@ -548,7 +569,8 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
 
 	memcpy(query, subdomain, sizeof subdomain);
 	strcat(&query[len_sub], domain);
-	char const *dd = domain;
+
+	int found_at_org = 0;
 
 	int rtc = (*txt_query)(query, len_d, len_sub, parse_dmarc, dmarc);
 	/*
@@ -560,24 +582,29 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
        subdomains of the Organizational Domain.  A possibly empty set of
        records is returned.	
 	*/
-	if (rtc == 0)
+
+	if (rtc != 1 && org_domain && *org_domain && strcmp(domain, org_domain))
 	{
-		dmarc->effective_p = 0; // FIXME
-	}
-	else if (org_domain && *org_domain && strcmp(domain, org_domain))
-	{
+		found_at_org = 1;
 		len_d = strlen(org_domain) + len_sub;
 		memcpy(query, subdomain, sizeof subdomain);
 		strcat(&query[len_sub], domain);
-		dd = org_domain;
 		rtc = (*txt_query)(query, len_d, len_sub, parse_dmarc, dmarc);
 	}
 
-	if (rtc == 0)
+	if (rtc == 1)
 	{
 		// check subdomain policy that may apply
 		// don't check domains of rua addresses: do once on sending
+		dmarc->effective_p = 4 |
+			nqr_to_int(found_at_org && dmarc->sp? dmarc->sp: dmarc->p);
 	}
+	else
+	{
+		free(dmarc->rua);
+		memset(dmarc, 0, sizeof *dmarc);
+	}
+
 	return rtc == -4? 3: rtc >= 0? rtc != 1: rtc;
 }
 

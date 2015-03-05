@@ -1567,7 +1567,9 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 #if !defined NDEBUG
 	for (int i = 0; i < DB_SQL_VAR_SIZE; ++i)
 		assert(dwa->var[i] == NULL ||
-			i == ip_variable || i == local_part_variable);
+			i == ip_variable ||
+			i == local_part_variable ||
+			i == org_domain_variable);
 #endif
 
 	if (info == NULL || info->domain_head == NULL)

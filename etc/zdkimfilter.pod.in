@@ -105,6 +105,11 @@ the values C<nxdomain>, C<pass>, C<fail>, and C<discard>.
 After the message has been dealt with, zdkimfilter logs to the database the
 list of authenticated domains.  See L<zfilter_db(1)> for the details.
 
+=head2 DMARC and ADSP policies
+
+During message verification, zdkimfilter learns the author's domain and
+organizational domain.  Those are, respectively, the domain part of C<From:>
+and the possibly shorter domain from I<publicsuffix>, if configured.
 
 =head1 OPTIONS
 
@@ -117,6 +122,11 @@ The I<esmtpd> configuration files can be tweaked to avoid rewritings that
 would break existing signatures.
 
 =over
+
+=item B<ALLOW_EXCLUSIVE>
+
+Set this value in I<esmtpd>.  See also C<trust_a_r> in L<zdkimfilter.conf(5)>.
+Setting both flags allows smooth usage of A-R header fields.
 
 =item B<MIME>
 

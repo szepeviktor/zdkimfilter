@@ -480,6 +480,8 @@ get_prescreen(domain_prescreen** dps_head, char const *domain)
 		*dps = new_dps;
 		memcpy(&new_dps->name[0], domain, len2);
 	}
+	else
+		fl_report(LOG_ALERT, "MEMORY FAULT");
 
 	return new_dps;
 }
@@ -1151,6 +1153,8 @@ static void copy_until_redacted(dkimfl_parm *parm, FILE *fp, FILE *fp_out)
 }
 
 static void recipient_s_domains(dkimfl_parm *parm)
+// count recipients of outgoing messages and build domain list for database,
+// flag parm->dyn.special if the postmaster is the only recipient.
 {
 	assert(parm);
 	assert(parm->fl);
@@ -1488,7 +1492,7 @@ typedef struct verify_parms
 
 	// dps for relevant methods/policies
 	domain_prescreen *author_dps, *vbr_dps, *whitelisted_dps,
-		*aligned_dps, *dnswl_dps, *reputation_dps;
+		*dnswl_dps, *reputation_dps;
 
 	void *dkim_or_file;
 	dmarc_rec dmarc;
@@ -1646,8 +1650,9 @@ and then conveyed to ctlfile 'f' (COMCTLFILE_FROMMTA).  E.g.
 static int domain_flags(verify_parms *vh)
 /*
 * Called either before or after checking signatures.
-* Set domain_val for sorting domains.  Check organizational domain and alignment.
-* Retrieve per domain whitelisting and adsp/dmarc settings.
+* Set domain_val to sort domains.  Check organizational domain and alignment
+* assuming relaxed policy --to be undone if a non-relaxed policy is discovered.
+* Retrieve per-domain whitelisting and adsp/dmarc settings.
 */
 {
 	assert(vh && vh->parm);
@@ -1656,42 +1661,46 @@ static int domain_flags(verify_parms *vh)
 
 	if (vh->domain_flags == 0)
 	{
-		if (vh->dkim_domain == NULL)
-			vh->dkim_domain = dkim_getdomain(dkim);
+		char *from = vh->dkim_domain;
+		if (from == NULL)
+			vh->dkim_domain = from = dkim_getdomain(dkim);
 
-		// aliases
 		int const vbr_count =
 			count_trusted_vouchers(vh->parm->z.trusted_vouchers);
 		int const vbr_factor = vbr_count < 2? 0: 1000/(vbr_count - 1);
-		char *const from = vh->dkim_domain;
-		int from_k = from == NULL;
 
 		size_t org_domain_len = 0;
 		publicsuffix_trie const *const pst = vh->parm->pst;
 		db_work_area *const dwa = vh->parm->dwa;
-		if (from_k == 0 && pst)
+		if (from)
 		{
-			if (vh->org_domain == NULL)
-				vh->org_domain = org_domain(pst, from);
-			if (vh->org_domain != NULL)
-				org_domain_len = strlen(vh->org_domain);
-			if (dwa && vh->org_domain_in_dwa == 0)
+			domain_prescreen *dps = get_prescreen(&vh->domain_head, from);
+			if (dps)
+				dps->u.f.is_from = dps->u.f.is_aligned = 1;
+			else
+				return vh->parm->dyn.rtc = -1;
+			if (pst)
 			{
-				db_set_org_domain(dwa, vh->org_domain);
-				vh->org_domain_in_dwa = 1;
+				if (vh->org_domain == NULL)
+					vh->org_domain = org_domain(pst, from);
+				if (vh->org_domain != NULL)
+					org_domain_len = strlen(vh->org_domain);
+				if (dwa && vh->org_domain_in_dwa == 0)
+				{
+					db_set_org_domain(dwa, vh->org_domain);
+					vh->org_domain_in_dwa = 1;
+				}
 			}
 		}
 
-		domain_prescreen *dps_head = vh->domain_head;
-		if (dwa && dps_head && check_db_connected(vh->parm) < 0)
+		if (dwa && check_db_connected(vh->parm) < 0)
 			return -1;
 
-		for (domain_prescreen *dps = dps_head; dps; dps = dps->next)
+		for (domain_prescreen *dps = vh->domain_head; dps; dps = dps->next)
 		{
 			dps->domain_val = 0;
-			if (from_k == 0 && stricmp(from, dps->name) == 0)
+			if (dps->u.f.is_from)
 			{
-				from_k = dps->u.f.is_from = dps->u.f.is_aligned = 1;
 				dps->domain_val += 2500;    // author domain signature
 			}
 			else
@@ -1835,9 +1844,7 @@ domain_sort(verify_parms *vh, DKIM_SIGINFO** sigs, int nsigs)
 			}
 		}
 
-	if (!good)
-		fl_report(LOG_ALERT, "MEMORY FAULT");
-	else if (domain_flags(vh))
+	if (good && domain_flags(vh))
 		good = 0;
 
 	if (!good)
@@ -2066,9 +2073,7 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 			{
 				assert(dps->u.f.vbr_is_ok == 0); // signature required
 
-				if (dps->u.f.is_dnswl == 0 &&
-					dps->u.f.is_mfrom == 0 &&
-					dps->u.f.is_helo == 0)
+				if (dps->u.f.is_dnswl == 0 && dps->u.f.spf_pass == 0)
 				{
 					dps->whitelisted = 0;
 					dps->u.f.is_trusted = 0;
@@ -2190,6 +2195,8 @@ static int a_r_reader(void *v, int step, name_val* nv, size_t nv_count)
 									if ((arp->dnswl_dps =
 										get_prescreen(arp->domain_head, cp)) != NULL)
 											arp->dnswl_dps->u.f.is_dnswl = 1;
+									else
+										arp->parm->dyn.rtc = -1;
 
 									if (arp->parm->z.verbose >= 6)
 										fl_report(LOG_INFO,
@@ -2488,7 +2495,6 @@ static int verify_headers(verify_parms *vh)
 								}
 								else
 								{
-									fl_report(LOG_ALERT, "MEMORY FAULT");
 									return parm->dyn.rtc = -1;
 								}
 								*esender = ';';
@@ -2826,10 +2832,11 @@ static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status,
 
 	char *spf_domain[2] = {NULL, NULL};
 
-	for (domain_prescreen *dps = vh->domain_head; dps; dps = dps->next)
-		for (int i = 0; i < 2; ++i)
-			if (dps->spf[i] == spf_pass)
-				spf_domain[i] = dps->name;
+	if (vh->have_spf_pass)
+		for (domain_prescreen *dps = vh->domain_head; dps; dps = dps->next)
+			for (int i = 0; i < 2; ++i)
+				if (dps->spf[i] == spf_pass)
+					spf_domain[i] = dps->name;
 
 	if (spf_domain[0] || spf_domain[1])
 	{
@@ -2920,16 +2927,35 @@ static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status,
 
 	if (*policy_result)
 	{
-		char const *const method = POLICY_IS_DMARC(vh->policy)?
-			"dmarc": "dkim-adsp";
+		char const *method = NULL;
 
-#if HAVE_DKIM_GETUSER
-		char const *const user = dkim_getuser(dkim);
-		if (user && vh->dkim_domain)
-			fprintf(fp, ";\n  %s=%s header.from=%s@%s",
-				method, policy_result, user, vh->dkim_domain);
+		if (POLICY_IS_DMARC(vh->policy))
+		{
+			if (vh->dkim_domain)
+				fprintf(fp, ";\n  dmarc=%s header.from=%s",
+					policy_result, vh->dkim_domain);
+			else
+				method = "dmarc";
+		}
 		else
+		/*
+		* RFC 5617 just says "contents of the From: header field,
+		* with comments removed."
+		*
+		* Note: This method can say nxdomain, DMARC cannot.
+		*/
+		{
+#if HAVE_DKIM_GETUSER
+			char const *const user = dkim_getuser(dkim);
+			if (user && vh->dkim_domain)
+				fprintf(fp, ";\n  dkim-adsp=%s header.from=%s@%s",
+					policy_result, user, vh->dkim_domain);
+			else
 #endif			
+				method = "dkim-adsp";
+		}
+
+		if (method)
 			fprintf(fp, ";\n  %s=%s", method, policy_result);
 		++auth_given;
 	}
@@ -3103,17 +3129,6 @@ static void verify_message(dkimfl_parm *parm)
 	vh.parm = parm;
 	verify_headers(&vh);
 
-	if (parm->dyn.rtc == 0)
-	{
-		if (vh.dkim_domain == NULL)
-			vh.dkim_domain = dkim_getdomain(dkim);
-		if (vh.dkim_domain &&
-			get_prescreen(&vh.domain_head, vh.dkim_domain) &&
-			parm->dyn.stats &&
-			parm->z.save_from_anyway)
-				parm->dyn.stats->special = save_unauthenticated_from;
-	}
-
 	if (parm->dyn.authserv_id == NULL || parm->dyn.rtc != 0)
 	{
 		clean_stats(parm);
@@ -3200,7 +3215,37 @@ static void verify_message(dkimfl_parm *parm)
 	if (vh.domain_flags == 0)
 		domain_flags(&vh);
 
-	int from_sig_is_ok = 0;
+	/*
+	* pass unauthenticated From: to database
+	*/
+	if (parm->dyn.rtc == 0 && vh.dkim_domain && 
+		parm->dyn.stats && parm->z.save_from_anyway)
+			parm->dyn.stats->special = save_unauthenticated_from;
+
+	/*
+	* DMARC/ADSP policy check
+	*/
+	if (parm->dyn.rtc == 0 && vh.dkim_domain != NULL)
+	{
+		if (vh.do_dmarc >= vh.do_adsp &&
+			(vh.presult =
+				get_dmarc(vh.dkim_domain, vh.org_domain, &vh.dmarc)) == 0)
+					vh.policy = vh.dmarc.effective_p;
+		if (vh.presult != 0 && vh.presult != 3 && vh.do_dmarc <= vh.do_adsp)
+			vh.presult = my_get_adsp(vh.dkim_domain, &vh.policy);
+		if (vh.presult <= -2 &&
+			(vh.do_dmarc || vh.do_adsp || parm->z.reject_on_nxdomain))
+		{
+			if (parm->z.verbose >= 3)
+				fl_report(LOG_ERR,
+					"id=%s: temporary author domain verification failure: %s",
+					parm->dyn.info.id,
+					vh.presult == -2? "DNS server": "garbled data");
+			parm->dyn.rtc = -1;
+		}
+	}
+
+	int from_sig_is_ok = 0, aligned_auth_is_ok = 0;
 	for (domain_prescreen *dps = vh.domain_head; dps; dps = dps->next)
 	{
 		if (dps->u.f.is_whitelisted &&
@@ -3242,6 +3287,19 @@ static void verify_message(dkimfl_parm *parm)
 				vh.author_dps = dps;
 		}
 
+		if (dps->u.f.is_aligned)
+		{
+			int aligned_ok =
+				(dps->u.f.is_from || vh.dmarc.adkim != 's') && dps->u.f.sig_is_ok ||
+				(dps->u.f.is_from || vh.dmarc.aspf != 's') && dps->u.f.spf_pass;
+
+			// spf_pass on From: domain is not officially valid
+			if (!(dps->u.f.sig_is_ok || dps->u.f.is_mfrom || dps->u.f.is_helo))
+				aligned_ok <<= 1;
+
+			aligned_auth_is_ok |= aligned_ok;
+		}
+
 		if (dps->u.f.spf_pass)
 			vh.have_spf_pass = 1;
 	}
@@ -3257,36 +3315,10 @@ static void verify_message(dkimfl_parm *parm)
 	}
 
 	/*
-	* DMARC/ADSP policy check
-	*/
-	if (parm->dyn.rtc == 0 && vh.dkim_domain != NULL)
-	{
-		if (vh.do_dmarc >= vh.do_adsp &&
-			(vh.presult =
-				get_dmarc(vh.dkim_domain, vh.org_domain, &vh.dmarc)) == 0)
-					vh.policy = vh.dmarc.effective_p;
-		if (vh.presult != 0 && vh.do_dmarc <= vh.do_adsp)
-			vh.presult = my_get_adsp(vh.dkim_domain, &vh.policy);
-		if (vh.presult <= -2 &&
-			(vh.do_dmarc || vh.do_adsp || parm->z.reject_on_nxdomain))
-		{
-			if (parm->z.verbose >= 3)
-				fl_report(LOG_ERR,
-					"id=%s: temporary author domain verification failure: %s",
-					parm->dyn.info.id,
-					vh.presult == -2? "DNS server": "garbled data");
-			parm->dyn.rtc = -1;
-		}
-	}
-			
-	/*
 	* Apply policy if it implies to reject or drop message
 	*/
 	if (parm->dyn.rtc == 0)
 	{
-		/* possible DMARC result is already known at this point */
-		assert(vh.aligned_dps == NULL || vh.author_dps != NULL);
-
 		if (vh.dkim_domain != NULL && vh.presult >= 0)
 		{
 			/* We do nothing for DMARC quarantine.  Perhaps, there should be an
@@ -3294,9 +3326,9 @@ static void verify_message(dkimfl_parm *parm)
 			*  DMARC policies, since quarantine is meant to be softer than reject.
 			*/
 			bool policy_fail = POLICY_IS_STRICT(vh.policy) &&
-				(POLICY_IS_DMARC(vh.policy) &&
-					vh.aligned_dps == NULL && vh.aligned_spf_pass == 0) ||
+				(POLICY_IS_DMARC(vh.policy) && aligned_auth_is_ok == 0) ||
 				(POLICY_IS_ADSP(vh.policy) && from_sig_is_ok == 0);
+
 			if (parm->dyn.stats)
 			{
 				if (POLICY_IS_DMARC(vh.policy))
@@ -3307,9 +3339,7 @@ static void verify_message(dkimfl_parm *parm)
 						vh.policy == DMARC_POLICY_QUARANTINE;
 					parm->dyn.stats->dmarc_reject = vh.policy == DMARC_POLICY_REJECT;
 					// TODO: parm->dyn.stats->dmarc_subdomain = ???;
-					parm->dyn.stats->dmarc_fail = policy_fail ||
-						vh.policy == DMARC_POLICY_QUARANTINE &&
-						vh.aligned_dps == NULL && vh.aligned_spf_pass == 0;
+					parm->dyn.stats->dmarc_fail = (aligned_auth_is_ok & 1) == 0;
 				}
 				else
 				{
@@ -3569,8 +3599,7 @@ static void verify_message(dkimfl_parm *parm)
 		{
 			if (vh.policy != DMARC_POLICY_NONE)
 			{
-				policy_result = vh.aligned_dps || vh.aligned_spf_pass?
-					"pass": "fail";
+				policy_result = aligned_auth_is_ok? "pass": "fail";
 				if (vh.policy == DMARC_POLICY_QUARANTINE)
 					policy_type = " dmarc:quarantine=";
 				else // if (vh.policy == DMARC_POLICY_REJECT)
@@ -4148,6 +4177,12 @@ static int init_dkim(dkimfl_parm *parm)
 	{
 		nok |= dkim_options(parm->dklib, DKIM_OP_SETOPT, DKIM_OPTS_TMPDIR,
 			parm->z.tmp, sizeof parm->z.tmp) != DKIM_STAT_OK;
+	}
+
+	if (parm->z.min_key_bits)
+	{
+		nok |= dkim_options(parm->dklib, DKIM_OP_SETOPT, DKIM_OPTS_MINKEYBITS,
+			&parm->z.min_key_bits, sizeof parm->z.min_key_bits) != DKIM_STAT_OK;
 	}
 
 	nok |= dkim_set_prescreen(parm->dklib, dkim_sig_sort) != DKIM_STAT_OK;
