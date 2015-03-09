@@ -466,6 +466,37 @@ static inline int relax_strict(char const *p)
 	return 0;
 }
 
+static inline char const *nqr_to_string(int p)
+{
+	return p == 'r'? "reject": p == 'q'? "quarantine": "none";
+}
+
+char* write_dmarc_rec(dmarc_rec *dmarc)
+// writes only some tags; returns strdup'd value
+{
+	char buf[80];
+	size_t len = snprintf(buf, sizeof buf, "adkim=%c; aspf=%c; p=%s",
+		dmarc->adkim == 's'? 's': 'r',
+		dmarc->aspf == 's'? 's': 'r',
+		nqr_to_string(dmarc->p));
+
+	if (len < sizeof buf && dmarc->sp)
+		len += snprintf(&buf[len], sizeof buf - len,
+			"; sp=%s", nqr_to_string(dmarc->sp));
+
+	char const *fmt = "; fo=%c";
+	int ch;
+	for (size_t i = 0; i < sizeof dmarc->fo && (ch = dmarc->fo[i]) != 0; ++i)
+	{
+		if (len < sizeof buf)
+			len += snprintf(&buf[len], sizeof buf - len, fmt, ch);
+		fmt = ":%c";
+	}
+
+	return len < sizeof buf? strdup(buf): NULL;
+}
+
+
 static int parse_dmarc(char *record, void *v_dmarc)
 {
 	dmarc_rec *dmarc = v_dmarc;
@@ -526,6 +557,16 @@ static int parse_dmarc(char *record, void *v_dmarc)
 				int a = relax_strict(tv.value);
 				if (a)
 					dmarc->aspf = a;
+			}
+			else if (strcmp(tv.tag, "fo") == 0)
+			{
+				char *fo = &dmarc->fo[0], *fo_end = &dmarc->fo[sizeof dmarc->fo];
+				memset(fo, 0, sizeof dmarc->fo);
+				int ch;
+				while ((ch = *(unsigned char*)tv.value++) != 0 && fo < fo_end)
+					*fo++ = ch;
+				if (fo >= fo_end)
+					memset(&dmarc->fo[0], 0, sizeof dmarc->fo);
 			}
 		}
 	}
@@ -596,6 +637,7 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
 	{
 		// check subdomain policy that may apply
 		// don't check domains of rua addresses: do once on sending
+		dmarc->found_at_org = found_at_org;
 		dmarc->effective_p = 4 |
 			nqr_to_int(found_at_org && dmarc->sp? dmarc->sp: dmarc->p);
 	}

@@ -89,12 +89,14 @@ typedef struct domain_prescreen
 			unsigned int is_trusted:1;        // whitelisted > 2
 			unsigned int is_whitelisted:1;    // whitelisted > 1
 			unsigned int is_known:1;          // whitelisted > 0
-			unsigned int is_from:1;           // author_domain ("author")
+			unsigned int is_from:1;           // dkim author_domain ("author")
+			unsigned int is_org_domain:1;     // org domain of author's domain
 			unsigned int is_aligned:1;        // dmarc alignment ("")
+			unsigned int is_dmarc:1;          // dmarc policy publisher ("")
 			unsigned int is_dnswl:1;          // domain of dnswl address ("dnswl")
 			unsigned int is_mfrom:1;          // spf ("spf")
 			unsigned int is_helo:1;           // spf_helo ("spf_helo")
-			unsigned int looks_like_helo:1;
+			unsigned int is_spf_from:1;       // can it differ from is_from?
 			unsigned int is_reputed:1;        // ("rep")
 			unsigned int is_reputed_signer:1; // ("rep_s")
 		} f;
@@ -104,10 +106,22 @@ typedef struct domain_prescreen
 	struct domain_prescreen *next; // ordered by name
 	int reputation;                // if is_reputed*
 	spf_result spf[3];             // helo, mfrom, from
+	dkim_result dkim;
 	uint8_t dnswl_value;
 	uint16_t domain_val;           // sort key
 	char name[];
 } domain_prescreen;
+
+typedef enum dmarc_reason
+{
+	dmarc_reason_none, // policy not overridden
+	dmarc_reason_forwarded,
+	dmarc_reason_sampled_out,
+	dmarc_reason_trusted_forwarder,
+	dmarc_reason_mailing_list,
+	dmarc_reason_local_policy,
+	dmarc_reason_other
+} dmarc_reason;
 
 typedef struct stats_info
 {
@@ -123,6 +137,10 @@ typedef struct stats_info
 	// actual response from vbr check
 	char *vbr_result_resp;
 
+	// non-flag dmarc values
+	char *dmarc_record;
+	char *dmarc_rua;
+
 	char *ino_mtime_pid;
 
 	domain_prescreen* domain_head;
@@ -135,27 +153,32 @@ typedef struct stats_info
 	unsigned received_count;
 	unsigned signatures_count;
 
-	unsigned adsp_found:2;
-	unsigned adsp_unknown:2;
-	unsigned adsp_all:2;
-	unsigned adsp_discardable:2;
-	unsigned adsp_fail:2;
-	unsigned dmarc_found:2;
-	unsigned dmarc_none:2;
-	unsigned dmarc_quarantine:2;
-	unsigned dmarc_reject:2;
-	unsigned dmarc_subdomain:2;
-	unsigned dmarc_fail:2;
-	unsigned policy_overridden:2;
-	unsigned mailing_list:2;
-	unsigned reject:2;
-	unsigned drop:2;
-	unsigned outgoing:2;
+	uint32_t dmarc_ri; // report interval
+
+	unsigned nxdomain: 1;
+	unsigned adsp_any: 1;
+	unsigned adsp_found: 1;
+	unsigned adsp_unknown: 1;
+	unsigned adsp_all: 1;
+	unsigned adsp_discardable: 1;
+	unsigned adsp_fail: 1;
+	unsigned dmarc_found: 1;
+	unsigned dmarc_dkim: 1; // 0=fail
+	unsigned dmarc_spf: 1;
+	unsigned dmarc_dispo: 2; // 0=none, 1=quarantine, 2=reject (as honored)
+	unsigned dmarc_reason: 3; // dmarc_reason
+	unsigned dmarc_subdomain: 1;
+	unsigned dmarc_fail: 1;
+	unsigned policy_overridden: 1;
+	unsigned mailing_list: 1;
+	unsigned reject: 1;
+	unsigned drop: 1;
+	unsigned outgoing: 1;
 
 	enum save_unauthenticated_domains {
 		save_unauthenticated_never,
 		save_unauthenticated_from,
-		save_unauthenticated_always } special;
+		save_unauthenticated_dmarc } scope;
 } stats_info;
 
 void db_set_stats_info(db_work_area* dwa, stats_info *info);

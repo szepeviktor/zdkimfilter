@@ -96,7 +96,7 @@ m4_define([ZF_SIGOTHER],
 	 K5pYsL12X5UfS1+TRnv2ONLxQDgSn+4r8ZwaEWZ8=
 ])
 
-m4_define([ZF_SIGSUB],
+m4_define([ZF_SIGAUTHOR_BYSUB],
 [DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple;
 	d=subdomain.author.example; s=x4; t=1425475173;
 	bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=; l=301;
@@ -632,7 +632,7 @@ ctl
 AT_CHECK(
 ZF_RUN,
 0,
-[554 Invalid author domain
+[550 Invalid author domain
 ],
 [INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, no VBR and no whitelist
 ])
@@ -854,7 +854,7 @@ ctl
 AT_CHECK(
 ZF_RUN,
 0,
-[554 Invalid author domain
+[550 Invalid author domain
 ],
 [INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, no VBR and no whitelist
 ])
@@ -985,7 +985,7 @@ ctl
 AT_CHECK(
 ZF_RUN,
 0,
-[554 DKIM signature required by ADSP
+[550 DKIM signature required by ADSP
 ],
 [])
 AT_CLEANUP
@@ -1726,7 +1726,7 @@ exit
 AT_CHECK(
 ZF_RUN,
 0,
-[554 Too many DKIM signatures
+[550 Too many DKIM signatures
 ],
 [])
 AT_CLEANUP
@@ -2796,7 +2796,7 @@ db_sql_domain_flags dummy
 ])
 AT_DATA([publicsuffix], [example
 ])
-AT_DATA([mail], [ZF_MESSAGE(ZF_SIGSUB)])
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR_BYSUB)])
 ZF_CTLBATCHDMARC([pass (id=@subdomain.author.example, stat=0) dmarc:quarantine=pass])
 AT_CHECK(
 head -n 4 mail, 0,

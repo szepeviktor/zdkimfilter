@@ -45,4 +45,6 @@ DATABASE_STATEMENT(db_sql_update_target)
 DATABASE_STATEMENT(db_sql_insert_target)
 DATABASE_STATEMENT(db_sql_insert_target_ref)
 DATABASE_STATEMENT(db_sql_check_user)
+DATABASE_STATEMENT(db_sql_dmarc_agg_domain)
+DATABASE_STATEMENT(db_sql_dmarc_agg_record)
 

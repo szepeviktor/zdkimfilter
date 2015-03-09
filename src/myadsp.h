@@ -42,7 +42,7 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #define ADSP_POLICY_ALL          1   /* all */
 #define ADSP_POLICY_DISCARDABLE  2   /* discardable */
 #define DMARC_POLICY_NONE        4
-#define DMARC_POLICY_QUARANTINE 12   /* not strict! */
+#define DMARC_POLICY_QUARANTINE  5
 #define DMARC_POLICY_REJECT      6
 #define POLICY_IS_DMARC(n) (((n)&4) != 0)
 #define POLICY_IS_ADSP(n) (((n)&4) == 0)
@@ -59,12 +59,15 @@ typedef struct dmarc_rec
 	char *rua;       // malloc'd
 	int effective_p; // one of the macro above
 	uint32_t ri;
+	char fo[8];
 	char adkim, aspf, p, sp, pct;
-	char nu[3];
+	char found_at_org;
+	char nu[2];
 } dmarc_rec;
 
 int set_adsp_query_faked(int mode);
 int my_get_adsp(char const *domain, int *policy);
 int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc);
+char* write_dmarc_rec(dmarc_rec *dmarc);
 
 #endif // MYADSP_H_INCLUDED
