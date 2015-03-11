@@ -105,7 +105,7 @@ typedef struct domain_prescreen
 	char *vbr_mv;                  // trusted voucher (in parm->z) or NULL
 	struct domain_prescreen *next; // ordered by name
 	int reputation;                // if is_reputed*
-	spf_result spf[3];             // helo, mfrom, from
+	spf_result spf;                // helo, mfrom, or from
 	dkim_result dkim;
 	uint8_t dnswl_value;
 	uint16_t domain_val;           // sort key

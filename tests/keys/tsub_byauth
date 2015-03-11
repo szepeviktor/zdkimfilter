@@ -1,0 +1,27 @@
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+	t=1425636964; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301; h=Date:From:To:Subject;
+	b=Z9W9qCvybTs80lAmboko3ZFAxfYiSJW/l8r7Azpp4BLDrXB3kOYFcERRn6k6L70jv
+	 VOj7WwFIbLDHrk5W/XhveRu4lChRqDetyrqy+hOsrYbnJgbOCizi439JtYMub+zTwm
+	 d8PidNs04FFInGGUE2zRaD6AT/M+fz5J41uvs3oE=
+Received: from server.example by test.example with ESMTP
+Received-SPF: pass SPF=MAILFROM sender=someone@sender.example
+Message-ID: <123456@author.example>
+Date: Mon, 08 Feb 2010 13:12:55 +0100
+From: Author <user@subdomain.author.example>
+MIME-Version: 1.0
+To: (undisclosed recipients)
+Subject: Test multiple signatures
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+This is going to be signed by multiple signers:
+author, sender, and other. The filter only reports
+one signature: the first valid one in the order
+1) author,
+2) sender, and
+3) other
+
+Note that to distinguish the sender we need a valid
+SPF record. We relay on Courier's SPF checking for that.
+

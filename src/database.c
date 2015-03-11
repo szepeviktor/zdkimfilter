@@ -1086,6 +1086,7 @@ int db_is_whitelisted(db_work_area* dwa, char *domain)
 
 static int test_domain_flags(db_work_area* dwa, char const* domain, int *three)
 {
+	// db_sql_domain_flags <SPACE> example.com:0:1:1 example.org:3:2:1 ...
 	char *const h = dwa->z.db_sql_domain_flags;
 	if (h)
 	{
@@ -1095,12 +1096,11 @@ static int test_domain_flags(db_work_area* dwa, char const* domain, int *three)
 			char const *z = strchr(x, ' ');
 			if (z == NULL)
 				z = x + strlen(x);
-			int rtc = -1;
+			int rtc = 0;
 			for (char *flag = strchr(x, ':');
-				flag && flag < z && rtc < 2; flag = strchr(flag, ':'))
-					if (++rtc >= 0)
-						three[rtc] = atoi(++flag);
-			return ++rtc;
+				flag && flag < z && rtc < 3; flag = strchr(flag, ':'))
+					three[rtc++] = atoi(++flag);
+			return rtc;
 		}
 	}
 	return 0;
@@ -1127,8 +1127,10 @@ int db_get_domain_flags(db_work_area* dwa, char *domain,
 
 	if (dwa->stmt[db_sql_domain_flags] == NULL)
 	{
-		*is_whitelisted = db_is_whitelisted(dwa, domain);
-		return 1;
+		int w = db_is_whitelisted(dwa, domain);
+		if (w)
+			*is_whitelisted = w;
+		return w != 0;
 	}
 
 	int rtc;
@@ -1536,11 +1538,7 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 			else
 				bitflag &= ~dmarcflag;
 
-			spf_result spf = spf_none;
-			for (int i = 0; i < 3; ++i)
-				if (dps->spf[i] > spf)
-					spf = dps->spf[i];
-			if (*(dwa->var[spf_result_variable] = get_spf_result(spf)) != 0)
+			if (*(dwa->var[spf_result_variable] = get_spf_result(dps->spf)) != 0)
 				bitflag |= spf_result_mask_bit;
 			else
 				bitflag &= ~spf_result_mask_bit;

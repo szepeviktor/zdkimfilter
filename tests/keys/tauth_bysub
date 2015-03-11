@@ -1,0 +1,58 @@
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple;
+	d=subdomain.author.example; s=x4; t=1425475173;
+	bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=; l=301;
+	h=Date:From:To:Subject;
+	b=QB5afafnvYV8ML6CPwhzNAAwt7mVdy5zUxqjKWv155g+/bZcZYQjNpj7kIIkTFQ/S
+	 XXHm7ajuXdB01ZqQnvfHe6mbDiB4VPReSIKEE8Q4znyoODdWDVmwqVBmmj1YjDHePc
+	 0CrmhdsaCX4FW+X8td1hOcopogke4e3CrWy7vr8k=
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple;
+	d=subdomain.author.example; s=x4; t=1425475050;
+	bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=; l=301;
+	h=Date:From:To:Subject;
+	b=W1tGgIxraV5VdhVb5z2nqJdhHpSopKTccejMF4qxgKTls5zKZvxxkfcCHrMqry2Ns
+	 HlqMrMhO//xaQcLw00rzQ==
+Received: from server.example by test.example with ESMTP
+Received-SPF: pass SPF=MAILFROM sender=someone@sender.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=sender.example; s=x2;
+	t=1267197537; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301;
+	h=Message-ID:Date:From:MIME-Version:To:Subject:Content-Type:
+	 Content-Transfer-Encoding;
+	b=d6AyU6LW/aOb2S0KQjewLe1AApiloi/CZSn9c1WOjZLJmz7govCghGjgI3ebMl5mC
+	 cVzheZ+sjWJRFTj+L2Sd30j9L+gOc2ZmJ6wyK/UqhNGPIvZfhn4Sap4J51sk5JhvLr
+	 zd6a1TVrz5nYJU3fF6QW7lLPtAcg2v05+UE38Ios=
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+	t=1267195653; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301;
+	h=Message-ID:Date:From:MIME-Version:To:Subject:Content-Type:
+	 Content-Transfer-Encoding;
+	b=ZmMMHnWo7xMM2V1zZEYWp7jCXHB7hJ/D8TpCleG0SZ8njWjXaspgOtD/F52SJK90G
+	 tx3/m0Y3F58NBVjVfTeAq+znjGER6TbwOQQfbpkHb0jvcgrSYCWVcekS7hIlCtT5mF
+	 8gZbgYgOo3rIFUy9vdHkse1jzNR8kxrIYv3aZ0tc=
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=other.example; s=x3;
+	t=1267197617; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301;
+	h=Message-ID:Date:From:MIME-Version:To:Subject:Content-Type:
+	 Content-Transfer-Encoding;
+	b=ejTAOxjZ1TFzdE0KT0/I/Dd7dL76iPzUq3sc4ngUt/78pFSFSL4p3nXNIMYeGHVT6
+	 7kwAhFlmpT0UgBaisyjfyGTgx4k/N2+Kbbne1NV/kYG9wYRylk9fooS08ZRkY7Ieuu
+	 K5pYsL12X5UfS1+TRnv2ONLxQDgSn+4r8ZwaEWZ8=
+Message-ID: <123456@author.example>
+Date: Mon, 08 Feb 2010 13:12:55 +0100
+From: Author <user@author.example>
+MIME-Version: 1.0
+To: (undisclosed recipients)
+Subject: Test multiple signatures
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+This is going to be signed by multiple signers:
+author, sender, and other. The filter only reports
+one signature: the first valid one in the order
+1) author,
+2) sender, and
+3) other
+
+Note that to distinguish the sender we need a valid
+SPF record. We relay on Courier's SPF checking for that.
+

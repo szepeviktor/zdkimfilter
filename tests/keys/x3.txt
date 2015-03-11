@@ -1,0 +1,1 @@
+x3._domainkey IN TXT "v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDFTpY+8YuikRLRfNLU3krD8h7lNnbK4eZ0TuPfRur6TDEg+bOQD1g1yJ1bnyQ1uCtwEkZ54Zs56C8PVpvU7jjR2/YcS92PiOhm3MXWyD3caekCZ7ezXvEkD/KaTkuKypiTmDlefQ39t5oq60fufb61/lUGzLech/kKLOexYohqEwIDAQAB" ; ----- DKIM x3 for other.example

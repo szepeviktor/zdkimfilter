@@ -1726,8 +1726,8 @@ static int domain_flags(verify_parms *vh)
 					stricmp(dps->name + len - org_domain_len, vh->org_domain) == 0)
 				{
 					dps->u.f.is_aligned = 1;
-					dps->u.f.is_from = len == org_domain_len;
 					dps->domain_val += 1500;
+					assert(len != org_domain_len); // otherwise is_org_domain
 				}
 			}
 
@@ -1785,10 +1785,10 @@ static int domain_flags(verify_parms *vh)
 			if (dps->u.f.is_dnswl)
 				dps->domain_val += 200;     // dnswl relay's signature
 
-			if (dps->u.f.is_mfrom && dps->spf[1] >= spf_neutral)
+			if (dps->u.f.is_mfrom && dps->spf >= spf_neutral)
 				dps->domain_val += 100;     // sender's domain signature
 
-			if (dps->u.f.is_helo && dps->spf[0] >= spf_neutral)
+			if (dps->u.f.is_helo && dps->spf >= spf_neutral)
 				dps->domain_val += 15;      // relay's signature
 		}
 
@@ -2501,24 +2501,19 @@ static int verify_headers(verify_parms *vh)
 									get_prescreen(&vh->domain_head, sender);
 								if (dps)
 								{
+									dps->spf = spf;
 									if (spf == spf_pass)
 										dps->u.f.spf_pass = 1;
 
 									if (strincmp(s, "HELO", 4) == 0)
-									{
 										dps->u.f.is_helo = 1;
-										dps->spf[0] = spf;
-									}
+
 									else if (strincmp(s, "MAILFROM", 8) == 0)
-									{
 										dps->u.f.is_mfrom = 1;
-										dps->spf[1] = spf;
-									}
+
 									else if (strincmp(s, "FROM", 4) == 0)
-									{
 										dps->u.f.is_spf_from = 1;
-										dps->spf[2] = spf;
-									}
+
 								}
 								else
 								{
@@ -2861,9 +2856,13 @@ static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status)
 
 	if (vh->have_spf_pass)
 		for (domain_prescreen *dps = vh->domain_head; dps; dps = dps->next)
-			for (int i = 0; i < 2; ++i)
-				if (dps->spf[i] == spf_pass)
-					spf_domain[i] = dps->name;
+			if (dps->spf == spf_pass)
+			{
+				if (dps->u.f.is_helo)
+					spf_domain[0] = dps->name;
+				if (dps->u.f.is_mfrom)
+					spf_domain[1] = dps->name;
+			}
 
 	if (spf_domain[0] || spf_domain[1])
 	{
@@ -2954,15 +2953,15 @@ static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status)
 
 	if (*vh->policy_result)
 	{
-		char const *method = NULL;
+		char const *method;
+		int printed = 0;
 
 		if (POLICY_IS_DMARC(vh->policy))
 		{
+			method = "dmarc";
 			if (vh->dkim_domain)
-				fprintf(fp, ";\n  dmarc=%s%s header.from=%s",
+				printed = fprintf(fp, ";\n  dmarc=%s%s header.from=%s",
 					vh->policy_result, vh->policy_comment, vh->dkim_domain);
-			else
-				method = "dmarc";
 		}
 		else
 		/*
@@ -2972,22 +2971,28 @@ static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status)
 		* Note: This method can say nxdomain, DMARC cannot.
 		*/
 		{
+			method = "dkim-adsp";
 #if HAVE_DKIM_GETUSER
 			char const *const user = dkim_getuser(dkim);
 			if (user && vh->dkim_domain)
-				fprintf(fp, ";\n  dkim-adsp=%s header.from=%s@%s",
+				printed = fprintf(fp, ";\n  dkim-adsp=%s header.from=%s@%s",
 					vh->policy_result, user, vh->dkim_domain);
-			else
 #endif			
-				method = "dkim-adsp";
 		}
 
-		if (method)
+		if (printed == 0)
 			fprintf(fp, ";\n  %s=%s%s", method,
 				vh->policy_result, vh->policy_comment);
 		++auth_given;
+		if (parm->z.verbose >= 4)
+		{
+			fl_report(LOG_INFO,
+				"id=%s: policy:%s %s%s",
+				parm->dyn.info.id, method, vh->policy_result, vh->policy_comment);
+			log_written += 1;
+		}
 	}
-	
+
 	if (vh->reputation_dps)
 	{
 		domain_prescreen const *const dps = vh->reputation_dps;
@@ -3138,7 +3143,7 @@ static void verify_message(dkimfl_parm *parm)
 	vh.presult = DKIM_PRESULT_NONE;
 	vh.policy = DKIM_POLICY_NONE;
 	vh.do_adsp = parm->z.honor_author_domain != 0;
-	vh.do_dmarc = /* parm->z.honor_dmarc != */ 0;
+	vh.do_dmarc = parm->z.honor_dmarc != 0;
 
 	DKIM_STAT status;
 	DKIM *dkim = dkim_verify(parm->dklib, parm->dyn.info.id, NULL, &status);

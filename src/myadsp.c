@@ -601,7 +601,7 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
 	memset(dmarc, 0, sizeof *dmarc);
 
 	static char const subdomain[] = "_dmarc.";
-	size_t len_sub = sizeof subdomain - 1;
+	size_t const len_sub = sizeof subdomain - 1;
 	size_t len_d = strlen(domain) + len_sub;
 	char query[NS_BUFFER_SIZE];
 
@@ -629,7 +629,7 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
 		found_at_org = 1;
 		len_d = strlen(org_domain) + len_sub;
 		memcpy(query, subdomain, sizeof subdomain);
-		strcat(&query[len_sub], domain);
+		strcat(&query[len_sub], org_domain);
 		rtc = (*txt_query)(query, len_d, len_sub, parse_dmarc, dmarc);
 	}
 

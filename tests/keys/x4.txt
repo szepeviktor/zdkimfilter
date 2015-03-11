@@ -1,0 +1,1 @@
+x4._domainkey IN TXT "v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDHoVBC8uC7kB90cJZBirpAxJjqv5rgWwk7yE9zjWeCsvxqisIP0hLT4ffQFSk6NcnxD6cm67FIOKKSY0jznzvObyqndBn4jNYIcjdfUY+Erq/2dtcKljeYdR63N9QNgP8un4/taLqkNBZ+H3hhFLqY5V65+CnlclAnERcpJ+wl9wIDAQAB" ; ----- DKIM key x4 for example.com

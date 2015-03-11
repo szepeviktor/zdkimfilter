@@ -1,7 +1,9 @@
 # Process this file with autom4te to create testsuite. -*- Autotest -*-
 
-# why wouldn't this be allowed?
+# why wouldn't these be allowed?
 m4_pattern_allow([m4_ifblank])
+m4_pattern_allow([m4_ifnblank])
+#m4#_pattern_allow([m4_join])
 
 # config file, accept extra lines as a parameter
 m4_define([ZF_CONFIG],
@@ -106,11 +108,31 @@ m4_define([ZF_SIGAUTHOR_BYSUB],
 	 0CrmhdsaCX4FW+X8td1hOcopogke4e3CrWy7vr8k=
 ])
 
+m4_define([ZF_SIGSUB_BYAUTHOR],
+[DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+	t=1425636964; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301; h=Date:From:To:Subject;
+	b=Z9W9qCvybTs80lAmboko3ZFAxfYiSJW/l8r7Azpp4BLDrXB3kOYFcERRn6k6L70jv
+	 VOj7WwFIbLDHrk5W/XhveRu4lChRqDetyrqy+hOsrYbnJgbOCizi439JtYMub+zTwm
+	 d8PidNs04FFInGGUE2zRaD6AT/M+fz5J41uvs3oE=
+])
+
+m4_define([ZF_SIGSUB_BYSUB],
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple;
+	d=subdomain.author.example; s=x4; t=1425636862;
+	bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=; l=301;
+	h=Date:From:To:Subject;
+	b=t1ZnIYMPY41Vq/Gy8S12eTEqBFVa7mkoMj23TZCeuuPadOQN4SEcSHqQ1qTPXzn0b
+	 zuy3hJAoIDneoRzgkCAIJAHtX2hZWFBv5FUJ0IvaFpc4TIj6ElJj1oepyUSZ1rYIIA
+	 a9ovpSSgMLOnle66Dc6xIGHU3/0PaKIR4zBxTK4k=
+])
+
+
 # header tail and body of message
 m4_define([ZF_MESSAGE_BODY],
 [Message-ID: <123456@author.example>
 Date: Mon, 08 Feb 2010 13:12:55 +0100
-From: Author <user@author.example>
+From: Author <][m4_default([$1], [user@author.example])][>
 VBR-Info: mc=all; md=author.example; mv=author-cert.example
 VBR-Info: mc=all; md=sender.example; mv=sender-cert.example
 MIME-Version: 1.0
@@ -129,6 +151,17 @@ one signature: the first valid one in the order
 Note that to distinguish the sender we need a valid
 SPF record. We relay on Courier's SPF checking for that.
 ])
+
+m4_define([ZF_SPFPASS],
+[Received-SPF: pass SPF=$1 sender=someone@$2;
+])
+
+
+# message with 1=authetication (dnswl, SPF, and/or DKIM), and 2=author
+m4_define([ZF_MESSAGE_AUTH],
+[Received: from server.example by test.example with ESMTP
+$1Received: from mail.example.com by server.example with ESMTPA
+][ZF_MESSAGE_BODY([$2])])
 
 # message with up to 4 signatures and SPF pass
 m4_define([ZF_MESSAGE],
@@ -424,7 +457,7 @@ AT_CLEANUP
 #
 m4_define([ZF_KEYCONFIG],
 [ZF_KEYFILE([$1])
-ZF_CONFIG(3, [db_backend test
+ZF_CONFIG([m4_default([$3], [3])], [db_backend test
 db_sql_insert_msg_ref dummy
 $2])])
 
@@ -2763,6 +2796,9 @@ INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
 AT_CHECK(cmp mail no-preheader, 0, [], [])
 AT_CLEANUP
 
+#
+# DMARC
+#
 m4_define([ZF_CTLBATCHDMARC],
 [AT_DATA([ctl], [sbounces@server.example
 Mverifymsg
@@ -2778,34 +2814,233 @@ ctl
 AT_CHECK(
 ZF_RUN,
 0,
-[250 Ok.
+[m4_default([$1], [250 Ok.])][
 ],
-[m4_join([ ],
-	[INFO:zdkimfilter[0]:New config file read from zftest.conf
-INFO:zdkimfilter[0]:id=verifymsg: verified:],
-	m4_ifblank([$2], [[spf=pass,]]),
-	[dkim=$1 rep=0
-])])])
+[INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+$2])])
 
+# 1=domain, 2=p/sp..
+m4_define([ZF_DMARC], [_dmarc.$1 v=DMARC1; $2; rua=mailto:dmarc-feedback@$1
+])
+
+m4_define([ZF_DOMAIN], [$1 X
+])
+
+# config file and publicsuffix; 1=extra config, [2=override verbose]
+m4_define([ZF_CONFDMARC],
+[ZF_CONFIG([m4_default([$2], [3])], [publicsuffix=publicsuffix
+db_backend test
+db_sql_insert_msg_ref dummy
+$1
+])
+AT_DATA([publicsuffix], [example
+])])
+
+m4_define([ZF_LOG],
+[INFO:zdkimfilter[[0]]:id=verifymsg: $1
+])
+
+m4_define([ZF_VLOG], [ZF_LOG([verified: $1 rep=0])])
 
 #
 AT_SETUP([DMARC non-none policy reported])
-ZF_KEYCONFIG([_dmarc.author.example v=DMARC1; p=quarantine; rua=mailto:dmarc-feedback@author.example
-], [publicsuffix=publicsuffix
-db_sql_domain_flags dummy
-])
-AT_DATA([publicsuffix], [example
-])
-AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR_BYSUB)])
-ZF_CTLBATCHDMARC([pass (id=@subdomain.author.example, stat=0) dmarc:quarantine=pass])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=quarantine])])
+ZF_CONFDMARC
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR)])
+ZF_CTLBATCHDMARC([], [ZF_VLOG([spf=pass, dkim=pass (id=@author.example, stat=0) dmarc:quarantine=pass])])
 AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
   spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed quarantine reported])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=quarantine])])
+ZF_CONFDMARC
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dmarc=fail header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed quarantine honored])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=quarantine])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC([], [ZF_LOG([dmarc=quarantine policy for author.example, no VBR and no whitelist])])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dmarc=fail (QUARANTINE) header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed reject reported])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dmarc=fail header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed reject honored])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
+	[ZF_LOG([dmarc=reject policy for author.example, no VBR and no whitelist])])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed reject honored from database])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([db_sql_domain_flags author.example:0:1:1])
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
+	[ZF_LOG([dmarc=reject policy for author.example, no VBR and no whitelist])])
+AT_CLEANUP
+
+AT_SETUP([DMARC pass signed by subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGAUTHOR_BYSUB, [user@author.example])])
+ZF_CTLBATCHDMARC([], [ZF_VLOG([dkim=pass (id=@subdomain.author.example, stat=0) dmarc:reject=pass])])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
   dkim=pass header.i=@subdomain.author.example;
   dmarc=pass header.from=author.example
 ], [])
 AT_CLEANUP
+
+AT_SETUP([DMARC pass SPF HELO by subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([HELO], [subdomain.author.example])], [user@author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.helo=subdomain.author.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC pass SPF MAILFROM by subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [subdomain.author.example])], [user@author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=subdomain.author.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC pass SPF FROM (non standard) by subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([FROM], [subdomain.author.example])], [user@author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 2 mail, 0,
+[Authentication-Results: test.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain signed by domain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])][ZF_DOMAIN([subdomain.author.example])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGSUB_BYAUTHOR, [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([], [ZF_VLOG([dkim=pass (id=@author.example, stat=0) dmarc:reject=pass])])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim=pass header.i=@author.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain SPF HELO by domain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([HELO], [author.example])], [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.helo=author.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain SPF MAILFROM by domain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [author.example])], [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=author.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC sub SPF FROM (non standard) by domain])
+ZF_KEYFILE([ZF_DMARC([subdomain.author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([FROM], [author.example])], [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 2 mail, 0,
+[Authentication-Results: test.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain signed by subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])][ZF_DOMAIN([subdomain.author.example])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGSUB_BYSUB, [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([], [ZF_VLOG([dkim=pass (id=@subdomain.author.example, stat=0) dmarc:reject=pass])])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim=pass header.i=@subdomain.author.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain SPF by another subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [anothersub.author.example])], [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=anothersub.author.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+
 
 # 
 AT_SETUP([Real DNS queries: vouch, reputation])

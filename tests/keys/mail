@@ -1,0 +1,21 @@
+Received: from server.example by test.example with ESMTP
+Received-SPF: pass SPF=MAILFROM sender=someone@sender.example
+Message-ID: <123456@author.example>
+Date: Mon, 08 Feb 2010 13:12:55 +0100
+From: Author <user@author.example>
+MIME-Version: 1.0
+To: (undisclosed recipients)
+Subject: Test multiple signatures
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+This is going to be signed by multiple signers:
+author, sender, and other. The filter only reports
+one signature: the first valid one in the order
+1) author,
+2) sender, and
+3) other
+
+Note that to distinguish the sender we need a valid
+SPF record. We relay on Courier's SPF checking for that.
+
