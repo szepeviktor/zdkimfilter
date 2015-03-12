@@ -3490,6 +3490,15 @@ static void verify_message(dkimfl_parm *parm)
 								vh.dnswl_count,
 								vh.dnswl_dps?
 									vh.dnswl_dps->name: "no domain name, though");
+						else if (vh.author_dps && vh.author_dps->u.f.is_reputed)
+							fl_report(LOG_INFO,
+								"id=%s: %s %s, even if %s is in %s (%d)",
+								parm->dyn.info.id,
+								log_reason,
+								vh.dkim_domain,
+								vh.author_dps->name,
+								parm->z.reputation_root,
+								vh.author_dps->reputation);
 						else
 							fl_report(LOG_INFO,
 								"id=%s: %s %s, no VBR and no whitelist",
