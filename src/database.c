@@ -399,7 +399,9 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out/*, int *agg */)
 			domain_mask_bit | auth_type_mask_bit |
 			vbr_mv_mask_bit | vbr_response_mask_bit |
 			reputation_mask_bit | dmarc_record_mask_bit |
-			dmarc_rua_mask_bit |dkim_result_mask_bit | spf_result_mask_bit;
+			dmarc_ri_mask_bit | prefix_len_mask_bit |
+			dmarc_rua_mask_bit |dkim_result_mask_bit | dkim_order_mask_bit |
+			spf_result_mask_bit;
 
 		STMT_ALLOC(db_sql_select_domain, domain_variables);
 
@@ -1385,7 +1387,7 @@ static char *get_dkim_result(dkim_result r)
 	switch (r)
 	{
 		default:
-		case dkim_none: return "";
+		case dkim_none: return "none";
 		case dkim_pass: return "pass";
 		case dkim_fail: return "fail";
 		case dkim_policy: return "policy";
@@ -1400,7 +1402,7 @@ static char *get_spf_result(spf_result r)
 	switch (r)
 	{
 		default:
-		case spf_none: return "";
+		case spf_none: return "none";
 		case spf_fail: return "fail";
 		case spf_permerror: return "permerror";
 		case spf_temperror: return "temperror";
@@ -1418,6 +1420,10 @@ static void comma_copy(char *buf, char const *value, int *comma)
 	*comma = 1;
 }
 
+// log10(exp2(N+1)) = (N+1)log10(2) < (N+1)*0.302 < N/3 + 1
+// plus sign and terminating zero
+#define MAX_DECIMAL_DIG(BYTES) (8*BYTES/3 + 3)
+
 static var_flag_t
 in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 {
@@ -1426,38 +1432,46 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 
 	var_flag_t zeroflag = 0, dmarcflag = 0;
 
-	if (info->dmarc_found)
-	{
 #define CONST_STRING(N, V) do {\
 	dwa->var[N##_variable] = (V); \
 	dmarcflag |= N##_mask_bit; \
 	} while (0)
-		CONST_STRING(dmarc_dkim, info->dmarc_dkim? "pass": "fail");
-		CONST_STRING(dmarc_spf, info->dmarc_spf? "pass": "fail");
-		CONST_STRING(dmarc_dispo, info->dmarc_dispo == 0? "none":
-			info->dmarc_dispo == 1? "quarantine": "reject");
-		char *reason;
-		switch (info->dmarc_reason)
-		{
-			default:
-			case dmarc_reason_none: reason = NULL; break;
-			case dmarc_reason_forwarded: reason = "forwarded"; break;
-			case dmarc_reason_sampled_out: reason = "sampled_out"; break;
-			case dmarc_reason_trusted_forwarder: reason = "trusted_forwarder";
-				break;
-			case dmarc_reason_mailing_list: reason = "mailing_list"; break;
-			case dmarc_reason_local_policy: reason = "local_policy"; break;
-			case dmarc_reason_other: reason = "other"; break;
-		}
-		if (reason)
-			CONST_STRING(dmarc_reason, reason);
 
-		bitflag |= dmarcflag;
-		zeroflag |= dmarcflag;
-#undef CONST_STRING
+	/* dmarc_{dkim,spf,dispo,reason} are message variables */
+	CONST_STRING(dmarc_dkim, info->dmarc_found? info->dmarc_dkim?
+		"pass": "fail": "none");
+	CONST_STRING(dmarc_spf, info->dmarc_found? info->dmarc_spf?
+		"pass": "fail": "none");
+	CONST_STRING(dmarc_dispo, info->dmarc_dispo == 0? "none":
+		info->dmarc_dispo == 1? "quarantine": "reject");
+	char *reason;
+	switch (info->dmarc_reason)
+	{
+		default:
+		case dmarc_reason_none: reason = "none"; break;
+		case dmarc_reason_forwarded: reason = "forwarded"; break;
+		case dmarc_reason_sampled_out: reason = "sampled_out"; break;
+		case dmarc_reason_trusted_forwarder: reason = "trusted_forwarder";
+			break;
+		case dmarc_reason_mailing_list: reason = "mailing_list"; break;
+		case dmarc_reason_local_policy: reason = "local_policy"; break;
+		case dmarc_reason_other: reason = "other"; break;
 	}
+	CONST_STRING(dmarc_reason, reason);
 
+	/* dmarc_{ri,rua,record} are domain variables */
+	char dmarc_ri_buf[MAX_DECIMAL_DIG(sizeof info->dmarc_ri)];
+	if (info->dmarc_found)
+		sprintf(dmarc_ri_buf, "%u", info->dmarc_ri);
+	else
+		dmarc_ri_buf[0] = 0;
+	CONST_STRING(dmarc_ri, dmarc_ri_buf);
+
+	zeroflag |= dmarcflag;
 	dmarcflag |= dmarc_rua_mask_bit | dmarc_record_mask_bit;
+	bitflag |= dmarcflag;
+
+#undef CONST_STRING
 
 	char *var = NULL;
 	int rc = stmt_run(dwa, db_sql_insert_message, bitflag, &var, NULL);
@@ -1473,13 +1487,17 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 	*/
 	if (rc >= 0 && info->domain_head != NULL)
 	{
-		// author,spf,spf_helo,dkim,aligned,vbr,rep,rep_s,dnswl
-		// 1234567890123456789012345678901234567890123456789012
-		char authbuf[56];
+		// author,spf_helo,spf,dkim,org,dmarc,aligned,vbr,rep,rep_s,dnswl,nx
+		// 12345678901234567890123456789012345678901234567890123456789012345
+		char authbuf[72]; // 20        30        40        50        60
 		dwa->var[auth_type_variable] = authbuf;
-		var_flag_t bit2 = auth_type_mask_bit | domain_mask_bit;
+		size_t dkim_order = 0;
+		char dkim_order_buf[MAX_DECIMAL_DIG(sizeof dkim_order)];
+		dwa->var[dkim_order_variable] = dkim_order_buf;
+		var_flag_t bit2 = auth_type_mask_bit | domain_mask_bit |
+			spf_result_mask_bit | dkim_result_mask_bit | dkim_order_mask_bit;
 		bitflag |= bit2;
-		zeroflag |= bit2 | spf_result_mask_bit | dkim_result_mask_bit;
+		zeroflag |= bit2;
 
 		var_flag_t vbr_bit = vbr_mv_mask_bit;
 		if (info->vbr_result_resp)
@@ -1489,6 +1507,16 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 		}
 		zeroflag |= vbr_bit;
 
+		size_t org_domain_len = 0;
+		char prefix_len_buf[MAX_DECIMAL_DIG(sizeof(size_t))];
+		if (dwa->var[org_domain_variable])
+		{
+			org_domain_len = strlen(dwa->var[org_domain_variable]);
+			zeroflag |= prefix_len_mask_bit;
+			dwa->var[prefix_len_variable] = prefix_len_buf;
+			prefix_len_buf[0] = 0;
+		}
+		
 		// reputation (usually 0) available for domain and message_ref
 		bitflag |= reputation_mask_bit;
 		zeroflag |= reputation_mask_bit;
@@ -1514,10 +1542,38 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 				comma_copy(authbuf, "spf_helo", &comma);
 			if (dps->u.f.is_mfrom)
 				comma_copy(authbuf, "spf", &comma);
-			if (dps->u.f.sig_is_ok)
+			if (dps->nsigs)
+			{
 				comma_copy(authbuf, "dkim", &comma);
+				sprintf(dkim_order_buf, "%zu", ++dkim_order);
+			}
+			else
+				strcpy(dkim_order_buf, "0");
+
+			if (dps->u.f.is_org_domain)
+				comma_copy(authbuf, "org", &comma);
+
+			if (dps->u.f.is_dmarc)
+			{
+				comma_copy(authbuf, "dmarc", &comma);
+				bitflag |= dmarcflag;
+			}
+			else
+				bitflag &= ~dmarcflag;
+
 			if (dps->u.f.is_aligned)
+			{
 				comma_copy(authbuf, "aligned", &comma);
+				if (org_domain_len)
+				{
+					size_t sublen = strlen(dps->name);
+					if (sublen >= org_domain_len)
+					{
+						sprintf(prefix_len_buf, "%zu", sublen - org_domain_len);
+						bitflag |= prefix_len_mask_bit;
+					}
+				}
+			}
 			if (dps->u.f.vbr_is_ok)
 			{
 				comma_copy(authbuf, "vbr", &comma);
@@ -1532,23 +1588,14 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 				comma_copy(authbuf, "rep_s", &comma);
 			if (dps->u.f.is_dnswl)
 				comma_copy(authbuf, "dnswl", &comma);
+			if (info->nxdomain &&
+				(dps->u.f.is_from || dps->u.f.is_org_domain))
+					comma_copy(authbuf, "nx", &comma);
 
-			if (dps->u.f.is_dmarc)
-				bitflag |= dmarcflag;
-			else
-				bitflag &= ~dmarcflag;
+			dwa->var[spf_result_variable] = get_spf_result(dps->spf);
+			dwa->var[dkim_result_variable] = get_dkim_result(dps->dkim);
 
-			if (*(dwa->var[spf_result_variable] = get_spf_result(dps->spf)) != 0)
-				bitflag |= spf_result_mask_bit;
-			else
-				bitflag &= ~spf_result_mask_bit;
-
-			if (*(dwa->var[dkim_result_variable] = get_dkim_result(dps->dkim)) != 0)
-				bitflag |= dkim_result_mask_bit;
-			else
-				bitflag &= ~dkim_result_mask_bit;
-
-			char rep_buf[8*sizeof(int)/3 + 3];
+			char rep_buf[MAX_DECIMAL_DIG(sizeof(int))];
 			sprintf(rep_buf, "%d", dps->reputation);
 			dwa->var[reputation_variable] = rep_buf;
 
@@ -1762,14 +1809,6 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 			bitflag |= message_status_mask_bit;
 			zeroflag |= message_status_mask_bit;
 		}
-		if (info->nxdomain && p < safe_stop)
-		{
-			static const char nxdomain[] = "nxdomain";
-			strcpy(dwa->var[nxdomain_variable] = p, nxdomain);
-			p += sizeof nxdomain;
-			bitflag |= nxdomain_mask_bit;
-			zeroflag |= nxdomain_mask_bit;
-		}
 		else if (info->adsp_any && p < safe_stop)
 		{
 			char *adsp_st = info->adsp_all? "all":
@@ -1817,11 +1856,13 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 
 #include <sys/types.h>
 #include <unistd.h>
+#include "myadsp.h"
+#include "spf_result_string.h"
 
 static int autoargip(db_work_area *dwa)
 {
 	char buf[32];
-	sprintf(buf, "192.0.2.%d", (int)(rand() & 255));
+	sprintf(buf, "192.0.2.%d", (int)(rand() & 30) + 1);
 	db_set_client_ip(dwa, buf);
 	return 1;
 }
@@ -1895,7 +1936,7 @@ static int autoarg(db_work_area *dwa, stats_info *stats, int i)
 		}
 		case 10:
 		{
-			stats->signatures_count = 3;
+			stats->signatures_count = rand() / 32 % 4;
 			break;
 		}
 		case 11:
@@ -1909,45 +1950,80 @@ static int autoarg(db_work_area *dwa, stats_info *stats, int i)
 			stats->ino_mtime_pid = strdup(buf);
 			break;
 		}
+		case 13:
+		{
+			stats->dmarc_dkim = rand() > PERC_50? 1: 0;
+			break;
+		}
+		case 14:
+		{
+			stats->dmarc_spf = rand() > PERC_50? 1: 0;
+			break;
+		}
+		case 15:
+		{
+			stats->dmarc_dispo = rand() > PERC_50? 0: rand() > PERC_50? 1: 2;
+			break;
+		}
+		case 16:
+		{
+			stats->dmarc_reason = stats->dmarc_dispo? rand() % 7: 0;
+			break;
+		}
 	}
 
 	return set_client_ip;
 }
 
-static char *token_argument(char *arg, size_t len, int *re)
+static dkim_result dkim_result_string(char const *s)
 {
-	assert(arg);
-	assert(len <= strlen(arg));
+	if (stricmp(s, "pass") == 0) return dkim_pass;
+	if (stricmp(s, "fail") == 0) return dkim_fail;
+	if (stricmp(s, "policy") == 0) return dkim_policy;
+	if (stricmp(s, "neutral") == 0) return dkim_neutral;
+	if (stricmp(s, "temperror") == 0) return dkim_temperror;
+	if (stricmp(s, "permerror") == 0) return dkim_permerror;
+	if (stricmp(s, "none") != 0)
+		printf("bad dkim result: %s\n", s);
+	return dkim_none;
+}
 
-	int ch;
-	if (len == 0)
-	{
-		++arg;
-		while ((ch = *(unsigned char*)arg) != 0 && ch != ':')
-			++arg;
-	}
-	else
-	{
-		arg += len;
-		ch = *(unsigned char*)arg;
-	}
+static int p_f_n_result(char const *s)
+{
+	if (stricmp(s, "pass") == 0) return 2;
+	if (stricmp(s, "fail") == 0) return 1;
+	if (stricmp(s, "none") != 0)
+		printf("bad pass/fail/none result: %s\n", s);
+	return dkim_none;
+}
 
-	if (len > 0 || ch == ':')
-		*arg++ = 0;
+static int r_q_n_result(char const *s)
+{
+	if (stricmp(s, "reject") == 0) return 2;
+	if (stricmp(s, "quarantine") == 0) return 1;
+	if (stricmp(s, "none") != 0)
+		printf("bad disposition result: %s\n", s);
+	return 0;
+}
 
-	if (ch != ':')
-		return NULL;
-
-	if (re)
-		*re = atoi(arg);
-	return arg;
+static dmarc_reason o_l_m_t_s_f_n_result(char const *s)
+{
+	if (stricmp(s, "forwarded") == 0) return dmarc_reason_forwarded;
+	if (stricmp(s, "sampled_out") == 0) return dmarc_reason_sampled_out;
+	if (stricmp(s, "trusted_forwarder") == 0) return dmarc_reason_trusted_forwarder;
+	if (stricmp(s, "mailing_list") == 0) return dmarc_reason_mailing_list;
+	if (stricmp(s, "local_policy") == 0) return dmarc_reason_local_policy;
+	if (stricmp(s, "other") == 0) return dmarc_reason_other;
+	if (stricmp(s, "none") != 0)
+		printf("bad reason: %s\n", s);
+	return dmarc_reason_none;
 }
 
 int main(int argc, char*argv[])
 {
 	size_t maxarglen = strlen(argv[0]);
 	int rtc = 0, errs = 0, config = 0, force_test = 0,
-		query_whitelisted = argc,
+		query[2] = {argc, argc},
 		set_stats = argc,
 		set_stats_domain = argc;
 	char const *config_file = NULL;
@@ -2011,24 +2087,25 @@ int main(int argc, char*argv[])
 			"  --dry-run                            don't actually run queries\n"
 			"  --test                               force the \"test\" backend\n"
 			"  --db-sql-whitelisted domain ...      query domains\n"
+			"  --db-sql-domain_flags [org=domain] domain ...\n"
 			"  --set-stats <d> [msg-data]           insert new data (see below)\n"
 			" [--set-stats-domain] domain[,tok] ... domains related to the message\n"
 			"\n"
 			"For set-stats, the <d> (direction) must be either I (incoming) or\n"
 			"O (outgoing).  The following arguments are one or more msg-data, if\n"
 			"the --set-stats-domain option is given, otherwise are domains.\n"
-			"In the former case, some of the following ten arguments are expected:\n"
+			"In the former case, some of the following 16 arguments are expected:\n"
 			"\n"
 			"  either ip or user@domain, envelope sender, from, date, message_id,\n"
 			"  subject, content_type, content_encoding, received or rcpt _count,\n"
-			"  signatures_count, mailing_list, and ino.mtime.pid.\n"
+			"  signatures_count, mailing_list, ino.mtime.pid, dkim, spf, reason,\n"
+			"  and dispo.\n"
 			"\n"
 			"The set-stats-domain option marks the end of message data and the\n"
 			"beginning of the domain list.  It is only necessary if msg-data is\n"
 			"given.  Domains must be one per argument, using commas to separate\n"
 			"the tokens, which are the domain name, followed by any of the words:\n"
-			"author, spf_helo, spf, dkim, vbr.  If using @, tokens are generated at\n"
-			"random, provided no comma appear at the end of the domain name.\n",
+			"author, spf_helo, spf, dkim, vbr, org, nx, aligned, and dmarc.\n",
 				default_config_file);
 			return 0;
 		}
@@ -2042,7 +2119,11 @@ int main(int argc, char*argv[])
 		}
 		else if (strcmp(arg, "--db-sql-whitelisted") == 0)
 		{
-			query_whitelisted = i + 1;
+			query[0] = i + 1;
+		}
+		else if (strcmp(arg, "--db-sql-domain-flags") == 0)
+		{
+			query[1] = i + 1;
 		}
 		else if (strcmp(arg, "--set-stats") == 0)
 		{
@@ -2099,7 +2180,7 @@ int main(int argc, char*argv[])
 
 		if (set_stats < argc)
 		{
-			unsigned ndomains = 0, nwhitelisted = 0;
+			unsigned ndomains = 0;
 			unsigned char const dir = toupper((unsigned char)argv[set_stats][0]);
 			int atauto = 0;
 			
@@ -2120,7 +2201,7 @@ int main(int argc, char*argv[])
 
 				srand((unsigned int)time(NULL));
 
-				if (auto_from > 12)
+				if (auto_from > 16)
 				{
 					for (int i = set_stats + 1; i < argc; ++i)
 					{
@@ -2182,6 +2263,30 @@ int main(int argc, char*argv[])
 							}
 							case 11: stats.mailing_list = atoi(arg); break;
 							case 12: stats.ino_mtime_pid = strdup(arg); break;
+							case 13:
+							{
+								int pfn = p_f_n_result(arg);
+								if (pfn)
+								{
+									stats.dmarc_found = 1;
+									pfn -= 1;
+								}
+								stats.dmarc_dkim = pfn;
+								break;
+							}
+							case 14: stats.dmarc_spf = p_f_n_result(arg); break;
+							{
+								int pfn = p_f_n_result(arg);
+								if (pfn)
+								{
+									stats.dmarc_found = 1;
+									pfn -= 1;
+								}
+								stats.dmarc_spf = pfn;
+								break;
+							}
+							case 15: stats.dmarc_dispo = r_q_n_result(arg); break;
+							case 16: stats.dmarc_reason = o_l_m_t_s_f_n_result(arg); break;
 							default:
 								printf("extra set-stats argument \"%s\" ignored\n", arg);
 								break;
@@ -2189,7 +2294,7 @@ int main(int argc, char*argv[])
 					}
 				}
 
-				for (int i = auto_from + 1; i <= 12; ++i)
+				for (int i = auto_from + 1; i <= 16; ++i)
 					set_client_ip |= autoarg(dwa, &stats, i);
 
 				if (set_client_ip == 0)
@@ -2217,54 +2322,134 @@ int main(int argc, char*argv[])
 				pdps = &dps->next;
 				strcpy(dps->name, strtok(arg, ","));
 				ndomains += 1;
-				if (stats.outgoing == 0 &&
-					db_is_whitelisted(dwa, dps->name))
-						nwhitelisted += 1;
 
-				int m = 0;
+				int arg_parsed = 0;
 				while ((arg = strtok(NULL, ",")) != NULL)
 				{
-					++m;
+					++arg_parsed;
+					char *result = strchr(arg, ':');
+					if (result)
+					{
+						*result = 0;
+						while (isspace(*(unsigned char*)++result))
+							continue;
+					}
+
 					if (strcmp(arg, "author") == 0)
 						dps->u.f.is_from = 1;
 					else if (strcmp(arg, "spf") == 0)
+					{
 						dps->u.f.is_mfrom = 1;
+						if (result)
+							dps->spf = spf_result_string(result);
+						else
+							dps->spf = rand()/32 % 7;
+					}
 					else if (strcmp(arg, "spf_helo") == 0)
+					{
 						dps->u.f.is_helo = 1;
+						if (result)
+							dps->spf = spf_result_string(result);
+						else
+							dps->spf = rand()/32 % 7;
+					}
 					else if (strcmp(arg, "dkim") == 0)
-						dps->u.f.sig_is_ok = 1;
-					else if (strncmp(arg, "vbr", 3) == 0)
+					{
+						if (result)
+							dps->dkim = dkim_result_string(result);
+						else
+							dps->dkim = rand()/32 % 7;
+						dps->u.f.sig_is_ok = dps->dkim == dkim_pass;
+						dps->nsigs = rand() % 2 + 1;
+					}
+					else if (strcmp(arg, "vbr") == 0)
 					{
 						dps->u.f.has_vbr = 1;
 						dps->u.f.vbr_is_trusted = 1;
 						dps->u.f.vbr_is_ok = 1;
-						if ((dps->vbr_mv = token_argument(arg, 3, NULL)) != NULL)
-							stats.vbr_result_resp =
-								token_argument(dps->vbr_mv, 0, NULL);
+						if (result)
+						{
+							dps->vbr_mv = result;
+							result = strchr(result, ':');
+							if (result)
+							{
+								*result = 0;
+								stats.vbr_result_resp = result + 1;
+							}
+						}
 					}
-					else if (strncmp(arg, "rep", 3) == 0)
+					else if (strcmp(arg, "rep") == 0)
 					{
 						dps->u.f.is_reputed = 1;
-						token_argument(arg, 3, &dps->reputation);
+						if (result)
+							dps->reputation = atoi(result);
 					}
-					else if (strncmp(arg, "rep_s", 5) == 0)
+					else if (strcmp(arg, "rep_s") == 0)
 					{
 						dps->u.f.is_reputed_signer = 1;
-						token_argument(arg, 5, &dps->reputation);
+						if (result)
+							dps->reputation = atoi(result);
 					}
-					else if (strncmp(arg, "dnswl", 5) == 0)
+					else if (strcmp(arg, "dnswl") == 0)
+					{
 						dps->u.f.is_dnswl = 1;
+						if (result)
+							dps->dnswl_value = atoi(result);
+					}
+					else if (strcmp(arg, "org") == 0)
+					{
+						dps->u.f.is_org_domain = 1;
+						db_set_org_domain(dwa, strdup(dps->name));
+					}
+					else if (strcmp(arg, "aligned") == 0)
+					{
+						dps->u.f.is_aligned = 1;
+					}
+					else if (strcmp(arg, "nx") == 0)
+					{
+						stats.nxdomain = 1;
+					}
+					else if (strcmp(arg, "dmarc") == 0)
+					{
+						stats.scope = save_unauthenticated_dmarc;
+						stats.dmarc_found = 1;
+						dps->u.f.is_dmarc = 1;
+						if (result)
+						{
+							dmarc_rec rec;
+							memset(&rec, 0, sizeof rec);
+							if (parse_dmarc_rec(&rec, result) == 0)
+							{
+								free(stats.dmarc_record);
+								stats.dmarc_record = write_dmarc_rec(&rec);
+								free(stats.dmarc_rua);
+								stats.dmarc_rua = rec.rua;
+								stats.dmarc_ri = rec.ri? rec.ri: 86400;
+							}
+							else
+								printf("bad record \"%s\", ignored.\n", result);
+						}
+						else if (stats.dmarc_record == NULL)
+						{
+							stats.dmarc_record = strdup("p=none");
+							if ((stats.dmarc_rua = malloc(maxarglen + 10)) != NULL)
+								sprintf(stats.dmarc_rua, "test@%s", dps->name);
+						}
+					}
 					else if (*arg)
 						printf("invalid domain token \"%s\" for %s\n", arg, dps->name);
 				}
 
-				if (atauto && m == 0 && stats.outgoing == 0)
+				if (atauto && arg_parsed == 0 && stats.outgoing == 0)
 				{
 					dps->u.f.is_from = rand() >
 						(i == set_stats_domain? PERC_90: PERC_10);
 					dps->u.f.is_mfrom = rand() > PERC_20;
-					dps->u.f.is_helo = dps->u.f.is_mfrom && rand() > PERC_20;
+					dps->u.f.is_helo = rand() > PERC_90;
+					if (dps->u.f.is_mfrom || dps->u.f.is_helo)
+						dps->spf = rand() % (spf_pass + 1);
 					dps->u.f.sig_is_ok = rand() > PERC_20;
+					dps->dkim = dps->u.f.sig_is_ok? dkim_pass: dkim_fail;
 					dps->u.f.is_reputed  = rand() > PERC_10;
 					if (dps->u.f.is_reputed)
 					{
@@ -2291,8 +2476,6 @@ int main(int argc, char*argv[])
 				printf("user check: %s\n", s? s: "negative");
 				free(s);
 			}
-			else
-				printf("%d/%d domain(s) whitelisted\n", nwhitelisted, ndomains);
 
 			free(stats.ino_mtime_pid);
 			for (domain_prescreen *dps = stats.domain_head; dps;)
@@ -2304,22 +2487,41 @@ int main(int argc, char*argv[])
 		}
 
 
-		for (int i = query_whitelisted; i < argc; ++i)
-		{
-			if (argv[i][0] == '-')
-				break;
-
-			if (stats.outgoing)
+		for (int j = 0; j < 2; j++)
+			for (int i = query[j]; i < argc; ++i)
 			{
-				puts("NOTE: db_sql_whitelisted is not for outgoing messages");
-				stats.outgoing = 0;
+				if (argv[i][0] == '-')
+					break;
+
+				if (stats.outgoing)
+				{
+					printf("NOTE: db_sql_%s is not for outgoing messages.\n",
+						j == 0? "whitelisted": "domain_flags");
+					stats.outgoing = 0;
+				}
+
+				if (set_client_ip == 0)
+					set_client_ip = autoargip(dwa);
+
+				if (j == 0)
+				{
+					printf("%s: %d\n", argv[i], db_is_whitelisted(dwa, argv[i]));
+				}
+				else
+				{
+					if (i == 0 && strncmp("org=", argv[0], 4) == 0)
+					{
+						db_set_org_domain(dwa, strdup(argv[0]+4));
+						continue;
+					}
+
+					int w = 0, d = 0, a = 0,
+						c = db_get_domain_flags(dwa, argv[i], &w, &d, &a);
+					printf("%d of the following were set for %s:\n"
+						"  whitelisted = %d, do DMARC = %d, do ADSP = %d\n",
+							c, argv[i], w, d, a);						
+				}
 			}
-
-			if (set_client_ip == 0)
-				set_client_ip = autoargip(dwa);
-
-			printf("%s: %d\n", argv[i], db_is_whitelisted(dwa, argv[i]));
-		}
 	}
 
 	clear_parm(parm_target);

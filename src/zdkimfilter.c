@@ -59,6 +59,7 @@ the resulting work.
 #include "filecopy.h"
 #include "util.h"
 #include "publicsuffix.h"
+#include "spf_result_string.h"
 #include <assert.h>
 
 #if !PATH_MAX
@@ -2282,29 +2283,6 @@ static int a_r_reader(void *v, int step, name_val* nv, size_t nv_count)
 	return rtc;
 }
 
-static spf_result spf_result_string(char const *s)
-{
-	assert(s && *s);
-	switch (*(unsigned char const*)s)
-	{
-		case 'e': if (strincmp(s, "error", 5) == 0) return spf_temperror;
-			break;
-		case 'f': if (strincmp(s, "fail", 4) == 0) return spf_fail;
-			break;
-		case 'n': if (strincmp(s, "none", 4) == 0) return spf_none;
-			if (strincmp(s, "neutral", 7) == 0) return spf_neutral;
-			break;
-		case 'p': if (strincmp(s, "pass", 4) == 0) return spf_pass;
-			break;
-		case 's': if (strincmp(s, "softfail", 8) == 0) return spf_softfail;
-			break;
-		case 'u': if (strincmp(s, "unknown", 7) == 0) return spf_permerror;
-			break;
-		default: break;
-	}
-	return spf_none;
-}
-
 static int verify_headers(verify_parms *vh)
 // return parm->dyn.rtc = -1 for unrecoverable error,
 // parm->dyn.rtc (0) otherwise
@@ -2501,7 +2479,10 @@ static int verify_headers(verify_parms *vh)
 									get_prescreen(&vh->domain_head, sender);
 								if (dps)
 								{
-									dps->spf = spf;
+									// multiple spf result can race, choose the higher
+									if (spf > dps->spf)
+										dps->spf = spf;
+
 									if (spf == spf_pass)
 										dps->u.f.spf_pass = 1;
 
@@ -3328,9 +3309,15 @@ static void verify_message(dkimfl_parm *parm)
 			POLICY_IS_DMARC(vh.policy) && vh.dmarc.found_at_org == 1)
 				dps->u.f.is_dmarc = 1;
 
+		if (dps->u.f.is_spf_from && !dps->u.f.is_from && parm->z.verbose >= 5)
+			fl_report(LOG_INFO,
+				"id=%s: different From: is it %s (OpenDKIM) or %s (Courier SPF)?",
+				parm->dyn.info.id,
+				vh.dkim_domain? vh.dkim_domain: "NULL",
+				dps->name);
+			
 		if (dps->u.f.is_aligned)
 		{
-
 			aligned_sig_is_ok |=
 				(dps->u.f.is_from || vh.dmarc.adkim != 's') && dps->u.f.sig_is_ok;
 
@@ -4191,6 +4178,9 @@ static void write_pid_file_and_check_split_and_init_pst(fl_parm *fl)
 	assert(fl);
 	dkimfl_parm *parm = get_parm(fl);
 	assert(parm);
+
+	// random is used for DMARC pct=
+	srandom((unsigned int)time(NULL));
 
 	char const *failed_action = NULL;
 	char pid_file[PATH_MAX];

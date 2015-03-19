@@ -56,8 +56,8 @@ zdkimfilter grants you additional permission to convey the resulting work.
 
 typedef struct dmarc_rec
 {
-	char *rua;       // malloc'd
-	int effective_p; // one of the macro above
+	char *rua;       // malloc'd with sentinel
+	int effective_p; // one of the DMARC macros above
 	uint32_t ri;
 	char fo[8];
 	char adkim, aspf, p, sp, pct;
@@ -68,6 +68,8 @@ typedef struct dmarc_rec
 int set_adsp_query_faked(int mode);
 int my_get_adsp(char const *domain, int *policy);
 int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc);
-char* write_dmarc_rec(dmarc_rec *dmarc);
+char* write_dmarc_rec(dmarc_rec const *dmarc);
+int parse_dmarc_rec(dmarc_rec *dmarc, char const *rec);
+int check_remove_sentinel(char *rua);
 
 #endif // MYADSP_H_INCLUDED

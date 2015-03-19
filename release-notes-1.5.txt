@@ -1,0 +1,65 @@
+Database changes:
+================
+New statement db_sql_domain_flags, similar to db_sql_whitelisted, but it can
+set two additional flags that direct how to treat DMARC or ADSP for a domain.
+
+New variables for incoming messages:
+
+message variables:
+	dmarc_dkim    pass/fail/none
+	dmarc_spf     pass/fail/none
+	dmarc_reason  why DMARC policy was overridden
+	dmarc_dispo   was the message accepted/rejected/quarantined
+
+domain variables:
+	dmarc_record  an extract of the record published
+	dmarc_rua     address for sending aggregate reports
+	dmarc_ri      report interval
+	spf_result    actual SPF result for a domain
+	dkim_result   actual DKIM result for a domain
+	dkim_order    order of domain among dkim signers (reverse alpha)
+	prefix_len    chars of domain name prepended to org_domain
+
+available for db_sql_domain_flags
+	org_domain    the "organizational domain" relative to a message's From:
+
+In addition, the auth_type variable can get the enumerated values "org",
+"dmarc", "aligned", and "nx", which respectively mean a domain is the
+organizational domain of message's From: header field, is aligned with it, and
+has no DNS server.  The variable is still named auth_type, even though it
+doesn't imply authentication succeeded; for example, if DMARC is enabled,
+auth_type can have the spf_helo flag with an spf_result of "softfail".
+
+In odbx_example.sql, domain.last is split into last_recv and last_sent, and the
+type is changed to INT UNSIGNED in order to get rid of lossy conversions on
+daylight saving changes.  Existing values can be preserved by:
+
+	ALTER TABLE domain
+		ADD COLUMN last_recv INT UNSIGNED NOT NULL DEFAULT 0 AFTER last;
+and
+	UPDATE domain SET
+		last_recv = UNIX_TIMESTAMP(CONVERT_TZ(last, 'SYSTEM', '+00:00')) + 0;
+
+BIGINT columns ino, mtime, and pid can be safely reduced to INT, which is a
+32-bit datum in MySQL.  You may want to check actual values by `df -i` and
+`cat /proc/sys/kernel/pid_max`.
+
+
+Bug fixes and other changes:
+===========================
+workaround for CNAME in KEYFAIL (OpenDKIM bug 219, fixed in v2.10.1).
+
+Issue a temperror if SERVFAIL or similar happens during ADSP lookup; this
+can cause a temporary reject if tempfail_on_error is set.
+
+Log temperrors at verbosity >= 3; permerrors at verbosity >= 4.
+
+Have log files line-buffered, to avoid garbled lines.
+
+
+Database changes:
+================
+
+# Add spf_from.  Since this is the 9th element of the set, it changes the field
+# size, so there's no point in adding it at the end.
+ALTER TABLE msg_ref CHANGE auth auth SET ('author', 'spf_helo', 'spf', 'spf_from', 'dkim', 'vbr', 'rep', 'rep_s', 'dnswl') NOT NULL;

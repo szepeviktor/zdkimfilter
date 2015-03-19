@@ -77,6 +77,10 @@ static int do_txt_query(char *query, size_t len_d, size_t len_sub,
 *  -4  for NXDOMAIN if len_sub > 0, or just res_query() failed
 */
 {
+#if defined NO_DNS_QUERY // dummy for zfilter_db
+return 0; (void)query, (void)len_d, (void)len_sub, (void)parse_fn, (void)parse_arg;
+#else //  real
+
 	assert(query);
 	assert(len_d);
 	assert(parse_fn);
@@ -198,6 +202,7 @@ static int do_txt_query(char *query, size_t len_d, size_t len_sub,
 	}
 
 	return found;
+#endif // NO_DNS_QUERY
 }
 
 static int (*txt_query)(char*, size_t, size_t, int (*)(char*, void*), void*) =
@@ -432,7 +437,7 @@ static char *next_tag(char *buf, tag_value *tv)
 	if ((p = tv->value = skip_fws(p)) == NULL)
 		return NULL;
 
-	// EXCLAMATION to TILDE except SEMICOLON
+	// EXCLAMATION to TILDE except SEMICOLON (RFC 6376)
 	while ((ch = *(unsigned char*)p) >= 0x21 &&
 		ch <= 0x7e && ch != ';')
 			++p;
@@ -471,7 +476,7 @@ static inline char const *nqr_to_string(int p)
 	return p == 'r'? "reject": p == 'q'? "quarantine": "none";
 }
 
-char* write_dmarc_rec(dmarc_rec *dmarc)
+char* write_dmarc_rec(dmarc_rec const *dmarc)
 // writes only some tags; returns strdup'd value
 {
 	char buf[80];
@@ -496,6 +501,27 @@ char* write_dmarc_rec(dmarc_rec *dmarc)
 	return len < sizeof buf? strdup(buf): NULL;
 }
 
+static const char rua_sentinel[] = ",z:;";
+
+int check_remove_sentinel(char *rua)
+// 0 if ok
+{
+	if (rua)
+	{
+		size_t len = strlen(rua);
+		if (len >= sizeof rua_sentinel)
+		{
+			size_t off = len - sizeof rua_sentinel + 1;
+			if (strcmp(rua + off, rua_sentinel) == 0)
+			{
+				rua[off] = 0;
+				return 0;
+			}
+		}
+	}
+
+	return -1;
+}
 
 static int parse_dmarc(char *record, void *v_dmarc)
 {
@@ -528,9 +554,13 @@ static int parse_dmarc(char *record, void *v_dmarc)
 				if (strncasecmp(tv.value, "mailto:", 7) == 0)
 				{
 					tv.value += 7;
-					if (dmarc->rua == NULL &&
-						(dmarc->rua = strdup(tv.value)) == NULL)
+					if (dmarc->rua == NULL)
+					{
+						size_t len = strlen(tv.value) + sizeof rua_sentinel;
+						if ((dmarc->rua = malloc(len)) == NULL)
 							return -1;
+						strcat(strcpy(dmarc->rua, tv.value), rua_sentinel);
+					}
 				}
 			}
 			else if (strcmp(tv.tag, "ri") == 0)
@@ -572,6 +602,22 @@ static int parse_dmarc(char *record, void *v_dmarc)
 	}
 
 	return found;
+}
+
+int parse_dmarc_rec(dmarc_rec *dmarc, char const *rec)
+{
+	int rc = -1;
+	if (dmarc)
+	{
+		char *r = strdup(rec);
+		if (r)
+		{
+			if (parse_dmarc(r, dmarc))
+				rc = 0;
+			free(r);
+		}
+	}
+	return rc;
 }
 
 static inline int nqr_to_int(int p)
@@ -650,7 +696,7 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
 	return rtc == -4? 3: rtc >= 0? rtc != 1: rtc;
 }
 
-#if defined TEST_MAIN
+#if defined TEST_MAIN && ! defined NO_DNS_QUERY
 
 static char const *rtc_explain(int rtc)
 {
