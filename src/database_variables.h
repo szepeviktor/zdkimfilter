@@ -71,5 +71,8 @@ DATABASE_VARIABLE(vbr_response)
 DATABASE_VARIABLE(reputation)
 DATABASE_VARIABLE(message_ref)
 DATABASE_VARIABLE(complaint_flag)
+DATABASE_VARIABLE(period_start)
+DATABASE_VARIABLE(period_end)
+DATABASE_VARIABLE(period)
 
 

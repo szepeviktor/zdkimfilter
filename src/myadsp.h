@@ -68,8 +68,22 @@ typedef struct dmarc_rec
 int set_adsp_query_faked(int mode);
 int my_get_adsp(char const *domain, int *policy);
 int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc);
+int verify_dmarc_addr(char const *poldo, char const *rcptdo,
+	char **override, char **badout);
 char* write_dmarc_rec(dmarc_rec const *dmarc);
 int parse_dmarc_rec(dmarc_rec *dmarc, char const *rec);
 int check_remove_sentinel(char *rua);
-
+int adjust_ri(int ri, int min_ri);
+char* adjust_rua(char**, char**);
+static inline int adjust_period(int period)
+{
+	if (period <= 0 || period > 86400)
+		period = 86400;
+	else if (86400 % period)
+	{
+		int per_day = 86400 / period;
+		period = 86400 / per_day;
+	}
+	return period;
+}
 #endif // MYADSP_H_INCLUDED

@@ -64,6 +64,8 @@ typedef struct parm_t
 	int whitelisted_pass;
 	int max_signatures;
 	int dnswl_invalid_ip;
+	int honored_report_interval;
+	int log_dkim_order_above;
 
 	int dnswl_octet_index;
 	int min_key_bits;

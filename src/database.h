@@ -29,6 +29,8 @@ the resulting work.
 */
 
 #if !defined DATABASE_H_INCLUDED
+#include <time.h>
+#include <stdint.h>
 #include "parm.h"
 
 typedef struct db_work_area db_work_area;
@@ -37,6 +39,22 @@ db_work_area *db_init(void);
 void db_clear(db_work_area* dwa);
 db_parm_t* db_parm_addr(db_work_area *dwa);
 int db_config_wrapup(db_work_area* dwa, int *in, int *out);
+int db_zag_wrapup(db_work_area* dwa, int *zag);
+
+typedef int (*db_query_cb)(int, char const *[], void*);
+typedef struct dmarc_agg_record
+{
+	char const *domain, *domain_ref;
+	time_t period_start, period_end;
+} dmarc_agg_record;
+int db_run_dmarc_agg_domain(db_work_area*, time_t, time_t, db_query_cb, void*);
+int db_run_dmarc_agg_record(db_work_area*, dmarc_agg_record*, db_query_cb, void*);
+int db_set_dmarc_agg(db_work_area*, dmarc_agg_record*);
+#if defined TEST_ZAG
+void set_database_verbose(int v, int d);
+#endif
+
+	
 int db_connect(db_work_area *dwa);
 int db_is_whitelisted(db_work_area* dwa, char /*const*/ *domain);
 int db_get_domain_flags(db_work_area* dwa, char *domain,

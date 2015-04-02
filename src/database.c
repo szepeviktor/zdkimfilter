@@ -50,10 +50,22 @@ the resulting work.
 #include "database.h"
 #include <assert.h>
 
+#if defined TEST_MAIN || defined TEST_ZAG
+#define CONSOLE_DEBUG 1
+#else
+#undef CONSOLE_DEBUG
+#endif
+
 static logfun_t do_report = &syslog;
-#if defined TEST_MAIN
+
+#if CONSOLE_DEBUG
 static int verbose = 0;
 static int dry_run = 0;
+void set_database_verbose(int v, int d)
+{
+	verbose = v;
+	dry_run = d;
+}
 #endif
 
 #if defined HAVE_OPENDBX
@@ -122,7 +134,7 @@ static inline void set_var_used(flags_var *flags, variable_id id)
 { flags->var[id] =
 	flags->var[id] & 0x80U | 0x7fU & (var_is_used(flags, id) + 1); }
 	
-// make sure a 32-bit flag holds all the variables we use;
+// make sure a 64-bit flag holds all the variables we use;
 typedef int
 compile_time_check_that_FLAG_VAR_SIZE_le_64[FLAG_VAR_SIZE <= 64? 1: -1];
 typedef uint64_t var_flag_t;
@@ -132,8 +144,6 @@ static const var_flag_t var_flag_one = 1;
 	static const var_flag_t x##_mask_bit = (var_flag_t)1 << x##_variable;
 #include "database_variables.h"
 #undef DATABASE_VARIABLE
-
-
 
 static void set_var_allowed(flags_var *flags, var_flag_t bitflag, stmt_id sid)
 {
@@ -145,6 +155,10 @@ static void set_var_allowed(flags_var *flags, var_flag_t bitflag, stmt_id sid)
 		if (bitflag & mask)
 			flags->var[id] |= 0x80U;
 }
+
+// log10(exp2(N+1)) = (N+1)log10(2) < (N+1)*0.302 < N/3 + 1
+// plus sign and terminating zero
+#define MAX_DECIMAL_DIG(BYTES) (8*BYTES/3 + 3)
 
 typedef struct stmt_part
 {
@@ -351,7 +365,17 @@ db_work_area *db_init(void)
 	return dwa;
 }
 
-int db_config_wrapup(db_work_area *dwa, int *in, int *out/*, int *agg */)
+#define STMT_ALLOC(STMT, BITFLAG) \
+		if (dwa->z.STMT) { ++count; \
+			flags_var flags; \
+			set_var_allowed(&flags, BITFLAG, STMT); \
+			if (dwa->z.STMT != NULL && *dwa->z.STMT != 0 && \
+				(dwa->stmt[STMT] = stmt_alloc(&flags, dwa->z.STMT)) == NULL) \
+					fatal = -1; \
+		} else (void)0
+
+
+int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 /*
 * Parse SQL statements.
 * Set the counters to the total number of db_sql_* statements configured
@@ -364,15 +388,6 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out/*, int *agg */)
 	{
 		int count = 0;
 		fatal = 0;
-
-#define STMT_ALLOC(STMT, BITFLAG) \
-		if (dwa->z.STMT) { ++count; \
-			flags_var flags; \
-			set_var_allowed(&flags, BITFLAG, STMT); \
-			if (dwa->z.STMT != NULL && *dwa->z.STMT != 0 && \
-				(dwa->stmt[STMT] = stmt_alloc(&flags, dwa->z.STMT)) == NULL) \
-					fatal = -1; \
-		} else (void)0
 
 		STMT_ALLOC(db_sql_whitelisted, domain_mask_bit | ip_mask_bit);
 
@@ -448,19 +463,42 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out/*, int *agg */)
 			*out = count;
 		count = 0;
 
-//		STMT_ALLOC(db_sql_dmarc_agg_domain)
-//		STMT_ALLOC(db_sql_dmarc_agg_record)
+		if (dwa->z.db_timeout <= 0)
+			dwa->z.db_timeout = 2;
+	}
+	return fatal;
+}
+
+int db_zag_wrapup(db_work_area *dwa, int *zag)
+{
+	int fatal = -1;
+	if (dwa)
+	{
+		int count = 0;
+		fatal = 0;
 
 
+		STMT_ALLOC(db_sql_dmarc_agg_domain,
+			period_end_mask_bit | period_mask_bit);
 
+		STMT_ALLOC(db_sql_dmarc_agg_record,
+			domain_mask_bit |domain_ref_mask_bit |
+			period_start_mask_bit | period_end_mask_bit);
 
-#undef STMT_ALLOC
+		STMT_ALLOC(db_sql_set_dmarc_agg,
+			domain_mask_bit |domain_ref_mask_bit |
+			period_start_mask_bit | period_end_mask_bit);
+
+		if (zag)
+			*zag = count;
 
 		if (dwa->z.db_timeout <= 0)
 			dwa->z.db_timeout = 2;
 	}
 	return fatal;
 }
+
+#undef STMT_ALLOC
 
 static int clear_pending_result(db_work_area* dwa)
 /*
@@ -554,12 +592,15 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 	int count, ...)
 /*
 * Build a statement assembling snippets and arguments, then run it.
-* count is the number of pairs of arguments that follow.
+* count is the number of arguments that follow.
 *
 * If count is negative, then the remaining arguments are -count pointers to int.
-* Otherwise, they are count pointers to char*.  Currently only whitelist uses
+* Otherwise, they are count pointers to char*.  Whitelist and domain_flags use
 * integer return types.  Whitelist queries should return just a single numeric
 * result within [-1000, 1000] (count = -1).
+*
+* If count is 0, the caller supplies a callback instead of pointers to results.
+* That allows multiple rows, and reentrant calls.
 *
 * After inserting a message, or after querying or inserting domain, a reference
 * variable can be returned.  Those queries must be conceived so as to return a
@@ -568,20 +609,17 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 * multi-statement.  Otherwise those variables will be undefined, and replaced
 * with an empty string when used.
 *
-* Return n (1 <= n <= count) for the results found and returned in wantchar,
-* 0 if no result was found or if the statement is not defined.
-* If an error is found (and logged) return OTHER_ERROR.
+* Return n (n >= 1) for the results found and possibly returned (a warning is
+* logged if there are more columns than can be returned).  For callbacks, if
+* the callback yelds a non-zero return value, that value is returned instead
+* and iteration stops;
+*
+* return 0 if no result was found or if the statement is not defined.
+* If an error is found (and logged) return OTHER_ERROR (< 0).
 */
 {
 	assert(dwa);
 	assert(sid < total_statements);
-
-	int wantint = 0;
-	if (count < 0)
-	{
-		wantint = 1;
-		count = -count;
-	}
 
 	stmt_compose const *const stmt = dwa->stmt[sid];
 	if (stmt == NULL)
@@ -677,8 +715,9 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 
 	*p = 0;
 
-#if defined TEST_MAIN
-	(*do_report)(LOG_DEBUG, "query: %s", sql);
+#if CONSOLE_DEBUG
+	if (verbose >= 1)
+		(*do_report)(LOG_DEBUG, "query: %s", sql);
 	if (dry_run)
 	{
 		free(sql);
@@ -696,11 +735,36 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 	}
 
 	/*
-	* All queries return at most a single row.  So we match the (numeric)
-	* columns with the variable arguments.
+	* Non-callback queries return at most a single row, with either numeric or
+	* string fields.  We match the columns with the variable arguments.
 	*/
 
+	unsigned long seen = 0;
+	va_list ap;
+	va_start(ap, count);
+
+	db_query_cb arg_cb;
+	void *arg_cb_arg;
+
+	enum wantarg { wantchar, wantint, wantcb } arg = wantchar;
+	if (count < 0)
+	{
+		arg = wantint;
+		count = -count;
+	}
+	else if (count == 0)
+	{
+		arg_cb = va_arg(ap, db_query_cb);
+		if (arg_cb)
+		{
+			arg = wantcb;
+			arg_cb_arg = va_arg(ap, void*);
+		}
+	}
+
 	int got_result = 0;
+
+	// iterate multi statements
 	for (int r_set = 1;; ++r_set)
 	{
 		odbx_result_t *result = NULL;
@@ -709,8 +773,8 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 		timeout.tv_usec = 0;
 
 		int err = odbx_result(handle, &result, &timeout, 0 /* chunk */);
-#if defined TEST_MAIN
-		if (verbose > 2)
+#if CONSOLE_DEBUG
+		if (verbose >= 2)
 			(*do_report)(LOG_DEBUG, "part #%d: rc=%d, result=%sNULL",
 				r_set, err, result == NULL? "": "non-");
 #endif
@@ -721,8 +785,8 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 		if (err == ODBX_RES_NOROWS)
 		{
 			uint64_t rows = odbx_rows_affected(result);
-#if defined TEST_MAIN
-			if (verbose > 2)
+#if CONSOLE_DEBUG
+			if (verbose >= 2)
 				(*do_report)(rows > 1? LOG_WARNING: LOG_DEBUG,
 					"part #%d of the query affected %ld rows",
 						r_set, rows);
@@ -737,7 +801,6 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 
 		else if (err == ODBX_RES_ROWS)
 		{
-			unsigned long seen = 0;
 			for (;;)
 			{
 				int fetch_more = odbx_row_fetch(result);
@@ -745,18 +808,37 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 					break;
 
 				++seen;
-				int const column_count = odbx_column_count(result);
+				int column_count = odbx_column_count(result);
+
+				// we only support _one_ query returning some columns
 				if (got_result == 0 && column_count > 0)
 				{
-					got_result = 1;
-					va_list ap;
-					va_start(ap, count);
+					got_result = column_count;
+
+					char const *fields[column_count];
 					for (int column = 0; column < column_count; ++column)
+						fields[column] = odbx_field_value(result, column);
+
+					if (arg == wantcb)
 					{
-						char const *field = odbx_field_value(result, column);
-						if (column < count)
+						got_result = (*arg_cb)(column_count, fields, arg_cb_arg);
+					}
+					else
+					{
+						if (column_count > count)
 						{
-							if (wantint)
+							(*do_report)(LOG_WARNING,
+								"query %s, part #%d, row(s) %d-%d "
+								"ignored: expected %d column(s) only",
+									stmt_name[sid], r_set, count + 1, column_count,
+									count);
+							column_count = count;
+						}
+
+						for (int column = 0; column < column_count; ++column)
+						{
+							char const *field = fields[column];
+							if (arg == wantint)
 							{
 								int *want = va_arg(ap, int*);
 								if (field != NULL)
@@ -784,29 +866,22 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 								if (field != NULL && (*want = strdup(field)) == NULL)
 									(*do_report)(LOG_ALERT, "MEMORY FAULT");
 							}
-						}
-						else
-						{
-							(*do_report)(LOG_WARNING,
-								"query %s, part #%d, row 1, col %d "
-								"is ignored: expected %d column(s) only",
-									stmt_name[sid], r_set, column + 1, count);
-						}
-#if defined TEST_MAIN
-						if (verbose)
-							(*do_report)(LOG_DEBUG, "row#%ld, col %d: %s",
-								seen, column + 1, field? field: "NULL");
+#if CONSOLE_DEBUG
+							if (verbose >= 1)
+								(*do_report)(LOG_DEBUG, "row#%ld, col %d: %s",
+									seen, column + 1, field? field: "NULL");
 #endif
+						}
 					}
-					va_end(ap);
 				}
 			}
-			if (seen > 1)
+			if (seen > 1 && arg != wantcb)
 			{
 				(*do_report)(LOG_WARNING,
 					"part #%d of query %s had %ld rows",
 						r_set, stmt_name[sid], seen);
 			}
+
 			odbx_result_finish(result);
 		}
 
@@ -843,8 +918,86 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 		}
 	}
 
+	va_end(ap);
 	free(sql);
 	return got_result;
+}
+
+int db_run_dmarc_agg_domain(db_work_area* dwa,
+	time_t period_end, time_t period, db_query_cb cb, void*cb_arg)
+{
+	assert(dwa);
+	assert(cb);
+
+	char buf[MAX_DECIMAL_DIG(sizeof period_end)];
+	sprintf(buf, "%ld", period_end);
+	dwa->var[period_end_variable] = buf; 
+	char buf2[MAX_DECIMAL_DIG(sizeof period)];
+	sprintf(buf2, "%ld", period);
+	dwa->var[period_variable] = buf2; 
+	int rtc = stmt_run_n(dwa, db_sql_dmarc_agg_domain,
+		period_end_mask_bit | period_mask_bit, 0, cb, cb_arg);
+	dwa->var[period_end_variable] = dwa->var[period_variable] = NULL;
+	return rtc;
+}
+
+static int db_dmarc2(db_work_area *dwa, dmarc_agg_record *dar,
+	db_query_cb cb, void *cb_arg)
+{
+	assert(dwa);
+	assert(dar);
+
+	char buf_s[MAX_DECIMAL_DIG(sizeof dar->period_start)];
+	sprintf(buf_s, "%ld", dar->period_start);
+	dwa->var[period_start_variable] = buf_s;
+
+	char buf_e[MAX_DECIMAL_DIG(sizeof dar->period_end)];
+	sprintf(buf_e, "%ld", dar->period_end);
+	dwa->var[period_end_variable] = buf_e;
+
+	var_flag_t bitflag = period_start_mask_bit | period_end_mask_bit;
+	if (dar->domain)
+	{
+		dwa->var[domain_variable] = (char*)dar->domain;
+		bitflag |= domain_mask_bit;
+	}
+
+	if (dar->domain_ref)
+	{
+		dwa->var[domain_ref_variable] = (char*)dar->domain_ref;
+		bitflag |= domain_ref_mask_bit;
+	}
+
+	int rtc;
+	if (cb)
+		rtc = stmt_run_n(dwa, db_sql_dmarc_agg_record, bitflag, 0, cb, cb_arg);
+	else
+		rtc = stmt_run_n(dwa, db_sql_set_dmarc_agg, bitflag, 0, NULL);
+
+	dwa->var[period_start_variable] = NULL;
+	dwa->var[period_end_variable] = NULL;
+	dwa->var[domain_variable] = NULL;
+	dwa->var[domain_ref_variable] = NULL;
+
+	return rtc;
+}
+
+int db_run_dmarc_agg_record(db_work_area *dwa, dmarc_agg_record *dar,
+	db_query_cb cb, void *cb_arg)
+{
+	assert(dwa);
+	assert(dar);
+	assert(cb);
+
+	return db_dmarc2(dwa, dar, cb, cb_arg);
+}
+
+int db_set_dmarc_agg(db_work_area *dwa, dmarc_agg_record *dar)
+{
+	assert(dwa);
+	assert(dar);
+
+	return db_dmarc2(dwa, dar, NULL, NULL);
 }
 
 static inline int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
@@ -1419,10 +1572,6 @@ static void comma_copy(char *buf, char const *value, int *comma)
 	strcat(buf, value);
 	*comma = 1;
 }
-
-// log10(exp2(N+1)) = (N+1)log10(2) < (N+1)*0.302 < N/3 + 1
-// plus sign and terminating zero
-#define MAX_DECIMAL_DIG(BYTES) (8*BYTES/3 + 3)
 
 static var_flag_t
 in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
@@ -2320,11 +2469,11 @@ int main(int argc, char*argv[])
 					break;
 
 				pdps = &dps->next;
-				strcpy(dps->name, strtok(arg, ","));
+				strcpy(dps->name, strtok(arg, "/"));
 				ndomains += 1;
 
 				int arg_parsed = 0;
-				while ((arg = strtok(NULL, ",")) != NULL)
+				while ((arg = strtok(NULL, "/")) != NULL)
 				{
 					++arg_parsed;
 					char *result = strchr(arg, ':');
@@ -2423,8 +2572,15 @@ int main(int argc, char*argv[])
 								free(stats.dmarc_record);
 								stats.dmarc_record = write_dmarc_rec(&rec);
 								free(stats.dmarc_rua);
-								stats.dmarc_rua = rec.rua;
+								char *bad = NULL;
+								stats.dmarc_rua =
+									rec.rua? adjust_rua(&rec.rua, &bad): NULL;
 								stats.dmarc_ri = rec.ri? rec.ri: 86400;
+								if (bad)
+								{
+									printf("bad rua \"%s\" in dmarc, ignored.\n", bad);
+									free(bad);
+								}
 							}
 							else
 								printf("bad record \"%s\", ignored.\n", result);
@@ -2433,7 +2589,7 @@ int main(int argc, char*argv[])
 						{
 							stats.dmarc_record = strdup("p=none");
 							if ((stats.dmarc_rua = malloc(maxarglen + 10)) != NULL)
-								sprintf(stats.dmarc_rua, "test@%s", dps->name);
+								sprintf(stats.dmarc_rua, "auto@%s", dps->name);
 						}
 					}
 					else if (*arg)
@@ -2509,9 +2665,9 @@ int main(int argc, char*argv[])
 				}
 				else
 				{
-					if (i == 0 && strncmp("org=", argv[0], 4) == 0)
+					if (i == query[1] && strncmp("org=", argv[query[1]], 4) == 0)
 					{
-						db_set_org_domain(dwa, strdup(argv[0]+4));
+						db_set_org_domain(dwa, strdup(argv[query[1]]+4));
 						continue;
 					}
 

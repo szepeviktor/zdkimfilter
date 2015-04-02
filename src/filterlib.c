@@ -79,8 +79,8 @@ the resulting work.
 static volatile int
 	signal_timed_out = 0,
 	signal_break = 0,
-	signal_hangup = 0;
-static int live_children = 0;
+	signal_hangup = 0,
+	live_children = 0;
 
 typedef struct ctl_fname_chain
 {

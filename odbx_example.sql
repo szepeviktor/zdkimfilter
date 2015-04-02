@@ -331,13 +331,6 @@ FROM domain AS d, msg_out_ref AS r, message_out AS m, user AS u
 WHERE d.id = r.domain AND r.message_out = m.id AND m.user = u.id 
 GROUP BY d.id, u.id ORDER BY cnt DESC LIMIT 10;
 
-# find domains that need a report.  That is, they have dmarc_ri > 0, the last
-# report was generated more than dmarc_ri seconds ago, and sent one or more
-# messages after that.
-
-SELECT id, domain, dmarc_ri, last_report, dmarc_rua, dmarc_rec
-FROM domain
-WHERE dmarc_ri > 0 AND last_recv > last_report;
 
 # find aggregate authentication results of a given dmarc domain (rd.domain)
 # TODO: log_dkim_order_above 2

@@ -47,4 +47,5 @@ DATABASE_STATEMENT(db_sql_insert_target_ref)
 DATABASE_STATEMENT(db_sql_check_user)
 DATABASE_STATEMENT(db_sql_dmarc_agg_domain)
 DATABASE_STATEMENT(db_sql_dmarc_agg_record)
+DATABASE_STATEMENT(db_sql_set_dmarc_agg)
 

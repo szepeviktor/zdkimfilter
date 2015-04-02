@@ -37,7 +37,7 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
-
+#include <stdbool.h>
 #if defined HAVE_SYS_TYPES_H
 #include <sys/types.h>
 #endif
@@ -437,19 +437,49 @@ static char *next_tag(char *buf, tag_value *tv)
 	if ((p = tv->value = skip_fws(p)) == NULL)
 		return NULL;
 
-	// EXCLAMATION to TILDE except SEMICOLON (RFC 6376)
-	while ((ch = *(unsigned char*)p) >= 0x21 &&
-		ch <= 0x7e && ch != ';')
-			++p;
+	char *s = NULL;
 
-	if (ch)
-	// consume trailing white space and separator
+	for (;;)
+	{
+		// EXCLAMATION to TILDE except SEMICOLON (RFC 6376)
+		while ((ch = *(unsigned char*)p) >= 0x21 &&
+			ch <= 0x7e && ch != ';')
+				++p;
+
+		if (isspace(ch))
+		{
+			s = p++;
+			while (isspace(ch = *(unsigned char*)p))
+				++p;
+
+			if (ch != ';' && ch != 0)
+			{
+				s = NULL;
+				continue;
+			}
+		}
+
+		break;
+	}
+
+	if (s)
+		*s = 0;
+
+	if (ch == 0)
+		return p;
+
+	if (ch == ';')
+	// consume trailing white space after tag
 	{
 		*p++ = 0;
-		while (isspace(ch = *(unsigned char*)p) || ch == ';')
+		while (isspace(*(unsigned char*)p))
 			++p;
+
+		return p;
 	}
-	return p;
+
+	// invalid charcter in value
+	return NULL;
 }
 
 static int none_quarantine_reject(char const *p)
@@ -476,30 +506,31 @@ static inline char const *nqr_to_string(int p)
 	return p == 'r'? "reject": p == 'q'? "quarantine": "none";
 }
 
-char* write_dmarc_rec(dmarc_rec const *dmarc)
-// writes only some tags; returns strdup'd value
+int adjust_ri(int ri, int min_ri)
 {
-	char buf[80];
-	size_t len = snprintf(buf, sizeof buf, "adkim=%c; aspf=%c; p=%s",
-		dmarc->adkim == 's'? 's': 'r',
-		dmarc->aspf == 's'? 's': 'r',
-		nqr_to_string(dmarc->p));
+	if (ri <= 0 || ri >= 86400) return 86400;
+	if (min_ri <= 0 || min_ri >= 86400) min_ri = 86400;
+	if (ri == min_ri) return ri;
 
-	if (len < sizeof buf && dmarc->sp)
-		len += snprintf(&buf[len], sizeof buf - len,
-			"; sp=%s", nqr_to_string(dmarc->sp));
-
-	char const *fmt = "; fo=%c";
-	int ch;
-	for (size_t i = 0; i < sizeof dmarc->fo && (ch = dmarc->fo[i]) != 0; ++i)
+	int small, big;
+	if (min_ri < ri)
 	{
-		if (len < sizeof buf)
-			len += snprintf(&buf[len], sizeof buf - len, fmt, ch);
-		fmt = ":%c";
+		small = min_ri;
+		big = ri;
+	}
+	else
+	{
+		small = ri;
+		big = min_ri;
 	}
 
-	return len < sizeof buf? strdup(buf): NULL;
+	int lcm = big;
+	while (lcm < 86400 && lcm % small != 0)
+		lcm += big;
+
+	return lcm < 86400? lcm: 86400;
 }
+
 
 static const char rua_sentinel[] = ",z:;";
 
@@ -523,6 +554,204 @@ int check_remove_sentinel(char *rua)
 	return -1;
 }
 
+static inline int is_last(char *p)
+{
+	int const ch = (unsigned char)p[1];
+	return ch == 0 || ch == ',' || isspace(ch);
+}
+
+char *adjust_rua(char **ruain, char **badout)
+/*
+* ruain must point to a heap-allocated (presumably by parse_dmarc) string
+* having rua_sentinel.  The function removes "mailto:" and any spaces, moving
+* unsupported URI to badout --it must be either NULL or a pointer initialized
+* to NULL, in order for the caller to know if it was set.
+*
+* The value pointed by ruain is set to NULL and possibly freed.  The list of
+* addresses is returned.  Both *badout and the returned value are on the heap.
+*/
+{
+	assert(ruain);
+	assert(*ruain);
+
+	char *rua = *ruain;
+	*ruain = NULL;
+	if (check_remove_sentinel(rua))
+	{
+		if (badout)
+			*badout = rua; // log it
+		else
+			free(rua);
+		return NULL;
+	}
+
+	size_t len = strlen(rua), glen = 0, blen = 0;
+	char good[len+1], buf[len+1], bad[len+1];
+
+	char *start = rua, *p = start, *out = &buf[0];
+	bool seen_colon= false, seen_at = false, is_good = true;
+	for (;;)
+	{
+		int ch = *(unsigned char*)p;
+
+		// rfc5322 atext:             kept             removed
+		if (ch != 0 &&  //           "!#%+-/=^_{}~", "$&'*?`|"
+			(isalnum(ch) || strchr(".@:!#%+-/=^_{}~", ch) != NULL))
+		{
+			switch (ch)
+			{
+				case ':':
+					if (seen_colon || seen_at) is_good = false;
+					seen_colon = true;
+					if (p - start != 6 ||
+						strncmp(&buf[0], "mailto", 6) != 0 || is_last(p) ||
+						strchr("@,", (unsigned char)p[1]) != NULL)
+							is_good = false;
+					break;
+
+				case '@':
+					if (seen_at || !seen_colon) is_good = false;
+					seen_at = true;
+					if (is_last(p) || !isalnum((unsigned char)p[1])) is_good = false;
+					break;
+
+				case '.':
+					if (seen_at && (is_last(p) || p[1] == '.')) is_good = false;
+					break;
+
+				case '!':
+					if (!seen_at || !isdigit((unsigned char)p[1])) is_good = false;
+					break;
+
+				default:
+					if (seen_at && ch != '-' && !isalnum(ch)) is_good = false;
+					if (seen_colon == seen_at)
+						ch = tolower(ch);
+					break;
+			}
+			*out++ = ch;
+			++p;
+			continue;
+		}
+
+		if (isspace(ch))
+		{
+			++p;
+			while (isspace(ch = *(unsigned char*)p))
+				++p;
+
+			if (out == &buf[0])
+			{
+				start = p;
+				continue;
+			}
+
+			if (ch != 0 && ch != ',')
+				*out++ = ' '; // show a space to explain why is bad
+		}
+
+		if (ch == 0 || ch == ',')
+		{
+			size_t l = out - &buf[0];
+			assert(l <= len);
+			if (is_good && seen_colon && seen_at)
+			{
+				assert(l > 7);
+
+				l -= 7;
+				if (glen > 0 && good[glen-1] != ',')
+					good[glen++] = ',';
+				memcpy(&good[glen], &buf[7], l);
+				glen += l;
+			}
+			else if (l > 0)
+			{
+				if (blen > 0 && bad[blen-1] != ',')
+					bad[blen++] = ',';
+				memcpy(&bad[blen], &buf[0], l);
+				blen += l;
+			}
+			assert(glen <= len);
+			assert(blen <= len);
+
+			if (ch == 0)
+				break;
+
+			is_good = true;
+			seen_at = seen_colon = false;
+			out = &buf[0];
+			start = ++p;
+			continue;
+		}
+
+		is_good = false;
+		*out++ = ch;
+		++p;
+	}
+
+	if (blen && badout && (*badout = malloc(blen + 1)) != NULL)
+	{
+		memcpy(*badout, &bad[0], blen);
+		(*badout)[blen] = 0;
+	}
+
+	p = NULL;
+	if (glen > 0)
+	{
+		if (glen <= len)
+			p = rua; // rua_sentinel was there before getting len
+		else
+		{
+			free(rua);
+			p = malloc(glen + sizeof rua_sentinel);
+			assert(0);
+		}
+
+		if (p)
+		{
+			memcpy(p, &good[0], glen);
+			memcpy(p + glen, rua_sentinel, sizeof rua_sentinel);
+		}
+	}
+	else
+		free(rua);
+
+	return p;
+}
+
+char* write_dmarc_rec(dmarc_rec const *dmarc)
+// writes only some tags; returns strdup'd value
+{
+	char buf[80];
+	size_t len = snprintf(buf, sizeof buf, "adkim=%c; aspf=%c; p=%s",
+		dmarc->adkim == 's'? 's': 'r',
+		dmarc->aspf == 's'? 's': 'r',
+		nqr_to_string(dmarc->p));
+
+	if (len < sizeof buf && dmarc->sp)
+		len += snprintf(&buf[len], sizeof buf - len,
+			"; sp=%s", nqr_to_string(dmarc->sp));
+
+	if (len < sizeof buf && dmarc->pct != 100)
+		len += snprintf(&buf[len], sizeof buf - len,
+			"; pct=%u", (unsigned char)dmarc->pct);
+
+	char const *fmt = "; fo=%c";
+	int ch;
+	for (size_t i = 0; i < sizeof dmarc->fo && (ch = dmarc->fo[i]) != 0; ++i)
+	{
+		if (len < sizeof buf && ch != ':')
+			len += snprintf(&buf[len], sizeof buf - len, fmt, ch);
+		fmt = ":%c";
+	}
+
+	if (len + sizeof rua_sentinel < sizeof buf)
+		strcat(&buf[len], rua_sentinel);
+	len += sizeof rua_sentinel - 1;
+
+	return len < sizeof buf? strdup(buf): NULL;
+}
+
 static int parse_dmarc(char *record, void *v_dmarc)
 {
 	dmarc_rec *dmarc = v_dmarc;
@@ -534,6 +763,8 @@ static int parse_dmarc(char *record, void *v_dmarc)
 	if (p && strcmp(tv.tag, "v") == 0 && strcmp(tv.value, "DMARC1") == 0)
 	{
 		found = 1;
+		dmarc->adkim = dmarc->aspf = 'r';
+		dmarc->pct = 100;
 		while ((p = next_tag(p, &tv)) != NULL)
 		{
 			if (strcmp(tv.tag, "p") == 0)
@@ -551,16 +782,12 @@ static int parse_dmarc(char *record, void *v_dmarc)
 			}
 			else if (strcmp(tv.tag, "rua") == 0)
 			{
-				if (strncasecmp(tv.value, "mailto:", 7) == 0)
+				if (dmarc->rua == NULL)
 				{
-					tv.value += 7;
-					if (dmarc->rua == NULL)
-					{
-						size_t len = strlen(tv.value) + sizeof rua_sentinel;
-						if ((dmarc->rua = malloc(len)) == NULL)
-							return -1;
-						strcat(strcpy(dmarc->rua, tv.value), rua_sentinel);
-					}
+					size_t len = strlen(tv.value) + sizeof rua_sentinel;
+					if ((dmarc->rua = malloc(len)) == NULL)
+						return -1;
+					strcat(strcpy(dmarc->rua, tv.value), rua_sentinel);
 				}
 			}
 			else if (strcmp(tv.tag, "ri") == 0)
@@ -590,13 +817,15 @@ static int parse_dmarc(char *record, void *v_dmarc)
 			}
 			else if (strcmp(tv.tag, "fo") == 0)
 			{
-				char *fo = &dmarc->fo[0], *fo_end = &dmarc->fo[sizeof dmarc->fo];
+				char *fo = &dmarc->fo[0];
 				memset(fo, 0, sizeof dmarc->fo);
 				int ch;
-				while ((ch = *(unsigned char*)tv.value++) != 0 && fo < fo_end)
-					*fo++ = ch;
-				if (fo >= fo_end)
-					memset(&dmarc->fo[0], 0, sizeof dmarc->fo);
+				while ((ch = tolower(*(unsigned char*)tv.value++)) != 0)
+				{
+					assert(fo < &dmarc->fo[sizeof dmarc->fo]);
+					if (strchr("01ds", ch) != NULL && strchr(dmarc->fo, ch) == NULL)
+						*fo++ = ch;
+				}
 			}
 		}
 	}
@@ -625,6 +854,55 @@ static inline int nqr_to_int(int p)
 	if (p == 'q') return DMARC_POLICY_QUARANTINE;
 	if (p == 'r') return DMARC_POLICY_REJECT;
 	return 0;
+}
+
+int verify_dmarc_addr(char const *poldo, char const *rcptdo,
+	char **override, char **badout)
+// override must be given, badout may be NULL.
+// run query and return:
+//   0  valid, possible overrides and badouts adjusted and no sentinel
+//  -1  on caller's error
+//  -2  on temporary error (includes SERVFAIL)
+//  -3  on bad DNS data or other transient error
+//  -4  on NXDOMAIN
+//  -5  no DMARC record found
+{
+	assert(poldo);
+	assert(rcptdo);
+	assert(override);
+
+	if (poldo == NULL || *poldo == 0 || rcptdo == NULL || *rcptdo == 0)
+		return -1;
+
+
+	size_t const len_poldo = strlen(poldo);
+	// static char const subdomain[] =  "._report._dmarc.";
+	static size_t const len_sub = 16; // 01234567890123456
+	size_t len_d = strlen(rcptdo) + len_sub + len_poldo;
+	char query[NS_BUFFER_SIZE];
+
+	if (len_d >= sizeof query)
+		return -1;
+
+	dmarc_rec dmarc;
+	memset(&dmarc, 0, sizeof dmarc);
+
+	snprintf(query, sizeof query, "%s._report._dmarc.%s", poldo, rcptdo);
+
+	int rtc = (*txt_query)(query, len_d, len_sub, parse_dmarc, &dmarc);
+	if (rtc >= 1)
+	{
+		if (dmarc.rua)
+		{
+			*override = adjust_rua(&dmarc.rua, badout);
+			check_remove_sentinel(*override);
+		}
+		rtc = 0;
+	}
+	else if (rtc == 0)
+		rtc = -5;
+
+	return rtc;
 }
 
 int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
@@ -713,7 +991,43 @@ int main(int argc, char *argv[])
 {
 	if (argc >= 2)
 	{
-		for (int i = 1; i < argc; ++i)
+		if (strcmp(argv[1], "--parse") == 0)
+		{
+			for (int i = 2; i < argc; ++i)
+			{
+				char *more = strlen(argv[i]) <= 20? "": "...";
+				dmarc_rec dmarc;
+				memset(&dmarc, 0, sizeof dmarc);
+				int rtc = parse_dmarc_rec(&dmarc, argv[i]);
+				if (rtc == 0)
+				{
+					char *bad = NULL, *rua = NULL, *rua2 = NULL;
+					char *wrec = write_dmarc_rec(&dmarc);
+					if (dmarc.rua)
+					{
+						rua2 = strdup(dmarc.rua);
+						rua = adjust_rua(&dmarc.rua, &bad);
+					}
+					if (i > 2)
+						putchar('\n');
+					printf(
+						"record:       \"%.20s%s\"\n"
+						"rewritten as: \"%s\"\n",
+							argv[i], more, wrec? wrec: "");
+					if (rua2) printf(
+						"rua:          \"%s\"\n"
+						"rewritten as: \"%s\"\n"
+						"and bad URI:  \"%s\"\n",
+							rua2, rua? rua: "", bad? bad: "");
+					free(rua);
+					free(bad);
+					free(wrec);
+					free(rua2);
+				}
+				else printf("bad record %.20s%s\n", argv[i], more);
+			}
+		}
+		else for (int i = 1; i < argc; ++i)
 		{
 			int policy = 0;
 			char *a = argv[i];
@@ -727,7 +1041,8 @@ int main(int argc, char *argv[])
 		}
 	}
 	else
-		printf("Usage:\n\t%s domain...\n", argv[0]);
+		printf("Usage:\n\t%s domain...\nor\n\t%s --parse dmarc-record...\n",
+			argv[0], argv[0]);
 	return 0;
 }
 #endif

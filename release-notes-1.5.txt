@@ -45,6 +45,13 @@ BIGINT columns ino, mtime, and pid can be safely reduced to INT, which is a
 `cat /proc/sys/kernel/pid_max`.
 
 
+Parameters added
+================
+log_dkim_order_above     = 0 (int)
+publicsuffix             = NULL (filename)
+honored_report_interval  = 3600 (seconds)
+
+
 Bug fixes and other changes:
 ===========================
 workaround for CNAME in KEYFAIL (OpenDKIM bug 219, fixed in v2.10.1).
@@ -55,6 +62,16 @@ can cause a temporary reject if tempfail_on_error is set.
 Log temperrors at verbosity >= 3; permerrors at verbosity >= 4.
 
 Have log files line-buffered, to avoid garbled lines.
+
+Format of zfilter_db arguments: use slash (/) instead of comma (,) to separate
+stats tokens.  Thus,
+	--set-stats dir [message data|domain[,token]]
+becomes
+	--set-stats dir [message data|domain[/token]]
+and
+	--set-stats-domain domain[,token]
+becomes
+	--set-stats-domain domain[/token]
 
 
 Database changes:

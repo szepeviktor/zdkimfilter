@@ -2,13 +2,16 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT([zdkimfilter for courier],[1.6],[vesely@tana.it],[zdkimfilter])
+AC_INIT([zdkimfilter for courier],[1.5],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_CONFIG_MACRO_DIR([m4])
 AC_LANG([C])
 AC_USE_SYSTEM_EXTENSIONS
 AM_INIT_AUTOMAKE
+
+# Silent rules should need V=0
+AM_SILENT_RULES
 # dnl AC_PROG_MAKE_SET
 AC_CONFIG_HEADERS([config.h])
 
@@ -417,6 +420,25 @@ AC_MSG_RESULT([$RESOLVER_LIB])
 AC_SUBST([RESOLVER_LIB])
 
 
+ZLIB_CFLAGS=""
+AX_CHECK_ZLIB([ZLIB_LIB="-lz"
+if test "$ZLIB_HOME" != "/usr" -a "$ZLIB_HOME" != "/usr/local"; then
+	ZLIB_LIB="-L${ZLIB_HOME}/lib $ZLIB_LIB"
+	ZLIB_CFLAGS="-I${ZLIB_HOME}/include"
+fi])
+AC_SUBST([ZLIB_LIB])
+AC_SUBST([ZLIB_CFLAGS])
+
+UUID_LIB=
+AC_CHECK_LIB([uuid], [uuid_generate], [av_cv_libuuid=yes], [av_cv_libuuid=no])
+AC_CHECK_HEADER([uuid/uuid.h], [av_cv_uuid_h=yes], [av_cv_uuid_h=no])
+if test "$av_cv_libuuid" = "yes" && test "$av_cv_uuid_h" = "yes"; then
+	AC_DEFINE([HAVE_UUID], [1], [Define to 1 if you have `uuid' library (-luuid)])
+	UUID_LIB="-luuid"
+fi
+AC_SUBST([UUID_LIB])
+
+
 # Checks for other header files.
 AC_HEADER_STDC
 AC_CHECK_HEADERS([limits.h stdlib.h string.h unistd.h fcntl.h sys/time.h])
@@ -431,7 +453,9 @@ AC_FUNC_FORK
 AC_FUNC_MALLOC
 AC_FUNC_STAT
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([alarm memmove memset select strchr strdup strerror strtol strtoul])
+AC_CHECK_FUNCS([alarm memmove memset pselect random])
+AX_VAR_TIMEZONE_EXTERNALS
+AX_FUNC_SNPRINTF
 
 # Check if nettle exists (for redact.c)
 NETTLE_LIB=" -lnettle"

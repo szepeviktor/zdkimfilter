@@ -66,6 +66,11 @@ the resulting work.
 #define PATH_MAX 1024
 #endif
 
+#if !HAVE_RANDOM
+static inline long random(void) {return rand();}
+static inline void srandom(unsigned int seed) {srand(seed);}
+#endif
+
 static inline char *my_basename(char const *name) // neither GNU nor POSIX...
 {
 	char *b = strrchr(name, '/');
@@ -232,6 +237,7 @@ static void config_default(dkimfl_parm *parm) // only non-zero...
 	parm->z.dnswl_invalid_ip = DNSWL_ORG_INVALID_IP_ENDIAN;
 	parm->z.dnswl_octet_index = 3;
 	parm->z.whitelisted_pass = 3;
+	parm->z.honored_report_interval = 3600;
 }
 
 static void config_cleanup_default(dkimfl_parm *parm)
@@ -304,6 +310,15 @@ static void config_wrapup(dkimfl_parm *parm)
 			free(parm->z.tmp);
 			parm->z.tmp = NULL;
 		}
+	}
+
+	int period = adjust_period(parm->z.honored_report_interval);
+	if (period != parm->z.honored_report_interval)
+	{
+		fl_report(LOG_WARNING,
+			"bad honored_report_interval %d, adjusted to %d.  CHECK CRON!",
+				parm->z.honored_report_interval, period);
+		parm->z.honored_report_interval = period;
 	}
 }
 
@@ -1929,7 +1944,18 @@ domain_sort(verify_parms *vh, DKIM_SIGINFO** sigs, int nsigs)
 	{
 		vh->domain_ptr = realloc(domain_ptr, ndoms * sizeof(domain_prescreen*));
 		if (vh->parm->dyn.stats)
+		{
 			vh->parm->dyn.stats->signatures_count = nsigs;
+
+			if (vh->parm->z.log_dkim_order_above > 0 &&
+				vh->parm->z.log_dkim_order_above < ndoms &&
+				vh->parm->z.verbose >= 3)
+					fl_report(LOG_INFO,
+						"id=%s: %d DKIM signing domains, current dkim order is %d.",
+						vh->parm->dyn.info.id,
+						ndoms,
+						vh->parm->z.log_dkim_order_above);
+		}
 	}
 	else
 	{
@@ -3378,9 +3404,34 @@ static void verify_message(dkimfl_parm *parm)
 				{
 					if (vh.dmarc.rua)
 					{
-						parm->dyn.stats->dmarc_ri = vh.dmarc.ri? vh.dmarc.ri: 86400;
-						parm->dyn.stats->dmarc_rua = vh.dmarc.rua;
-						vh.dmarc.rua = NULL;
+						uint32_t ri =
+							adjust_ri(vh.dmarc.ri, parm->z.honored_report_interval);
+						if (ri != vh.dmarc.ri && parm->z.verbose >= 5)
+						{
+							domain_prescreen *dps = vh.domain_head;
+							for (; dps && dps->u.f.is_dmarc == 0; dps = dps->next)
+								continue;
+							fl_report(LOG_INFO,
+								"ri of %s adjusted from %u to %u "
+								"(honored_report_interval = %d)",
+									dps? dps->name: "unknown domain", vh.dmarc.ri, ri,
+									parm->z.honored_report_interval);
+						}
+						parm->dyn.stats->dmarc_ri = ri;
+						char *bad = NULL,
+							*rua = vh.dmarc.rua? adjust_rua(&vh.dmarc.rua, &bad): NULL;
+						if (bad && parm->z.verbose >= 5)
+						{
+							domain_prescreen *dps = vh.domain_head;
+							for (; dps && dps->u.f.is_dmarc == 0; dps = dps->next)
+								continue;
+							fl_report(LOG_INFO,
+								"rua URI of %s not supported: %s (supported: %s)",
+									dps? dps->name: "unknown domain", bad,
+									rua? rua: "none");
+						}
+						free(bad);
+						parm->dyn.stats->dmarc_rua = rua;
 					}
 					parm->dyn.stats->dmarc_record = write_dmarc_rec(&vh.dmarc);
 
@@ -3413,7 +3464,7 @@ static void verify_message(dkimfl_parm *parm)
 			{
 				bool deliver_message = 0;
 
-				if (POLICY_IS_DMARC(vh.policy) && vh.dmarc.pct &&
+				if (POLICY_IS_DMARC(vh.policy) && vh.dmarc.pct != 100 &&
 					random() % 100 >= vh.dmarc.pct)
 				{
 					deliver_message = true;
