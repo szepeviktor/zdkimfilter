@@ -18,6 +18,7 @@ CREATE TABLE domain (
   recv INT UNSIGNED NOT NULL DEFAULT 0,
   sent INT UNSIGNED NOT NULL DEFAULT 0,
   dmarc_ri MEDIUMINT UNSIGNED NOT NULL DEFAULT 0,
+  original_ri MEDIUMINT UNSIGNED NOT NULL DEFAULT 0,
   whitelisted TINYINT NOT NULL DEFAULT 0,
   add_dmarc TINYINT NOT NULL DEFAULT 0,
   add_adsp TINYINT NOT NULL DEFAULT 0,
@@ -61,11 +62,11 @@ CREATE TABLE message_in (
   ip BINARY(4) NOT NULL COMMENT 'Ok for IPv4.  For IPv6 use VARBINARY(16)',
   date VARCHAR(63),
   message_id VARCHAR(63),
-  dmarc_dkim ENUM ('none', 'fail', 'pass'),
-  dmarc_spf ENUM ('none', 'fail', 'pass'),
-  dmarc_reason ENUM ('none', 'forwarded', 'sampled_out',
-    'trusted_forwarder', 'mailing_list', 'local_policy', 'other') NOT NULL,
-  dmarc_dispo ENUM ('none', 'quarantine', 'reject') NOT NULL,
+  dmarc_dkim ENUM ('none', 'fail', 'pass') DEFAULT 'none',
+  dmarc_spf ENUM ('none', 'fail', 'pass') DEFAULT 'none',
+  dmarc_reason ENUM ('none', 'forwarded', 'sampled_out' DEFAULT 'none',
+    'trusted_forwarder', 'mailing_list', 'local_policy', 'other') NOT NULL DEFAULT 'none',
+  dmarc_dispo ENUM ('none', 'quarantine', 'reject') NOT NULL DEFAULT 'none',
   envelope_sender VARCHAR(63) NOT NULL DEFAULT '',
   content_type VARCHAR(63) NOT NULL DEFAULT 'text/plain',
   content_encoding VARCHAR(63) NOT NULL DEFAULT '7bit',
@@ -141,6 +142,7 @@ CREATE PROCEDURE recv_from_domain (
 	IN m_rep INT,
 	IN m_prefix_len TINYINT,
 	IN m_dmarc_ri MEDIUMINT UNSIGNED,
+	IN m_original_ri MEDIUMINT UNSIGNED,
 	IN m_dmarc_rec VARCHAR(63),
 	IN m_dmarc_rua VARCHAR(64))
 	MODIFIES SQL DATA
@@ -177,7 +179,7 @@ BEGIN
 			last_recv = UNIX_TIMESTAMP()+0 WHERE id = d_id;
 	END IF;
 	IF m_dmarc_ri > 0 THEN
-		UPDATE domain SET dmarc_ri = m_dmarc_ri,
+		UPDATE domain SET dmarc_ri = m_dmarc_ri, original_ri = m_original_ri,
 			dmarc_rec = m_dmarc_rec, dmarc_rua = m_dmarc_rua  WHERE id = d_id;
 	END IF;
 	INSERT INTO msg_ref SET message_in = m_mi,
@@ -330,81 +332,4 @@ SELECT d.domain, COUNT(*) AS cnt, u.addr
 FROM domain AS d, msg_out_ref AS r, message_out AS m, user AS u
 WHERE d.id = r.domain AND r.message_out = m.id AND m.user = u.id 
 GROUP BY d.id, u.id ORDER BY cnt DESC LIMIT 10;
-
-
-# find aggregate authentication results of a given dmarc domain (rd.domain)
-# TODO: log_dkim_order_above 2
-SELECT INET_NTOA(CONV(HEX(m.ip),16,10)) AS source, COUNT(*) AS n,
-m.dmarc_dispo AS disposition, m.dmarc_dkim AS d_dkim, m.dmarc_spf AS d_spf,
-m.dmarc_reason AS reason, da.domain AS author,
-dspf.domain AS spf, rspf.spf AS spf_re,
-dhelo.domain AS helo, rhelo.spf AS helo_re,
-d1.domain AS dkim1, r1.dkim AS dkim1_re,
-d2.domain AS dkim2, r2.dkim AS dkim2_re
-FROM message_in AS m
-LEFT JOIN (msg_ref AS rd INNER JOIN domain AS dd ON rd.domain = dd.id)
-  ON m.id = rd.message_in AND FIND_IN_SET('dmarc', rd.auth)
-LEFT JOIN (msg_ref AS ra INNER JOIN domain AS da ON ra.domain = da.id)
-  ON m.id = ra.message_in AND FIND_IN_SET('author', ra.auth)
-LEFT JOIN (msg_ref AS rspf INNER JOIN domain AS dspf ON rspf.domain = dspf.id)
-  ON m.id = rspf.message_in AND FIND_IN_SET('spf', rspf.auth)
-LEFT JOIN (msg_ref AS rhelo INNER JOIN domain AS dhelo ON rhelo.domain = dhelo.id)
-  ON m.id = rhelo.message_in AND FIND_IN_SET('spf_helo', rhelo.auth)
-LEFT JOIN (msg_ref AS r1 INNER JOIN domain AS d1 ON r1.domain = d1.id)
-  ON m.id = r1.message_in AND r1.dkim_order = 1
-LEFT JOIN (msg_ref AS r2 INNER JOIN domain AS d2 ON r2.domain = d2.id)
-  ON m.id = r2.message_in  AND r2.dkim_order = 2
-WHERE rd.domain = 1
-GROUP BY source, disposition, d_dkim, d_spf, reason, author,
-	spf, spf_re, helo, helo_re, dkim1, dkim1_re, dkim2, dkim2_re;
-
-SELECT rd.id, ra.id, rspf.id, rhelo.id, r1.id, r2.id,
-dhelo.domain AS helo, rhelo.spf AS helo_re,
-d1.domain AS dkim1, r1.dkim AS dkim1_re,
-d2.domain AS dkim2, r2.dkim AS dkim2_re
-FROM message_in AS m
-LEFT JOIN (msg_ref AS rd INNER JOIN domain AS dd ON rd.domain = dd.id)
-  ON m.id = rd.message_in AND FIND_IN_SET('dmarc', rd.auth)
-LEFT JOIN (msg_ref AS ra INNER JOIN domain AS da ON ra.domain = da.id)
-  ON m.id = ra.message_in AND FIND_IN_SET('author', ra.auth)
-LEFT JOIN (msg_ref AS rspf INNER JOIN domain AS dspf ON rspf.domain = dspf.id)
-  ON m.id = rspf.message_in AND FIND_IN_SET('spf', rspf.auth)
-LEFT JOIN (msg_ref AS rhelo INNER JOIN domain AS dhelo ON rhelo.domain = dhelo.id)
-  ON m.id = rhelo.message_in AND FIND_IN_SET('spf_helo', rhelo.auth)
-LEFT JOIN (msg_ref AS r1 INNER JOIN domain AS d1 ON r1.domain = d1.id)
-  ON m.id = r1.message_in AND r1.dkim_order = 1
-LEFT JOIN (msg_ref AS r2 INNER JOIN domain AS d2 ON r2.domain = d2.id)
-  ON m.id = r2.message_in  AND r2.dkim_order = 2
-WHERE rd.domain = 1
-
-SELECT COUNT(*) AS n,
-dhelo.domain AS helo, rhelo.spf AS helo_re,
-d1.id AS dkim1, r1.dkim AS dkim1_re,
-d2.id AS dkim2, r2.dkim AS dkim2_re,
-d3.id AS dkim3, r3.dkim AS dkim3_re,
-d4.id AS dkim4, r4.dkim AS dkim4_re
-FROM message_in AS m
-LEFT JOIN (msg_ref AS rd INNER JOIN domain AS dd ON rd.domain = dd.id)
-  ON m.id = rd.message_in AND FIND_IN_SET('dmarc', rd.auth)
-LEFT JOIN (msg_ref AS ra INNER JOIN domain AS da ON ra.domain = da.id)
-  ON m.id = ra.message_in AND FIND_IN_SET('author', ra.auth)
-LEFT JOIN (msg_ref AS rspf INNER JOIN domain AS dspf ON rspf.domain = dspf.id)
-  ON m.id = rspf.message_in AND FIND_IN_SET('spf', rspf.auth)
-LEFT JOIN (msg_ref AS rhelo INNER JOIN domain AS dhelo ON rhelo.domain = dhelo.id)
-  ON m.id = rhelo.message_in AND FIND_IN_SET('spf_helo', rhelo.auth)
-LEFT JOIN (msg_ref AS r1 INNER JOIN domain AS d1 ON r1.domain = d1.id)
-  ON m.id = r1.message_in AND r1.dkim_order = 1
-LEFT JOIN (msg_ref AS r2 INNER JOIN domain AS d2 ON r2.domain = d2.id)
-  ON m.id = r2.message_in  AND r2.dkim_order = 2
-LEFT JOIN (msg_ref AS r3 INNER JOIN domain AS d3 ON r3.domain = d3.id)
-  ON m.id = r3.message_in  AND r3.dkim_order = 3
-LEFT JOIN (msg_ref AS r4 INNER JOIN domain AS d4 ON r4.domain = d4.id)
-  ON m.id = r4.message_in  AND r4.dkim_order = 4
-WHERE rd.domain = 1
-GROUP BY helo, helo_re, dkim1, dkim1_re, dkim2, dkim2_re, dkim3, dkim3_re, dkim4, dkim4_re;
-
-
-
-# the previous query needs an extra index (added above)
-# CREATE INDEX by_msg_auth ON msg_ref (message_in, auth);
 

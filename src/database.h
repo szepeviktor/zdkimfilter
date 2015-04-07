@@ -33,6 +33,8 @@ the resulting work.
 #include <stdint.h>
 #include "parm.h"
 
+#define DEFAULT_REPORT_INTERVAL 86400
+
 typedef struct db_work_area db_work_area;
 
 db_work_area *db_init(void);
@@ -171,7 +173,7 @@ typedef struct stats_info
 	unsigned received_count;
 	unsigned signatures_count;
 
-	uint32_t dmarc_ri; // report interval
+	uint32_t dmarc_ri, original_ri; // report interval
 
 	unsigned nxdomain: 1;
 	unsigned adsp_any: 1;

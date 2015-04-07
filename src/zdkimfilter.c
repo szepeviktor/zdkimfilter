@@ -237,7 +237,7 @@ static void config_default(dkimfl_parm *parm) // only non-zero...
 	parm->z.dnswl_invalid_ip = DNSWL_ORG_INVALID_IP_ENDIAN;
 	parm->z.dnswl_octet_index = 3;
 	parm->z.whitelisted_pass = 3;
-	parm->z.honored_report_interval = 3600;
+	parm->z.honored_report_interval = DEFAULT_REPORT_INTERVAL;
 }
 
 static void config_cleanup_default(dkimfl_parm *parm)
@@ -2037,14 +2037,25 @@ static inline dkim_result sig_is_good(DKIM_SIGINFO *const sig)
 		rc == DKIM_SIGERROR_OK)
 			return dkim_pass;
 
+	// idea: if it's wrong in the DNS it is an error, otherwise a failure.
 	if ((sig_flags & DKIM_SIGFLAG_PROCESSED) != 0 &&
 		rc == DKIM_SIGERROR_KEYFAIL)
 			return dkim_temperror;
 
-	if (sig_flags & DKIM_SIGFLAG_PASSED)
-		return (sig_flags & DKIM_SIGFLAG_TESTKEY)? dkim_neutral: dkim_fail;
+	switch (rc)
+	{
+		case DKIM_SIGERROR_NOKEY:
+		case DKIM_SIGERROR_DNSSYNTAX:
+		case DKIM_SIGERROR_KEYVERSION:
+		case DKIM_SIGERROR_KEYUNKNOWNHASH:
+		case DKIM_SIGERROR_NOTEMAILKEY:
+		case DKIM_SIGERROR_KEYTYPEMISSING:
+		case DKIM_SIGERROR_KEYTYPEUNKNOWN:
+			return dkim_permerror;
 
-	return dkim_permerror;
+		default:
+			return (sig_flags & DKIM_SIGFLAG_TESTKEY)? dkim_neutral: dkim_fail;
+	}
 }
 
 static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
@@ -3205,7 +3216,9 @@ static void verify_message(dkimfl_parm *parm)
 #if HAVE_LIBOPENDKIM_2A1
 			if (parm->z.verbose >= 3)
 			{
-				char const *const err = dkim_geterror(dkim);
+				char const * err = dkim_geterror(dkim);
+				if (err == NULL)
+					err = dkim_getresultstr(status);
 				fl_report(LOG_ERR,
 					"id=%s: temporary verification failure: %s",
 					parm->dyn.info.id, err? err: "NULL");
@@ -3214,7 +3227,9 @@ static void verify_message(dkimfl_parm *parm)
 			// temperror except for missing CNAME (which is permerror)
 			parm->dyn.rtc = -1;
 #else
-			char const *const err = dkim_geterror(dkim);
+			char const *err = dkim_geterror(dkim);
+			if (err == NULL)
+				err = dkim_getresultstr(status);
 			if (parm->z.verbose >= 3)
 			{
 				fl_report(LOG_ERR,
@@ -3240,7 +3255,9 @@ static void verify_message(dkimfl_parm *parm)
 			// permerror
 			if (parm->z.verbose >= 4)
 			{
-				char const *const err = dkim_geterror(dkim);
+				char const *err = dkim_geterror(dkim);
+				if (err == NULL)
+					err = dkim_getresultstr(status);
 				fl_report(LOG_ERR,
 					"id=%s: permanent verification failure: %s",
 					parm->dyn.info.id, err? err: "NULL");
@@ -3406,7 +3423,8 @@ static void verify_message(dkimfl_parm *parm)
 					{
 						uint32_t ri =
 							adjust_ri(vh.dmarc.ri, parm->z.honored_report_interval);
-						if (ri != vh.dmarc.ri && parm->z.verbose >= 5)
+						if (vh.dmarc.ri != 0 &&
+							ri != vh.dmarc.ri && parm->z.verbose >= 5)
 						{
 							domain_prescreen *dps = vh.domain_head;
 							for (; dps && dps->u.f.is_dmarc == 0; dps = dps->next)
@@ -3418,6 +3436,7 @@ static void verify_message(dkimfl_parm *parm)
 									parm->z.honored_report_interval);
 						}
 						parm->dyn.stats->dmarc_ri = ri;
+						parm->dyn.stats->original_ri = vh.dmarc.ri;
 						char *bad = NULL,
 							*rua = vh.dmarc.rua? adjust_rua(&vh.dmarc.rua, &bad): NULL;
 						if (bad && parm->z.verbose >= 5)

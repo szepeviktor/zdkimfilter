@@ -414,7 +414,7 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 			domain_mask_bit | auth_type_mask_bit |
 			vbr_mv_mask_bit | vbr_response_mask_bit |
 			reputation_mask_bit | dmarc_record_mask_bit |
-			dmarc_ri_mask_bit | prefix_len_mask_bit |
+			dmarc_ri_mask_bit | original_ri_mask_bit | prefix_len_mask_bit |
 			dmarc_rua_mask_bit |dkim_result_mask_bit | dkim_order_mask_bit |
 			spf_result_mask_bit;
 
@@ -743,8 +743,8 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 	va_list ap;
 	va_start(ap, count);
 
-	db_query_cb arg_cb;
-	void *arg_cb_arg;
+	db_query_cb arg_cb = NULL; // compiler happy
+	void *arg_cb_arg = NULL; // ditto
 
 	enum wantarg { wantchar, wantint, wantcb } arg = wantchar;
 	if (count < 0)
@@ -1610,11 +1610,19 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 
 	/* dmarc_{ri,rua,record} are domain variables */
 	char dmarc_ri_buf[MAX_DECIMAL_DIG(sizeof info->dmarc_ri)];
+	char original_ri_buf[MAX_DECIMAL_DIG(sizeof info->original_ri)];
 	if (info->dmarc_found)
+	{
 		sprintf(dmarc_ri_buf, "%u", info->dmarc_ri);
+		sprintf(original_ri_buf, "%u", info->original_ri);
+	}
 	else
+	{
 		dmarc_ri_buf[0] = 0;
+		original_ri_buf[0] = 0;
+	}
 	CONST_STRING(dmarc_ri, dmarc_ri_buf);
+	CONST_STRING(original_ri, original_ri_buf);
 
 	zeroflag |= dmarcflag;
 	dmarcflag |= dmarc_rua_mask_bit | dmarc_record_mask_bit;
@@ -2575,7 +2583,8 @@ int main(int argc, char*argv[])
 								char *bad = NULL;
 								stats.dmarc_rua =
 									rec.rua? adjust_rua(&rec.rua, &bad): NULL;
-								stats.dmarc_ri = rec.ri? rec.ri: 86400;
+								stats.dmarc_ri = stats.original_ri =
+									rec.ri? rec.ri: 86400;
 								if (bad)
 								{
 									printf("bad rua \"%s\" in dmarc, ignored.\n", bad);

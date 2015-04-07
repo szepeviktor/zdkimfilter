@@ -154,6 +154,19 @@ static int copy_file(FILE *src, FILE *dst)
 	return ferror(src) || ferror(dst);
 }
 
+static inline int is_parent_domain_of(char const *domain, char const *subdom)
+{
+	assert(domain);
+	assert(subdom);
+
+	size_t len = strlen(domain), sublen = strlen(subdom), l;
+
+	return (len == sublen && strcmp(subdom, domain) == 0) || // same or,
+		(len < sublen && // subdomain proper
+		subdom[(l=sublen-len) - 1] == '.' &&
+		strcmp(&subdom[l], domain) == 0);
+}
+
 // simple xmt output
 typedef struct xml_tree
 {
@@ -221,6 +234,17 @@ static void xtag(xml_tree *xml, char const *tag, char const *content)
 			tag, content? content: "", tag);
 }
 
+static void xtagn(xml_tree *xml, char const *tag, char const *content, int len)
+{
+	assert(xml);
+	assert(xml->depth <= sizeof xml->tag/sizeof xml->tag[0]);
+
+	indent(xml, xml->depth);
+	if (xml->cstr)
+		xml->cstr = cstr_printf(xml->cstr, "<%s>%.*s</%s>\n",
+			tag, len, content? content: "", tag);
+}
+
 static void uint32_xtag(xml_tree *xml, char const *tag, uint32_t content)
 {
 	assert(xml);
@@ -238,7 +262,7 @@ static int record_select(int nfield, char const *field[], void* vxml)
 /*
 * Receive fields from domain selection query.  These must be:
 * ip [0], count [1], dispo [2], d_dkim [3], d_spf [4], reason [5], domain [6],
-* spf-helo [7], spf_result [8], spf [9], spf_result [10], and
+* spf [7], spf_result [8], spf_helo [9], spf_result [10], and
 * dkim [11], dkim_result [12] (repeated any number of times, NULL values skipped)
 */
 {
@@ -255,13 +279,27 @@ static int record_select(int nfield, char const *field[], void* vxml)
 	xtag(xml, "source_ip", field[0]);
 	xtag(xml, "count", field[1]);
 
-	stag(xml, "policy_ealuated");
+	stag(xml, "policy_evaluated");
 	xtag(xml, "disposition", field[2]);
 	xtag(xml, "dkim", field[3]);
 	xtag(xml, "spf", field[4]);
+
+	// reason, if given, is type + [space comment]
 	if (field[5] && strcmp(field[5], "none") != 0)
-		xtag(xml, "reason", field[5]);
-	etag(xml);
+	{
+		stag(xml, "reason");
+
+		char const *c = field[5];
+		int ch;
+		while (isalnum(ch = *(unsigned char*)c) || ch == '_')
+			++c;
+		xtagn(xml, "type", field[5], c - field[5]);
+		if (isspace(ch))
+			xtag(xml, "comment", c+1);
+		etag(xml); // reason
+	}
+	etag(xml); // policy evaluated
+	etag(xml); // row
 
 	stag(xml, "identifiers");
 	xtag(xml, "header_from", field[6]);
@@ -274,19 +312,37 @@ static int record_select(int nfield, char const *field[], void* vxml)
 			stag(xml, "dkim");
 			xtag(xml, "domain", field[i]);
 			xtag(xml, "result", field[i+1]);
-			etag(xml);
+			etag(xml); // dkim
 		}
+
 	stag(xml, "spf");
-	if (field[9] && field[10])
+	if (field[7] && field[8] && field[9] && field[10])
 	{
-		xtag(xml, "domain", field[9]);
-		xtag(xml, "result", field[10]);
-		xtag(xml, "scope", "mfrom");
+		bool pass8 = strcmp(field[8], "pass") == 0,
+			pass10 = strcmp(field[10], "pass") == 0;
+		if (pass8 == pass10)
+		{
+			// if both or neither are pass, output helo only if
+			// it is better aligned than mfrom
+			if (field[6] &&
+				is_parent_domain_of(field[6], field[9]) &&
+				!is_parent_domain_of(field[6], field[7]))
+					field[7] = NULL;
+		}
+		else if (pass10)
+			field[7] = NULL;
 	}
-	else if (field[7] && field[8])
+
+	if (field[7] && field[8])
 	{
 		xtag(xml, "domain", field[7]);
 		xtag(xml, "result", field[8]);
+		xtag(xml, "scope", "mfrom");
+	}
+	else if (field[9] && field[10])
+	{
+		xtag(xml, "domain", field[9]);
+		xtag(xml, "result", field[10]);
 		xtag(xml, "scope", "helo");
 	}
 	else
@@ -296,7 +352,6 @@ static int record_select(int nfield, char const *field[], void* vxml)
 	}
 	etag(xml); // spf
 	etag(xml); // auth_results
-	etag(xml); // row
 	etag(xml); // record
 
 	return xml_flush(xml, 0);
@@ -670,90 +725,81 @@ static size_t check_addr(domain_run *dom, char *p, int rndx)
 			(*do_log)(LOG_ERR, "internal error rua=%s", p);
 			p = NULL;
 		}
-		else
+		else if (!is_parent_domain_of(domain, ++rcptdom))
 		{
-			size_t len = strlen(domain), rcptlen = strlen(++rcptdom), l;
-			
-			if (len > rcptlen ||
-				(len == rcptlen && strcmp(rcptdom, domain) != 0) ||
-				(len < rcptlen && // rcptdom is not a subdomain
-					(rcptdom[(l=rcptlen-len) - 1] != '.' ||
-						strcmp(&rcptdom[l], domain) != 0)))
+			if (rndx)
+			/*
+			* Further, if the confirming record includes a URI whose host is
+			* again different than the domain publishing that override, the
+			* Mail Receiver generating the report MUST NOT generate a report
+			* to either the original or the override URI.
+			*                 http://tools.ietf.org/html/rfc7489#section-7.1
+			*/
 			{
-				if (rndx)
-				/*
-				* Further, if the confirming record includes a URI whose host is
-				* again different than the domain publishing that override, the
-				* Mail Receiver generating the report MUST NOT generate a report
-				* to either the original or the override URI.
-				*                 http://tools.ietf.org/html/rfc7489#section-7.1
-				*/
+				if (verbose >= 1)
+					(*do_log)(LOG_ERR,
+						"domain %s's external rcpt %s has yet another domain",
+						dom->domain, p);
+				return 1;
+			}
+
+			char *override = NULL, *badout = NULL;
+			int rtc = verify_dmarc_addr(domain, rcptdom, &override, &badout);
+			if (rtc == 0)
+			{
+				if (badout)
 				{
-					if (verbose >= 1)
-						(*do_log)(LOG_ERR,
-							"domain %s's external rcpt %s has yet another domain",
-							dom->domain, p);
-					return 1;
+					if (verbose >= 5)
+						(*do_log)(LOG_NOTICE,
+							"unsupported URI(s) \"%s\" "
+							"in external rcpt override (%s authorize %s)",
+								badout, rcptdom, domain);
+					free(badout);
+					badout = NULL;
 				}
 
-				char *override = NULL, *badout = NULL;
-				int rtc = verify_dmarc_addr(domain, rcptdom, &override, &badout);
-				if (rtc == 0)
+				if (override)
 				{
-					if (badout)
+					size_t n = dom->n_rua + 1;
+					dmarc_rua *rua = realloc(dom->rua, n * sizeof(dmarc_rua));
+					if (rua == NULL)
 					{
-						if (verbose >= 5)
-							(*do_log)(LOG_NOTICE,
-								"unsupported URI(s) \"%s\" "
-								"in external rcpt override (%s authorize %s)",
-									badout, rcptdom, domain);
+						free(override);
 						free(badout);
-						badout = NULL;
+						return -1;
 					}
 
-					if (override)
-					{
-						size_t n = dom->n_rua + 1;
-						dmarc_rua *rua = realloc(dom->rua, n * sizeof(dmarc_rua));
-						if (rua == NULL)
-						{
-							free(override);
-							free(badout);
-							return -1;
-						}
-
-						dom->n_rua = n--;
-						dom->rua = rua;
-						rua[n].rua = override;
-						rua[n].poldomain = rcptdom;
-						if (verbose >= 8)
-							(*do_log)(LOG_INFO,
-								"external rcpt %s -> \"%s\" authorize domain %s",
-								p, override, domain);
-						p = NULL;
-					}
-					else if (verbose >= 8)
-						(*do_log)(LOG_INFO, "external rcpt %s authorize domain %s",
-							p, domain);
-				}
-				else
-				/*
-				* Where the above algorithm fails to confirm that the external
-				* reporting was authorized by the Report Receiver, the URI MUST be
-				* ignored by the Mail Receiver generating the report.
-				*                   http://tools.ietf.org/html/rfc7489#section-7.1
-				*/
-				{
-					if (verbose >= 1)
-						(*do_log)(LOG_WARNING, "invalid external rcpt %s from %s: %s",
-							p, domain,
-							rtc == -1? "internal error":
-							rtc == -2? "SERVFAIL or remote temperror":
-							rtc == -3? "bad data from DNS":
-							rtc == -4? "NXDOMAIN":
-							rtc == -5? "not authorized by rcpt domain": "unknown");
+					dom->n_rua = n--;
+					dom->rua = rua;
+					rua[n].rua = override;
+					rua[n].poldomain = rcptdom;
+					if (verbose >= 8)
+						(*do_log)(LOG_INFO,
+							"external rcpt %s -> \"%s\" authorize domain %s",
+							p, override, domain);
 					p = NULL;
 				}
+				else if (verbose >= 8)
+					(*do_log)(LOG_INFO, "external rcpt %s authorize domain %s",
+						p, domain);
+			}
+			else
+			/*
+			* Where the above algorithm fails to confirm that the external
+			* reporting was authorized by the Report Receiver, the URI MUST be
+			* ignored by the Mail Receiver generating the report.
+			*                   http://tools.ietf.org/html/rfc7489#section-7.1
+			*/
+			{
+				if (verbose >= 1)
+					(*do_log)(LOG_WARNING, "invalid external rcpt %s from %s: %s",
+						p, domain,
+						rtc == -1? "internal error":
+						rtc == -2? "SERVFAIL or remote temperror":
+						rtc == -3? "bad data from DNS":
+						rtc == -4? "NXDOMAIN":
+						rtc == -5? "not authorized by rcpt domain": "unknown");
+				p = NULL;
 			}
 		}
 	}
@@ -1366,6 +1412,7 @@ static int domain_select(int nfield, char const *field[], void* vzag)
 	etag(&dom.xml); // report_metadata
 
 	stag(&dom.xml, "policy_published");
+	xtag(&dom.xml, "domain", dar.domain);
 	for (char *p = dom.drec; p;)
 	{
 		if (*p == ' ')
@@ -1682,8 +1729,7 @@ int main(int argc, char *argv[])
 	parm_target[db_parm_t_id] = db_parm_addr(zag.dwa);
 
 	int rtc = 0;
-	// default - must match zdkimfilter's config_default()
-	zag.z.honored_report_interval = 3600;
+	zag.z.honored_report_interval = DEFAULT_REPORT_INTERVAL;
 
 	assert(zag.config_file);
 	if (*zag.config_file == 0 ||

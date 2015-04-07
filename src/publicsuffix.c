@@ -727,6 +727,7 @@ static int wt_step2(loose_trie* t, void *v, int depth)
 	}
 
 	return 0;
+	(void)depth; // not used
 }
 
 static int wt_step3(loose_trie* t, void *v, int depth)
@@ -755,6 +756,7 @@ static int wt_step3(loose_trie* t, void *v, int depth)
 	}
 
 	return 0;
+	(void)depth; // not used
 }
 
 void publicsuffix_done(publicsuffix_trie *pst)
