@@ -858,16 +858,16 @@ static cstring *write_to_header(domain_run *dom, write_rcpt wr)
 			{
 				if (wr == write_accept)
 				{
-					if (dom->addr[i].limit < limit)
+					if (dom->addr[i].limit > limit)
 					{
 						if (dom->zag->z.verbose >= 6)
 							(*do_log)(LOG_ERR,
-								"rcpt %s discarded: limit %" PRIu64 " < %" PRIu64,
+								"rcpt %s discarded: limit %" PRIu64 " > %" PRIu64,
 								dom->addr[i].addr, dom->addr[i].limit, limit);
 						continue;
 					}
 				}
-				else if (dom->addr[i].limit >= limit)
+				else if (dom->addr[i].limit <= limit)
 					continue;
 			}
 

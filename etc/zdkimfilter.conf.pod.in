@@ -8,7 +8,7 @@
 # To check the third place, e.g.:
 # diff -u \
 #  <(sed -nr 's/^=item B<([a-z_0-9]+)>.*/\1/p' etc/zdkimfilter.conf.pod.in) \
-#  <(src/dkimsign --config -f nosvn-tmp/test.conf | sed -nr 's/^([a-z_0-9]+) .*/\1/p')
+#  <(src/dkimsign --config -f '' | sed -nr 's/^([a-z_0-9]+) .*/\1/p')
 
 =pod
 
@@ -397,9 +397,16 @@ verified, in order of decreasing importance.
 
 =item B<max_signatures> int
 
-The abolutely maximum number of signatures.  Messages having more signatures 
+The absolutely maximum number of signatures.  Messages having more signatures 
 than that are considered denial of service (DoS) attacks and rejected 
 outright.  The default value is 128. 
+
+=item B<log_dkim_order_above> int
+
+The highest number of signatures you expect.  If this is non-zero, a warning is
+logged whenever an incoming message has more signers than that, if verbose is 3
+or higher.  This is to help a reasonable setting of B<db_sql_dmarc_agg_record>.
+The default value is 0.
 
 =item B<publicsuffix> string
 
@@ -409,6 +416,12 @@ Public Suffix List as maintained by publicsuffix.org.
 The default value is NULL, which may prevent checking DMARC alignment, as well
 as discovering DMARC policy records published by the organizational domain
 (also known as registered domain) if the author domain is a subdomain thereof.
+
+=item B<honored_report_interval>
+
+The number of seconds between successive invocations of zaggregate, according
+to cron settings.  It is used to adjust a domain's I<dmarc_ri> to a multiple of
+this value.  The default is 86400, which assumes zaggregate is run once a day.
 
 =item B<honor_dmarc> bool
 

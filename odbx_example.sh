@@ -1,6 +1,12 @@
 #! /bin/sh
 #
 # faked calls to zfilter_db to simulate incoming messages
+#
+# After running odbx_example.sql to create a test database, run this script
+# to populate it.  After a few minutes, run a command like the following to
+# see aggregate reports:
+#
+# ORG_EMAIL=foo@example.edu src/zaggregate -f odbx_example.conf
 
 ZFILTER_DB=src/zfilter_db
 
@@ -8,7 +14,7 @@ ZFILTER_DB=src/zfilter_db
 $ZFILTER_DB $TEST -f odbx_example.conf \
 	--set-stats I @ bounces@s.example.org ugo@s.example.org @ @ @  @ @ @  @ @ @ pass fail \
 	--set-stats-domain \
-		example.org/org/aligned/dmarc:'v=DMARC1; aspf=s; p=reject sp=quarantine pct=50; ri=300   ;   rua=mailto:dmarc@example.org!40,mailto:suchaverylongnamethatwontfininthedatabase@example.org!50m' \
+		example.org/org/aligned/dmarc:'v=DMARC1; aspf=s; p=reject sp=quarantine pct=50; ri=300;   rua=mailto:dmarc@example.org!40,mailto:f@example.org' \
 		s.example.org/author/aligned/spf:softfail/dkim:pass \
 		other.example/dkim \
 		mailer.s.example.org/spf_helo:permerror

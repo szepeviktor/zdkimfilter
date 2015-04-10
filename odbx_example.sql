@@ -1,8 +1,12 @@
 # zdkimfilter database example using MySQL
-
+#
+# run: mysql -u zfilter < odbx_example.sql
+#
+# some privileges for user zfilter have to be set, for example:
+# 
 # CREATE DATABASE IF NOT EXISTS test_zfilter;
-
-# DROP, CREATE, ALTER ROUTINE, and CREATE ROUTINE are needed for this sql script only.
+#
+# (DROP, CREATE, ALTER ROUTINE, and CREATE ROUTINE are needed for this sql script only.)
 # GRANT SELECT, INSERT, UPDATE, EXECUTE, DELETE, DROP, CREATE, ALTER ROUTINE, CREATE ROUTINE ON test_zfilter.* TO 'zfilter'@'localhost'
 
 USE test_zfilter;
@@ -64,7 +68,7 @@ CREATE TABLE message_in (
   message_id VARCHAR(63),
   dmarc_dkim ENUM ('none', 'fail', 'pass') DEFAULT 'none',
   dmarc_spf ENUM ('none', 'fail', 'pass') DEFAULT 'none',
-  dmarc_reason ENUM ('none', 'forwarded', 'sampled_out' DEFAULT 'none',
+  dmarc_reason ENUM ('none', 'forwarded', 'sampled_out',
     'trusted_forwarder', 'mailing_list', 'local_policy', 'other') NOT NULL DEFAULT 'none',
   dmarc_dispo ENUM ('none', 'quarantine', 'reject') NOT NULL DEFAULT 'none',
   envelope_sender VARCHAR(63) NOT NULL DEFAULT '',

@@ -1950,7 +1950,7 @@ domain_sort(verify_parms *vh, DKIM_SIGINFO** sigs, int nsigs)
 			if (vh->parm->z.log_dkim_order_above > 0 &&
 				vh->parm->z.log_dkim_order_above < ndoms &&
 				vh->parm->z.verbose >= 3)
-					fl_report(LOG_INFO,
+					fl_report(LOG_WARNING,
 						"id=%s: %d DKIM signing domains, current dkim order is %d.",
 						vh->parm->dyn.info.id,
 						ndoms,

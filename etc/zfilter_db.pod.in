@@ -13,10 +13,10 @@ B<zfilter_db> [I<option> [I<option-arg>... ]...
 
 This man page describes the database options of zdkimfilter, and then documents
 this tool.  Maintaining data by domain name rather than by IP number is what
-DKIM is all about, which is why zdkimfilter does this.  However, a database is
-not required for basic sign and verify operations.
+DKIM is all about, which is why zdkimfilter does this.  Although a database is
+not required for basic sign and verify operations, it is needed for DMARC.
 
-B<zfilter_db> connects to the database so as to exercise the database
+B<zfilter_db> connects to the database so as to exercise some of the database
 configuration options and queries, as if a message was received and filtered.
 Details of the simulated message are set via COMMAND LINE OPTIONS (below).
 
@@ -28,7 +28,7 @@ mapped to specific backends.
 =head1 CONFIGURATION
 
 Database entries in zdkimfilter configuration start with C<db_>.  There are
-three groups of them:  Connection, options proper, and queries.
+three groups of them:  (1) Connection, (2) options proper, and (3) queries.
 The first group controls the connection itself:
 
 =over
@@ -90,26 +90,29 @@ Mode of operation.
 
 =item B<db_opt_paged_results>
 
-Number of result records to transfer; 0 means all.  Our queries get at most
-one, so it's not something to worry about.
+Number of result records to transfer; 0 means all.
 
 =back
 
 
-The third group, queries, is made of items whose names start with C<db_sql_>.
+The third groups, queries, are made of items whose names start with C<db_sql_>.
 Some queries may or should return a single value; this doc does not distinguish
 between queries and statements.
 
 Each query can use a number of variables whose values are collected while
-processing a mail message.  A variable is identified by the string
-B<$(>I<variable-name>B<)>.  Missing variables result in an empty string.
+processing a mail message or while preparing a report.  A variable is
+identified by a string of the form B<$(>I<variable-name>B<)>.  Missing
+variables result in the empty string.
 
-Queries, in turn, can be subdivided into three
-groups:  Whitelist query, log of incoming messages, and of outgoing ones.
+Queries, in turn, can be subdivided into four subgroups:  (1) per-domain
+settings, storage of (2) incoming and (3) outgoing messages, and (4) reports.
+These subgroups characterize when the relevant queries are run.  In the rest of
+this section there is a subsection for each subgroup.
 
-=head2 Whitelist query
+=head2 Per-domain settings
 
-This group consists of a single query:
+These settings are queried before signature verification of incoming messages.
+The first query is new in version 1.5 
 
 =over
 
