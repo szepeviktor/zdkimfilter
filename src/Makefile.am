@@ -7,7 +7,7 @@ AM_CPPFLAGS = -fno-strict-aliasing
 noinst_HEADERS = filterlib.h filedefs.h filecopy.h dkim-mailparse.h util.h\
  myadsp.h myvbr.h myreputation.h md5.h redact.h vb_fgets.h parm.h \
  database.h database_variables.h database_statements.h publicsuffix.h \
- spf_result_string.h cstring.h
+ spf_result_string.h cstring.h rfc822.h
 
 filterexecdir = @COURIER_FILTER_INSTALL@
 filterexec_PROGRAMS = zdkimfilter
@@ -16,7 +16,8 @@ filterexecPROGRAMS_INSTALL = $(INSTALL_PROGRAM)@PROGRAM_OWNER@
 INSTALL_PROGRAM = /bin/sh $(top_builddir)/myinstall.sh
 
 zdkimfilter_SOURCES = zdkimfilter.c filterlib.c parm.c myvbr.c redact.c \
- database.c publicsuffix.c ip_to_hex.c util.c myreputation.c md5.c myadsp.c
+ database.c publicsuffix.c ip_to_hex.c util.c myreputation.c md5.c myadsp.c \
+ rfc822.c rfc822_getaddr.c rfc822_getaddrs.c
 zdkimfilter_LDADD = @SOCKET_LIB@ @OPENDKIM_LIB@ @RESOLVER_LIB@ @NETTLE_LIB@ @OPENDBX_LIB@ @IDN2_LIB@ @LIBUNISTRING@
 zdkimfilter_CPPFLAGS = -DFILTER_NAME=zdkimfilter @OPENDKIM_CFLAGS@ @OPENDBX_CFLAGS@
 # nozdkimfilter_CCLD = libtool --mode=link $(CCLD)

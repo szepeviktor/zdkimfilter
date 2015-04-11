@@ -570,152 +570,6 @@ static void collect_stats(dkimfl_parm *parm, char const *start)
 }
 
 // outgoing
-static inline int
-my_dkim_header(dkimfl_parm *parm, DKIM *dkim, char *field, size_t len)
-{
-	assert(len > 0);
-	assert(dkim);
-
-	DKIM_STAT status = dkim_header(dkim, field, len);
-	if (status != DKIM_STAT_OK)
-	{
-		if (parm->z.verbose)
-		{
-			char const *err = dkim_getresultstr(status);
-			fl_report(LOG_CRIT,
-				"id=%s: signing dkim_header failed on %zu bytes: %s (%d)",
-				parm->dyn.info.id, len,
-				err? err: "unknown", (int)status);
-		}
-		return parm->dyn.rtc = -1;
-	}
-
-	return 0;
-}
-
-static int sign_headers(dkimfl_parm *parm, DKIM *dkim)
-// return parm->dyn.rtc = -1 for unrecoverable error,
-// parm->dyn.rtc (0) otherwise
-{
-	assert(parm);
-
-	size_t keep = 0;
-	var_buf *vb = &parm->dyn.vb;
-	FILE* fp = fl_get_file(parm->fl);
-	assert(fp);
-	
-	for (;;)
-	{
-		char *p = vb_fgets(vb, keep, fp);
-		char *eol = p? strchr(p, '\n'): NULL;
-
-		if (eol == NULL)
-		{
-			if (parm->z.verbose)
-				fl_report(LOG_ALERT,
-					"id=%s: header too long (%.20s...)",
-					parm->dyn.info.id, vb_what(vb, fp));
-			return parm->dyn.rtc = -1;
-		}
-
-		int const next = eol > p? fgetc(fp): '\n';
-		int const cont = next != EOF && next != '\n';
-		char *const start = vb->buf;
-		keep = eol - start;
-		if (cont && isspace(next)) // wrapped
-		{
-			*eol++ = '\r';
-			*eol++ = '\n';
-			*eol = next;
-			keep += 3;
-			continue;
-		}
-
-		if (parm->dyn.stats)
-			collect_stats(parm, start);
-
-		/*
-		* full field is in buffer (dkim_header does not want the trailing \n)
-		*/
-		if (keep && dkim && my_dkim_header(parm, dkim, start, keep) < 0)
-			return parm->dyn.rtc = -1;
-
-		if (!cont)
-			break;
-
-		start[0] = next;
-		keep = 1;
-	}
-	
-	/*
-	* all header fields processed.
-	* check results thus far.
-	*/
-	
-	if (dkim)
-	{
-		DKIM_STAT status = dkim_eoh(dkim);
-		if (status != DKIM_STAT_OK)
-		{
-			if (parm->z.verbose >= 3)
-			{
-				char const *err = dkim_getresultstr(status);
-				fl_report(LOG_INFO,
-					"id=%s: signing dkim_eoh: %s (stat=%d)",
-					parm->dyn.info.id, err? err: "(NULL)", (int)status);
-			}
-			// return parm->dyn.rtc = -1;
-		}
-	}
-
-	return parm->dyn.rtc;
-}
-
-static int copy_body(dkimfl_parm *parm, DKIM *dkim)
-// return parm->dyn.rtc = -1 for unrecoverable error,
-// parm->dyn.rtc (0) otherwise
-{
-	assert(parm && dkim);
-
-	FILE* fp = fl_get_file(parm->fl);
-	assert(fp);
-	char buf[8192];
-	
-	while (fgets(buf, sizeof buf - 1, fp))
-	{
-		char *eol = strchr(buf, '\n');
-		if (eol)
-		{
-			*eol++ = '\r';
-			*eol++ = '\n';
-			*eol = 0;
-		}
-		else
-			eol = &buf[sizeof buf - 1];
-		
-		size_t const len = eol - &buf[0];
-		DKIM_STAT status = dkim_body(dkim, buf, len);
-		if (status != DKIM_STAT_OK)
-		{
-			if (parm->z.verbose)
-			{
-				char const *err = dkim_geterror(dkim);
-				if (err == NULL)
-					err = dkim_getresultstr(status);
-				fl_report(LOG_CRIT,
-					"id=%s: dkim_body failed on %zu bytes: %s (%d)",
-					parm->dyn.info.id, len, err? err: "unknown", (int)status);
-			}
-			return parm->dyn.rtc = -1;
-		}
-
-		if (dkim_minbody(dkim) == 0)
-			break;
-	}
-
-	return parm->dyn.rtc;
-}
-
 static int read_key(dkimfl_parm *parm, char *fname)
 // read private key and selector from disk, return 0 or parm->dyn.rtc = -1;
 // when returning 0, parm->dyn.key and parm->dyn.selector are set so as to
@@ -1056,24 +910,202 @@ static int read_key_choice(dkimfl_parm *parm)
 	return parm->dyn.rtc;
 }
 
-static void copy_until_redacted(dkimfl_parm *parm, FILE *fp, FILE *fp_out)
+static inline int
+my_dkim_header(dkimfl_parm *parm, DKIM *dkim, char *field, size_t len)
 {
-	assert(parm);
-	assert(parm->z.redact_received_auth);
-	assert(fp);
-	assert(fp_out);
+	assert(len > 0);
+	assert(dkim);
 
-	var_buf vb;
-	if (vb_init(&vb))
+	DKIM_STAT status = dkim_header(dkim, field, len);
+	if (status != DKIM_STAT_OK)
 	{
-		parm->dyn.rtc = -1;
-		return;
+		if (parm->z.verbose)
+		{
+			char const *err = dkim_getresultstr(status);
+			fl_report(LOG_CRIT,
+				"id=%s: signing dkim_header failed on %zu bytes: %s (%d)",
+				parm->dyn.info.id, len,
+				err? err: "unknown", (int)status);
+		}
+		return parm->dyn.rtc = -1;
 	}
 
+	return 0;
+}
+
+static int replace_received_auth(dkimfl_parm *parm, char **new_text,
+	char *start, char *s, size_t s_len)
+{
+	char *p2, *eol2, *authuserbuf, *addr;
+
+	if ((p2 = strchr(s, '\n')) != NULL &&
+		(p2 = strchr(p2 + 1, '(')) != NULL &&
+		(eol2 = strchr(p2, '\n')) != NULL &&
+		(authuserbuf = strstr(p2, "AUTH: ")) != NULL &&
+		//                         123456
+		(authuserbuf += 6) < eol2 &&
+		(addr = strchr(authuserbuf, ' ')) != NULL)
+	{
+		char *eaddr = ++addr;
+		int ch;
+		size_t const len = strlen(parm->dyn.info.authsender);
+		while ((ch = *(unsigned char*)eaddr) != 0 &&
+			strchr("),", ch) == NULL)
+				++eaddr;
+		if (eaddr < eol2 &&
+			addr + len == eaddr &&
+			strincmp(addr, parm->dyn.info.authsender, len) == 0)
+		/*
+		* found: compose the replacement with the redacted field
+		*/
+		{
+			char *red =
+				redacted(parm->z.redact_received_auth,
+					parm->dyn.info.authsender);
+			size_t redlen = red? strlen(red): 0;
+			size_t r_len = s_len - len + redlen;
+			char *p = *new_text = malloc(r_len + 1);
+			if (p)
+			{
+				memcpy(p, start, addr - start);
+				p += addr - start;
+				if (red)
+				{
+					memcpy(p, red, redlen);
+					p += redlen;
+				}
+				assert(strlen(eaddr) + redlen + (size_t)(addr - start) == r_len);
+				strcpy(p, eaddr);
+			}
+			free(red);
+			return p? 1: -1;
+		}
+	}
+	return 0;
+}
+
+#include "rfc822.h"
+static int replace_courier_wrap(char **new_text, char *start)
+{
+	int rtc = 0;
+
+	char	**bufptrs = NULL;
+	struct rfc822t *rfcp = rfc822t_alloc_new(start, NULL, NULL);
+	struct rfc822a *rfca = rfc822a_alloc(rfcp);
+	if (rfca)
+	{
+		if (rfca->naddrs)
+		{
+			bufptrs = malloc(sizeof(char*) * rfca->naddrs);
+			if (bufptrs)
+			{
+				for (int i = 0; i<rfca->naddrs; ++i)
+				{
+					struct rfc822token *tokenp = rfca->addrs[i].tokens;
+					if (tokenp == NULL)
+					{
+						bufptrs[i]=0;
+						continue;
+					}
+
+					if ((bufptrs[i] = rfc822_gettok(tokenp)) == NULL)
+						continue;
+
+					tokenp->next=0;
+					tokenp->token=0;
+					tokenp->ptr=bufptrs[i];
+					tokenp->len=strlen(tokenp->ptr);
+
+				}
+			}
+		}
+
+		char *new_header = rfc822_getaddrs_wrap(rfca, 70);
+		if (new_header)
+		{
+			if (strcmp(new_header, start) != 0)
+			{
+				unsigned i, l;
+				for (i=l=0; new_header[i]; i++)
+					if (new_header[i] == '\n' && new_header[i+1])
+						l += 3;
+
+				char *p=malloc(strlen(new_header)+1+l);
+				if (p)
+				{
+					for (i=l=0; new_header[i]; i++)
+					{
+						if (new_header[i] == '\n' && new_header[i+1])
+						{
+							p[l++]='\r';
+							p[l++]='\n';
+							p[l++]=' ';
+							p[l++]=' ';
+						}
+						else
+							p[l++]=new_header[i];
+					}
+					p[l]=0;
+					free(new_header);
+					*new_text = p;
+					rtc = 1;
+				}
+				else
+					rtc = -1;
+			}
+			else
+				free(new_header);
+		}
+		if (bufptrs)
+			for (int i=0; i<rfca->naddrs; ++i)
+				if (bufptrs[i]) free(bufptrs[i]);
+		rfc822a_free(rfca);
+	}
+	rfc822t_free(rfcp);
+	free(bufptrs);
+
+	return rtc;
+}
+
+static inline size_t chomp_cr(char *hdr)
+{
+	char *s = hdr, *d = hdr;
+	if (d)
+	{
+		int ch;
+		while ((ch = *(unsigned char*)s++) != 0)
+			if (ch != '\r') *d++ = ch;
+		*d = 0;
+	}
+	return d - hdr;
+}
+
+typedef struct replacement
+{
+	struct replacement *next;
+	uint64_t offset; // offset (in file) where replacement starts
+	char *new_text;  // possibly NULL, no trailing \n
+	size_t length;   // length of old text w/o trailing \n
+	size_t nu;
+} replacement;
+
+static int sign_headers(dkimfl_parm *parm, DKIM *dkim, replacement **repl)
+// return parm->dyn.rtc = -1 for unrecoverable error,
+// parm->dyn.rtc (0) otherwise
+{
+	assert(parm);
+
 	size_t keep = 0;
+	var_buf *vb = &parm->dyn.vb;
+	FILE* fp = fl_get_file(parm->fl);
+	assert(fp);
+
+	uint64_t offset = 0;
+	size_t newlines = 0;
+	bool search_received = parm->z.redact_received_auth;
 	for (;;)
 	{
-		char *p = vb_fgets(&vb, keep, fp);
+		char *p = vb_fgets(vb, keep, fp);
 		char *eol = p? strchr(p, '\n'): NULL;
 
 		if (eol == NULL)
@@ -1081,91 +1113,204 @@ static void copy_until_redacted(dkimfl_parm *parm, FILE *fp, FILE *fp_out)
 			if (parm->z.verbose)
 				fl_report(LOG_ALERT,
 					"id=%s: header too long (%.20s...)",
-					parm->dyn.info.id, vb_what(&vb, fp));
-			parm->dyn.rtc = -1;
-			break;
+					parm->dyn.info.id, vb_what(vb, fp));
+			return parm->dyn.rtc = -1;
 		}
 
 		int const next = eol > p? fgetc(fp): '\n';
 		int const cont = next != EOF && next != '\n';
-		char *const start = vb.buf;
+		char *const start = vb->buf;
+		keep = eol - start;
 		if (cont && isspace(next)) // wrapped
 		{
-			*++eol = next;
-			keep = eol + 1 - start;
+			*eol++ = '\r';
+			*eol++ = '\n';
+			*eol = next;
+			keep += 3;
+			++newlines;
 			continue;
 		}
 
 		/*
-		* full 0-terminated header field, including trailing \n, is in buffer;
-		* search for the identbuf argv (see courier/module.esmtp/courieresmtpd.c)
+		* full field is in buffer, keep bytes excluding trailing \n
+		* (neither dkim_header nor replacements want trailing \n)
 		*/
-		char const *s = hdrval(start, "Received");
-		if (s)
+		if (keep)
 		{
-			char *p2, *eol2, *authuserbuf, *addr;
-			
-			if ((p2 = strchr(s, '\n')) != NULL &&
-				(p2 = strchr(p2 + 1, '(')) != NULL &&
-				(eol2 = strchr(p2, '\n')) != NULL &&
-				(authuserbuf = strstr(p2, "AUTH: ")) != NULL &&
-				//                         123456
-				(authuserbuf += 6) < eol2 &&
-				(addr = strchr(authuserbuf, ' ')) != NULL)
+			*eol = 0;
+			if (parm->dyn.stats)
+				collect_stats(parm, start);
+
+			if (dkim)
 			{
-				char *eaddr = ++addr;
-				int ch;
-				size_t const len = strlen(parm->dyn.info.authsender);
-				while ((ch = *(unsigned char*)eaddr) != 0 &&
-					strchr("),", ch) == NULL)
-						++eaddr;
-				if (eaddr < eol2 &&
-					addr + len == eaddr &&
-					strincmp(addr, parm->dyn.info.authsender, len) == 0)
-				/*
-				* found: write the redacted field and break
-				*/
+				char *nt = NULL, *s;
+				int rc = 0;
+				if (search_received && (s = hdrval(start, "Received")) != NULL)
 				{
-					char *red =
-						redacted(parm->z.redact_received_auth,
-							parm->dyn.info.authsender);
-					int ok =
-						fwrite(start, addr - start, 1, fp_out) == 1 &&
-						(red == NULL || fputs(red, fp_out) >= 0) &&
-						fwrite(eaddr, eol + 1 - eaddr, 1, fp_out) == 1 &&
-						ungetc(next, fp) == next;
-						// fputc(next, fp_out) == next;
-
-					if (!ok)
-						parm->dyn.rtc = -1;
-
-					free(red);
-					break;
+					if ((rc = replace_received_auth(parm, &nt, start, s, keep)) > 0)
+						search_received = false;
 				}
+				else if ((s = hdrval(start, "To")) != NULL ||
+					(s = hdrval(start, "Reply-To")) != NULL ||
+					(s = hdrval(start, "From")) != NULL ||
+					(s = hdrval(start, "Cc")) != NULL)
+				{
+					rc = replace_courier_wrap(&nt, start);
+				}
+
+				if (rc > 0)
+				{
+					replacement *new_r = malloc(sizeof (replacement));
+					if (new_r)
+					{
+						replacement **r = repl;
+						while (*r)
+							r = &(*r)->next;
+						new_r->next = NULL;
+						*r = new_r;
+						new_r->offset = offset;
+						new_r->new_text = nt;
+						new_r->length = keep - newlines;
+						if (nt)
+							rc = my_dkim_header(parm, dkim, nt, strlen(nt));
+					}
+					else
+					{
+						free(nt);
+						rc = -1;
+					}
+				}
+				else
+					rc = my_dkim_header(parm, dkim, start, keep);
+
+				if (rc < 0)
+					return parm->dyn.rtc = -1;
 			}
 		}
 
-		/*
-		* copy the field as is and continue header processing
-		*/
-		if (fwrite(start, eol + 1 - start, 1, fp_out) != 1)
-		{
-			parm->dyn.rtc = -1;
-			break;
-		}
-
 		if (!cont)
-		{
-			if (fputc(next, fp_out) != next)
-				parm->dyn.rtc = -1;
 			break;
-		}
 
+		offset += keep - newlines + 1;
+		newlines = 0;
 		start[0] = next;
 		keep = 1;
 	}
+	
+	/*
+	* all header fields processed.
+	* check results thus far.
+	*/
+	
+	if (dkim)
+	{
+		DKIM_STAT status = dkim_eoh(dkim);
+		if (status != DKIM_STAT_OK)
+		{
+			if (parm->z.verbose >= 3)
+			{
+				char const *err = dkim_getresultstr(status);
+				fl_report(LOG_INFO,
+					"id=%s: signing dkim_eoh: %s (stat=%d)",
+					parm->dyn.info.id, err? err: "(NULL)", (int)status);
+			}
+			// return parm->dyn.rtc = -1;
+		}
+	}
 
-	vb_clean(&vb);
+	return parm->dyn.rtc;
+}
+
+static int copy_body(dkimfl_parm *parm, DKIM *dkim)
+// return parm->dyn.rtc = -1 for unrecoverable error,
+// parm->dyn.rtc (0) otherwise
+{
+	assert(parm && dkim);
+
+	FILE* fp = fl_get_file(parm->fl);
+	assert(fp);
+	char buf[8192];
+	
+	while (fgets(buf, sizeof buf - 1, fp))
+	{
+		char *eol = strchr(buf, '\n');
+		if (eol)
+		{
+			*eol++ = '\r';
+			*eol++ = '\n';
+			*eol = 0;
+		}
+		else
+			eol = &buf[sizeof buf - 1];
+		
+		size_t const len = eol - &buf[0];
+		DKIM_STAT status = dkim_body(dkim, buf, len);
+		if (status != DKIM_STAT_OK)
+		{
+			if (parm->z.verbose)
+			{
+				char const *err = dkim_geterror(dkim);
+				if (err == NULL)
+					err = dkim_getresultstr(status);
+				fl_report(LOG_CRIT,
+					"id=%s: dkim_body failed on %zu bytes: %s (%d)",
+					parm->dyn.info.id, len, err? err: "unknown", (int)status);
+			}
+			return parm->dyn.rtc = -1;
+		}
+
+		if (dkim_minbody(dkim) == 0)
+			break;
+	}
+
+	return parm->dyn.rtc;
+}
+
+static void
+copy_replacement(dkimfl_parm *parm, FILE *fp, FILE *fp_out, replacement *repl)
+{
+	uint64_t offset = 0;
+	while (repl)
+	{
+		char buf[4096];
+		size_t in = sizeof buf;
+		bool last = false;
+		assert(offset <= repl->offset);
+
+		if (offset + in >= repl->offset)
+		{
+			in = repl->offset - offset;
+			last = true;
+		}
+
+		if (in &&
+			(in = fread(buf, 1, in, fp)) > 0 &&
+			fwrite(buf, in, 1, fp_out) != 1)
+				break;
+
+		offset += in;
+
+		if (last)
+		{
+			size_t l = chomp_cr(repl->new_text);
+			if (l && fwrite(repl->new_text, l, 1, fp_out) != 1)
+				break;
+
+			// read and discard the original header (except the trailing \n)
+			offset += repl->length;
+			while (repl->length > 0)
+			{
+				in = sizeof buf < repl->length? sizeof buf: repl->length;
+				repl->length -= in;
+				fread(buf, 1, in, fp);
+			}
+
+			repl = repl->next;
+		}
+	}
+
+	if (repl)
+		parm->dyn.rtc = -1;
 }
 
 static void recipient_s_domains(dkimfl_parm *parm)
@@ -1256,15 +1401,6 @@ static inline void stats_outgoing(dkimfl_parm *parm)
 	}
 }
 
-static inline void chomp_cr(char *hdr)
-{
-	unsigned char *s = hdr, *d = hdr;
-	int ch;
-	while ((ch = *s++) != 0)
-		if (ch != '\r') *d++ = ch;
-	*d = 0;
-}
-
 static void sign_message(dkimfl_parm *parm)
 /*
 * possibly sign the message, set rtc 1 if signed, -1 if failed,
@@ -1345,7 +1481,7 @@ static void sign_message(dkimfl_parm *parm)
 		// add to db even if not signed
 		if (parm->dyn.stats)
 		{
-			sign_headers(parm, NULL);
+			sign_headers(parm, NULL, NULL);
 			stats_outgoing(parm);
 		}
 	}
@@ -1419,10 +1555,10 @@ static void sign_message(dkimfl_parm *parm)
 			}
 		}
 
-		// (not)TODO: if parm.no_signlen, instead of copy_body, stop at either
-		// "-- " if plain text, or end of first mime alternative otherwise
+		replacement *repl = NULL;
+
 		if (parm->dyn.rtc == 0 &&
-			sign_headers(parm, dkim) == 0 &&
+			sign_headers(parm, dkim, &repl) == 0 &&
 			copy_body(parm, dkim) == 0)
 		{
 			vb_clean(&parm->dyn.vb);
@@ -1478,8 +1614,7 @@ static void sign_message(dkimfl_parm *parm)
 			assert(in);
 			rewind(in);
 
-			if (parm->z.redact_received_auth)
-				copy_until_redacted(parm, in, fp);
+			copy_replacement(parm, in, fp, repl);
 				
 			if (parm->dyn.rtc == 0)
 			{
@@ -1487,6 +1622,14 @@ static void sign_message(dkimfl_parm *parm)
 					parm->dyn.rtc = 1;
 				else
 					parm->dyn.rtc = -1;
+			}
+
+			while (repl)
+			{
+				replacement *r = repl->next;
+				free(repl->new_text);
+				free(repl);
+				repl = r;
 			}
 		}
 	}

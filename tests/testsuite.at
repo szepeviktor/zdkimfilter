@@ -3157,6 +3157,60 @@ ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
 AT_CLEANUP
 
 
+#
+AT_SETUP([Check wrapping long lines on signing])
+ZF_CONFIG(6, [default_domain example.com
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [Received: from server.example by test.example with ESMTP
+Message-ID: <123456@author.example>
+Date: Fri, 10 Apr 2015 19:35:00 +0200
+From: Author One <user@author.example>,user2@author.example(Author Two), user3@author.example
+MIME-Version: 1.0
+To  : (XYZ) x@y.z, and a bunch of people: Rc1 <rc1@dest.example>, Rc2 <rc2@dest.example>, Rc3 <rc3@dest.example>;
+Reply-To:
+ Author
+  One
+   <user@author.example>       ,
+    user2@author.example
+     (Author Two),
+         user3@author.example
+Subject: Test address wrapping
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+The header will be wrapped before being signed!
+])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+AT_CHECK([head -17 mail | tail -11], 0,
+[Received: from server.example by test.example with ESMTP
+Message-ID: <123456@author.example>
+Date: Fri, 10 Apr 2015 19:35:00 +0200
+From: Author One <user@author.example>,
+  user2@author.example (Author Two), user3@author.example
+MIME-Version: 1.0
+To: x@y.z (XYZ), and a bunch of people: Rc1 <rc1@dest.example>,
+  Rc2 <rc2@dest.example>, Rc3 <rc3@dest.example>;
+Reply-To: Author One <user@author.example>,
+  user2@author.example (Author Two), user3@author.example
+Subject: Test address wrapping
+], [])
+AT_CLEANUP
 
 # 
 AT_SETUP([Real DNS queries: vouch, reputation])
