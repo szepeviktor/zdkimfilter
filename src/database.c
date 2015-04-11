@@ -1648,8 +1648,8 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 		// 12345678901234567890123456789012345678901234567890123456789012345
 		char authbuf[72]; // 20        30        40        50        60
 		dwa->var[auth_type_variable] = authbuf;
-		size_t dkim_order = 0;
-		char dkim_order_buf[MAX_DECIMAL_DIG(sizeof dkim_order)];
+
+		char dkim_order_buf[MAX_DECIMAL_DIG(sizeof (size_t))];
 		dwa->var[dkim_order_variable] = dkim_order_buf;
 		var_flag_t bit2 = auth_type_mask_bit | domain_mask_bit |
 			spf_result_mask_bit | dkim_result_mask_bit | dkim_order_mask_bit;
@@ -1701,8 +1701,9 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 				comma_copy(authbuf, "spf", &comma);
 			if (dps->nsigs)
 			{
+				assert(dps->dkim_order > 0);
 				comma_copy(authbuf, "dkim", &comma);
-				sprintf(dkim_order_buf, "%zu", ++dkim_order);
+				sprintf(dkim_order_buf, "%zu", dps->dkim_order);
 			}
 			else
 				strcpy(dkim_order_buf, "0");
@@ -1731,6 +1732,25 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 					}
 				}
 			}
+#if ! CONSOLE_DEBUG // building neither zfilter_db nor zaggregate
+			else if (info->pst)
+			// get prefix_len of non-aligned domains, just for info
+			{
+				char *od = org_domain(info->pst, dps->name);
+				if (od)
+				{
+					size_t sublen = strlen(dps->name),
+						od_len = strlen(od);
+					if (sublen >= od_len)
+					{
+						sprintf(prefix_len_buf, "%zu", sublen - org_domain_len);
+						bitflag |= prefix_len_mask_bit;
+					}
+					free(od);
+				}
+			}
+#endif
+
 			if (dps->u.f.vbr_is_ok)
 			{
 				comma_copy(authbuf, "vbr", &comma);

@@ -32,6 +32,7 @@ the resulting work.
 #include <time.h>
 #include <stdint.h>
 #include "parm.h"
+#include "publicsuffix.h"
 
 #define DEFAULT_REPORT_INTERVAL 86400
 
@@ -123,8 +124,9 @@ typedef struct domain_prescreen
 		unsigned int all;
 	} u;
 	char *vbr_mv;                  // trusted voucher (in parm->z) or NULL
-	struct domain_prescreen *next; // ordered by name
+	struct domain_prescreen *next; // ordered by name reverse
 	int reputation;                // if is_reputed*
+	size_t dkim_order;
 	spf_result spf;                // helo, mfrom, or from
 	dkim_result dkim;
 	uint8_t dnswl_value;
@@ -164,6 +166,7 @@ typedef struct stats_info
 	char *ino_mtime_pid;
 
 	domain_prescreen* domain_head;
+	publicsuffix_trie *pst;
 
 	// outgoing messages only
 	unsigned rcpt_count;

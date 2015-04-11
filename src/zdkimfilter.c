@@ -2051,14 +2051,18 @@ domain_sort(verify_parms *vh, DKIM_SIGINFO** sigs, int nsigs)
 
 	/*
 	* Allocate indexes in the sorted sig array.  Reuse sigval as next_index.
+	* store dkim_order in dps.
 	*/
 
 	int next_ndx = 0;
+	size_t dkim_order = 0;
 	for (int c = 0; c < ndoms; ++c)
 	{
 		domain_prescreen *const dps = domain_ptr[c];
 		dps->sigval = dps->start_ndx = next_ndx;
 		next_ndx += dps->nsigs;
+		assert(dps->nsigs > 0);
+		dps->dkim_order = ++dkim_order;
 	}
 
 	/*
@@ -4185,6 +4189,7 @@ static void after_filter_stats(fl_parm *fl)
 	{
 		if (check_db_connected(parm) == 0)
 		{
+			parm->dyn.stats->pst = parm->pst;
 			db_set_stats_info(parm->dwa, parm->dyn.stats);
 			if (parm->dyn.stats->outgoing && !parm->user_blocked)
 			{
