@@ -96,35 +96,41 @@ Number of result records to transfer; 0 means all.
 
 
 The third groups, queries, are made of items whose names start with C<db_sql_>.
-Some queries may or should return a single value; this doc does not distinguish
+Some queries may or should return values; this doc does not distinguish
 between queries and statements.
 
 Each query can use a number of variables whose values are collected while
 processing a mail message or while preparing a report.  A variable is
-identified by a string of the form B<$(>I<variable-name>B<)>.  Missing
-variables result in the empty string.
+identified by a string of the form B<$(>I<variable-name>B<)>.  Each variable
+identifier is replaced by the current value, irrespective of any quotation.
+Missing variables result in the empty string.
 
 Queries, in turn, can be subdivided into four subgroups:  (1) per-domain
 settings, storage of (2) incoming and (3) outgoing messages, and (4) reports.
 These subgroups characterize when the relevant queries are run.  In the rest of
-this section there is a subsection for each subgroup.
+this section there is a subsection for each subgroup, but traits and variables
+common to (2) and (3) are collected in their own subsections.
 
 =head2 Per-domain settings
 
 These settings are queried before signature verification of incoming messages.
-The first query is new in version 1.5 
+The first query, new in version 1.5, extends the second one.
 
 =over
 
-=item B<db_sql_whitelisted>
+=item B<db_sql_domain_flags>
 
-It can use two variables:
+Three variables are allowed:
 
 =over
 
 =item B<domain>
 
-An authenticated domain name.
+A domain name related to an incoming message, for example a DKIM signer.
+
+=item B<org_domain>
+
+The organizational domain of the domain part of the From: address.
 
 =item B<ip>
 
@@ -133,19 +139,62 @@ with no leading C<0x>.
 
 =back
 
-This query should return an integer.  A value of 1 or higher affects the order
-in which DKIM signatures verification is attempted.  A value of 2 or higher
-prevents a message from being rejected or dropped due to ADSP.  (A value of 3
-or higher will be used in an upcoming version of zdkimfilter.)
+The query can return one to three integer values, in this order:
 
-Whitelist queries are issued while processing incoming messages.  By contrast,
-the other queries are issued after messages have been dealt with.
+=over
 
+=item I<domain is whitelisted>
 
-=head2 Common variables
+A value of 1 or higher affects the order in which DKIM signatures verification
+is attempted.  A value of 2 or higher prevents a message from being rejected
+or dropped due to DMARC policy or ADSP, if the domain is authenticated.
 
-The other queries, log of incoming and outgoing messages, can use the following
-twelve variables:
+Unless the B<domain> is aligned with B<org_domain>
+
+=item I<honor DMARC policy>
+
+Add to the global B<honor_dmarc> setting.  If DMARC is globally honored, a
+value of -1 disables it for this domain.  A value of 1 enables it for this
+message, even if DMARC is not globally set.
+
+Unless B<domain> is aligned with B<org_domain>, this result is discarded.
+
+=item I<honor ADSP policy>
+
+Add to the global B<honor_author_domain> setting.  Like the previous item,
+this is added (with sign) to the global value.
+
+Unless B<domain> matches the From: address, this result is discarded.
+
+=back
+
+=item B<db_sql_whitelisted>
+
+This query is kept for compatibility, and is only used if the previous one is
+not defined.  It can use two variables only:
+
+=over
+
+=item B<domain>
+
+A domain name.
+
+=item B<ip>
+
+The IP number of the client.  This variable is given as a hex string, but
+with no leading C<0x>.
+
+=back
+
+This query should return a single integer, the whitelist value.
+
+=back
+
+=head2 Traits and variables common to incoming and outgoing messages
+
+After filtering is complete and response to Courier given, zdkimfilter stores
+relevant message data to the database.  Each message is either incoming or
+outgoing, but the following twelve variables are available in either case:
 
 =over
 
@@ -172,18 +221,16 @@ The bounce address, also known as envelop from or mailfrom.
 
 =item B<ip>
 
-The IP number of the client.  This variable is given as a hex string, but
-with no leading C<0x>.
+The IP number of the client, given as a hex string with no leading C<0x>.
 
 =back
 
-=head2 Log of incoming messages
+=head2 Storing incoming messages
 
-Incoming messages, after any valid DKIM signature or SPF authentication has
-been seen, can be logged to the database by defining some or all of the
-queries below.  Besides common variables, the queries in this group can log two
-additional sets of variables, one for the message as a whole, and one for each
-domain.
+Relevant incoming message data can be stored in the database by defining some
+or all of the queries below.  Besides common variables, the queries in this
+group can use two additional sets of variables, one for the message proper,
+and one for each domain related to that message.
 
 =head3 incoming message variables
 
@@ -191,15 +238,125 @@ domain.
 
 =item B<message_status>
 
-This is one of the three values: C<accept>, C<reject>, and C<drop>.
+This is one of the three values: C<accept>, C<reject>, and C<drop>, which
+represent the message disposition as far as zdkimfilter knows.
+
+=item B<dmarc_dkim>
+
+DMARC extension of ADSP, it is one of:
+
+=over
+
+=item C<pass>
+
+if a signature by an aligned domain passed.
+
+=item C<fail>
+
+if no aligned signature passed.
+
+=item C<none>
+
+if no aligned signature or no DMARC record were found.
+
+=back
+
+=item B<dmarc_spf>
+
+DMARC view of SPF authentication, it is one of:
+
+=over
+
+=item C<pass>
+
+if a domain is authenticated with either BOFHSPFHELO or BOFHSPFMAILFROM 
+I<and> it is aligned in the way (relaxed or strict) specified by the DMARC
+record of the author's domain.
+
+=item C<fail>
+
+if SPF authentication did not pass, or the authenticated domain was not aligned
+as required.
+
+=item C<none>
+
+if no DMARC record was found.
+
+=back
+
+
+=item B<dmarc_dispo>
+
+The message disposition, as far as DMARC is concerned.  It is not necessarily
+consistent with B<message_status>.  The value is one of:
+
+=over
+
+=item I<none>
+
+No policy impact on message disposition.
+
+=item I<quarantine>
+
+The message is treated "as suspicious", to use RFC 7489 words.  (All what
+zdkimfilter does is to write "(QUARANTINE)" in the Authentication-Results.
+Any enforcement is passed on to mail delivery.)
+
+=item I<reject>
+
+The message is rejected because of remote DMARC policy.
+
+=back
+
+=item B<dmarc_reason>
+
+Currently, zdkimfilter sets this value as follows:
+
+=over
+
+=item I<none>
+
+B<dmarc_dispo> is in agreement with the remote DMARC policy.
+
+=item I<forwarded>
+
+Not used.
+
+=item I<sampled_out>
+
+Remote DMARC policy applies to a percentage only, and the luck of the draw
+exempts this message.
+
+=item I<trusted_forwarder>
+
+An authenticated domain is whitelisted (>= 2), is in DNSWL, or VBR.
+
+=item I<mailing_list>
+
+Not used.
+
+=item I<local_policy>
+
+None of DMARC, ADSP, or I<reject_on_nxdomain> applies.  Remote DMARC policy is
+not being honored for this message.
+
+=item I<other>
+
+DMARC policy failed, but BOFHSPFFROM passed.  Note that SPF protocol does not
+provide a scope for C<From:>; however, it may happen that a message has no
+signature, an empty envelope sender, a mismatched BOFHSPFHELO, but a good
+BOFHSPFFROM.
+
+=back
 
 =item B<adsp_flags>
 
 A comma separated list of tokens.  One of the three possible values of the
 policy, C<unknown>, C<all>, and C<discardable>;  along with C<found>, in case
-the (unknown) status was not inferred, and possibly C<fail> and C<whitelisted>.
+the (unknown) status was not inferred, and possibly C<fail>.
 
-This, like other comma separated lists, are meant to match SET/ENUM SQL types.
+This variable is only set if an ADSP record was found.  Since v1.5, ADSP
+records are not always looked up.
 
 =item B<received_count>
 
@@ -211,10 +368,11 @@ The number of DKIM signatures.
 
 =back
 
+
 =head3 incoming domain variables
 
-The second set of variables can also be used by queries in this group, except
-for C<db_sql_insert_message>.
+An incoming message can be related to a number of domains.  The following set
+of variables are specific to each of them:
 
 =over
 
@@ -222,58 +380,134 @@ for C<db_sql_insert_message>.
 
 The domain name.
 
-=item B<reputation>
-
-The integer found via the DKIM-reputation query, if enabled
-(see L<zdikimfilter.conf(5)>).
-
-=item B<vbr_mv>
-
-The one of I<trusted_vouchers> that confirmed a VBR claim.
-
-=item B<vbr_response>
-
-The actual string returned by the VBR query.
-
 =item B<auth_type>
 
-A comma separated list of the following tokens:
+The relationship(s) between the message and the domain.  The relationship can
+be spoofed if either B<publicsuffix>, B<save_from_anyway>, or both are enabled.
+One has to check specific results in that case.  Relationships are
+given as a comma separated list of the following tokens:
 
 =over
 
 =item C<author>
 
-For author domain signature.  That is, this domain appears in the From: field.
-If B<save_from_anyway> is enabled, the domain is logged with this author domain
-flag even if no authentication method validated such claim.
+The author domain is the one appearing in the From: field.
 
-=item C<spf>, C<spf_helo>, C<dkim>, C<dnswl>, and C<vbr>
+=item C<spf_helo>, C<spf>, and C<dkim>
 
-For the corresponding authentication methods.
+The corresponding authentication methods, whose results are given in separate
+variables.  SPF results originate from Courier's BOFHSPFHELO and
+BOFHSPFMAILFROM.
+
+=item C<org>
+
+The domain is the organizational domain of the author domain, retrieved using
+the Public Suffix List.
+
+=item C<dmarc>
+
+The domain where the DMARC record was retrieved from.
+
+=item C<aligned>
+
+The domain is aligned with with the author domain, in the sense that they
+share the same organizational domain.
+
+=item C<vbr>
+
+The seldom used Vouch By Reference.  This relationship is flagged only if the
+vouch was verified according to B<trusted_vouchers>.
 
 =item C<rep> and C<rep_s>
 
-For domains involved in DKIM reputation as subjects and/or signers respectively.
+For domains involved in the seemingly defunct DKIM reputation, as subjects
+and/or signers respectively.
+
+=item C<dnswl>
+
+The domain is whitelisted in the configured zone.  This result originates
+from the B<-allow> option of B<couriertcpd>.  See L<couriertcpd(1)>.
+
+=item C<nx>
+
+The domain, either the author domain or the organizational domain thereof,
+does not actually exist because NXDOMAIN was returned on querying its Name
+Servers.
 
 =back
+
+=item B<dmarc_record>
+
+A rewritten digest of the DMARC record, used for aggregate reports.  Targets
+and interval are moved to their own variables, so this digest shouldn't take
+more than 60 bytes, including the appended sentinel (see C<dmarc_rua> below).
+
+=item B<dmarc_ri>
+
+A multiple of B<original_ri> that matches the B<honored_report_interval>.
+
+=item B<original_ri>
+
+The Report Interval requested by the domain.
+
+=item B<prefix_len>
+
+The number of bytes that must be removed from the domain name in order to
+obtain the organizational domain name, as resulting from the Public Suffix
+List.
+
+=item B<dmarc_rua>
+
+A rewritten subset of aggregate report targets.  Only C<mailto:> targets are
+considered, and stored as a list of mail addresses.
+
+A sentinel is appended to the list, to know if excessive length caused
+truncation.  In that case, the DMARC record is looked up anew.  Even if DB
+queries are usually faster than DNS ones, reserving too much room might degrade
+performance, so a compromise length that fits most domains could be preferred.
+
+
+=item B<dkim_result>
+
+The verification result, if the message contains a DKIM-Signature by the
+domain.
+
+=item B<dkim_order>
+
+The 1-based position of this domain's signature(s), preferred domains first.
+
+=item B<spf_result>
+
+The SPF result, if the domain appears in any of helo, mailfrom, or From:.
+
+=item B<reputation>
+
+The integer that could be found if DKIM-reputation query were enabled.
+
+=item B<vbr_mv>
+
+One of I<trusted_vouchers> that confirm a VBR claim.
+
+=item B<vbr_response>
+
+The actual string returned by the VBR query.
 
 =back
 
 =head3 incoming message queries
 
+These queries run right after a zdkimfilter process yields control of the
+message back to Courier.  They run in the order given below:
+
 =over
 
 =item B<db_sql_insert_message>
 
-This query cannot use the second set of variables, the incoming domain
-variables.  That's because multiple domains can be involved in a message
-relaying.  The query can return a value that will be made available as a
-variable named B<message_ref>.  Since Courier's triplet B<ino>, B<mtime>, and
-B<pid> can be used as a unique key to the message database, it is not
-imperative that the key of the last inserted message be returned.
-
-If no SQL error occurs, subsequent queries will be called in sequence for each
-domain involved.
+This query can use incoming message variables only, not the domain ones.  It
+can return a B<message_ref>, a single value value that will be available to
+subsequent queries.  Since Courier's triplet B<ino>, B<mtime>, and B<pid> can
+be used as a unique key to the message table, it is not imperative that the
+key of the last inserted message be returned.
 
 =item B<db_sql_select_domain>
 
@@ -283,25 +517,25 @@ variable B<domain_ref>.
 
 =item B<db_sql_insert_domain>
 
-This query is only issued if the previous query didn't return the key.  It can
-return the key too, if multi-statements are allowed.  If it doesn't, a second
-call to I<db_sql_select_domain> will be made.
+This query runs only if the previous one did not return the key.  It can
+return the key too.  If it does not, B<db_sql_select_domain> runs for a second
+time right after this.
 
 Be wary of double insertions, as multiple filters can be active at the same
 time.
 
 =item B<db_sql_update_domain>
 
-This query is issued in case the first call to I<db_sql_select_domain> returned
-a B<domain_ref>.  That way, it is possible to update the domain record even if
-it existed already.
+This query runs only if the first invocation of I<db_sql_select_domain> did
+return a B<domain_ref>.  That is meant to update the domain record which
+existed already.
 
 
 =item B<db_sql_insert_msg_ref>
 
 This is the last query in the domain loop.  It can be used to select, insert,
 and update domain data, leaving the preceding three domain queries undefined.
-Or it can use the following two additional variables:
+Or it can use the two additional variables:
 
 =over
 
@@ -319,10 +553,10 @@ The value returned by either I<db_sql_select_domain> or I<db_sql_insert_domain>.
 =back
 
 
-=head2 Log of outgoing messages
+=head2 Storing outgoing messages
 
 These queries consist of an initial query, a loop for each target domain, and
-a final query.  They can use the common variables defined above, and two
+a final query.  They can use the common variables defined above, and three
 additional ones.
 
 =head3 outgoing message variables
@@ -331,7 +565,7 @@ additional ones.
 
 =item B<rcpt_count>
 
-The number of envelope recipient that the message is to be sent to.
+The number of envelope recipients that the message is to be sent to.
 
 =item B<domain>
 
@@ -366,7 +600,7 @@ The From: field contains "postmaster"
 This can additionally use B<local_part> and B<domain> is the
 authenticated user who sent the message.  It is the first query called for each
 message.  It can return two values, that is one row with two columns, that will
-be made available as variables B<user_ref> and B<message_ref> to the remaining
+be available as variables B<user_ref> and B<message_ref> to the remaining
 queries.
 
 
@@ -414,6 +648,177 @@ can adjust from a web form in order to temporarily increase their limits.
 
 =back
 
+=head2 Retrieving values for DMARC aggregate reports
+
+This last group of queries is only used by B<zaggregate>.  Two queries are
+expected to return multiple rows and columns with the data that was stored
+from incoming messages; columns here are named as the corresponding variables
+there.  A third query updates domain timestamp.  The three of them --one per
+subsection-- are described below, although B<zfilter_db>, as a command,
+simulates filtering only, not reporting.  For the rest of the story see
+L<zaggregate(1)>.
+
+=head3 DMARC aggregate domain query
+
+The query B<db_sql_dmarc_agg_domain> selects the domains that deserve an aggregate
+report.  It can use two variables:
+
+=over
+
+=item B<period>
+
+The duration, in seconds, of the reporting interval.  It is the value
+configured as B<honored_report_interval>, possibly forced to be a submultiple
+of 86400 (24 hours).
+
+=item B<period_end>
+
+The end of the period, in seconds since the Unix epoch, UTC.  It is the time
+of the current zaggregate invocation, rounded downward to a multiple of
+B<period>.
+
+=back
+
+This query is expected to return six columns, the first two of which are
+essential, in the order given:
+
+=over
+
+=item B<domain_ref>
+
+Domain key, passed as-is to the next query.
+
+=item B<domain>
+
+Domain name, as written in the aggregate report.  This name is also used to
+look up the following three C<dmarc_r*> values, in case they are missing or
+corrupted, and to validate external report targets.
+
+=item B<last_report>
+
+The end period of the previous report, 0 if it is the first report to this
+domain.  This value is used to skip a domain if its report is due at a future
+interval, to avoid sending already sent data, and the like.
+
+=item B<dmarc_ri>
+
+The report interval for this domain.
+
+=item B<dmarc_rua>
+
+The report targets.
+
+=item B<dmarc_rec>
+
+The DMARC record, used to report the policy published by the domain.
+
+=back
+
+=head3 DMARC aggregate record query
+
+The query B<db_sql_dmarc_agg_record> selects the records, or rows, to be
+reported for a given domain.  It can use four variables:
+
+=over
+
+=item B<domain_ref>
+
+Domain key, as obtained from the previous query.
+
+=item B<domain>
+
+Domain name.
+
+=item B<period_start>
+
+The beginning of the period being reported, in seconds since the Unix epoch,
+UTC.
+
+=item B<period_end>
+
+The end of the period, as above.
+
+=back
+
+This query is expected to return 11 + I<N>*2 columns, where I<N> is the number
+of DKIM signatures reported.  The order of columns is as given below
+(parenthesized names refer to XML tags):
+
+=over
+
+=item B<ip>
+
+Where messages in this row originated from (C<source_ip>).
+
+=item B<count>
+
+Number of messages that this row covers.
+
+=item B<dmarc_dispo>
+
+(C<disposition>)
+
+=item B<dmarc_dkim>
+
+Message's overall DKIM evaluation (C<dkim>).
+
+=item B<dmarc_spf>
+
+Message's overall SPF evaluation (C<spf>).
+
+=item B<dmarc_reason>
+
+The policy-override reason detailed above.  The XML schema provides for a
+comment to supplement the reason.  To add it, put it after the reason but in
+the same column, separated by a space.  That can be done, for example, using
+MySQL's CONCAT function.
+
+=item B<domain>
+
+The author's domain (C<header_from>).  Of course, it turns out to match the
+DMARC domain, but doesn't have to be exactly equal.
+
+
+=item B<spf domain 1>
+
+The domain of envelope sender (scope I<mfrom>).  Only one SPF domain/result
+pair is reported.  Preferably this one, since it is the most widely used
+SPF authentication scope.
+
+=item B<spf result 1>
+
+The corresponding result.
+
+=item B<spf domain 2>
+
+The domain of HELO/EHLO verb (scope I<helo>).  This is the only official SPF
+alternative to envelope sender.  zaggregate reports this second pair of SPF
+values only if it is a pass while the first one is not, or if the result is
+similar but this domain is better aligned with From: than the first domain.
+
+=item B<spf result 2>
+
+The corresponding result.
+
+=item B<dkim domain N>
+
+The Nth signing domain.
+
+=item B<dkim result N>
+
+The corresponding result.
+
+=back
+
+The number I<N> of DKIM pairs may vary from a row to another.  If either
+member is NULL the pair is skipped.
+
+=head3 Set DMARC aggregate query
+
+The query B<db_sql_set_dmarc_agg> updates the I<last_report> using the value of
+I<period_end>.  For practical reasons, it can use exactly the same four
+variables as B<db_sql_dmarc_agg_record>, but is not expected to return
+anything.
 
 =head1 COMMAND LINE OPTIONS
 
@@ -460,12 +865,12 @@ Run the query for each domain.  Before displaying the result, the query itself
 is displayed, even with no I<-v> option.  An option --that is, an argument
 starting with C<->-- marks the end of the domains.
 
-=item B<--set-stats> I<dir> [I<message data>|I<domain>[,I<token>]]
+=item B<--set-stats> I<dir> [I<message data>|I<domain>[/I<token>]]
 
 Specify message data.  The I<dir> argument consists of a single character,
-either C<i> for incoming or C<o> for outgoing.  The I<option-arg>s
-after the it are interpreted as I<message data> if I<domain>[,I<token>] is
-given in its own option (see next option).
+either C<i> for incoming or C<o> for outgoing.  The arguments after that are
+interpreted as I<message data> if option B<--set-stats-domain> is present, or
+as I<domain>[/I<token>] otherwise.
 
 Up to 12 arguments are accepted for I<message data>:
 
@@ -529,17 +934,49 @@ A C<@> can be used as a placeholder for a missing argument not at the end.
 However, domain names have to be supplied explicitly,
 otherwise the call fails with a critical error.
 
-=item B<--set-stats-domain> I<domain>[,I<token>]
+=item B<--set-stats-domain> I<domain>[/I<token>[:value]]... ...
 
 Domain names are given one per argument either after this I<option> or after
-the previous one.  Each name can be followed, without interleaving spaces, by 
-any of C<author>, C<spf>, C<spf_helo>, C<dkim>, C<vbr>, C<rep>, and C<rep_s>,
-as seen for incoming messages.  For C<rep> and C<rep_s>, the token can be
-followed by a colon (C<:>) and the numeric value of C<reputation>.  For C<vbr>,
-the sequence C<vbr[:I<vbr_mv>[:I<vbr_response>]]> is recognized.
+the previous one.  Each domain name can be followed by a slash-separated list
+of tokens, some of which can take a value.  Spaces must be omitted, escaped, or
+quoted so as to have one argument per domain.  Valid tokens are:
 
-A lone C<@> instead of I<domain>[,I<token>] enables the addition of random
-tokens to the following domains that have none.
+=over
+
+=item C<author>
+
+Identifies an author's domain.
+
+=item C<spf>
+
+Identifies an envelope sender's domain (mfrom).  SPF result can be given as
+value.
+
+=item C<spf_helo>
+
+Identifies a helo domain.  SPF result can be given as value.
+
+=item C<dkim>
+
+Identifies a signing domain.  DKIM result can be given as value.
+
+=item C<vbr>
+
+Identifies Vouch By Reference.  The voucher (mv) can be given as value.
+
+=item C<rep> and C<rep_s>
+
+Reputation, with value.
+
+=item C<org>, C<aligned>, and C<nx>
+
+Set corresponding flags, no value.
+
+=item C<dmarc>
+
+Identifies a dmarc domain.  DMARC record can be given as value.
+
+=back
 
 =back
 
@@ -550,7 +987,9 @@ any result from queries.  Hence, some statements are called multiple times.
 =head1 EXAMPLES
 
 These examples use MySQL, assuming the database and configuration given in the
-tarball files F<odbx_example.sql> and F<odbx_example.conf>.
+tarball files F<odbx_example.sql> and F<odbx_example.conf>.  For DMARC, file
+F<odbx_example.sh> contains a few calls to zfilter_db meant to provide some
+data to test zaggregate.
 
 Check what happens receiving a message:
 
@@ -637,6 +1076,10 @@ Alessandro Vesely E<lt>vesely@tana.itE<gt>
 =item B<RFC 6376>
 
 DomainKeys Identified Mail (DKIM) signatures.
+
+=item B<RFC 7489>
+
+Domain-based Message Authentication, Reporting, and Conformance (DMARC).
 
 =item B<RFC 6650>
 

@@ -15,6 +15,8 @@ case $1 in
 				"$stars"
 		fi
 		;;
+	dkimsign)
+		install_options='@DKIMSIGN_MODE@ @PROGRAM_OWNER@';;
 	zdkimfilter.conf.dist)
 		install_options='-m 640 @PROGRAM_OWNER@';;
 	*)

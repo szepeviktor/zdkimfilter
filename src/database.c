@@ -1743,7 +1743,7 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 						od_len = strlen(od);
 					if (sublen >= od_len)
 					{
-						sprintf(prefix_len_buf, "%zu", sublen - org_domain_len);
+						sprintf(prefix_len_buf, "%zu", sublen - od_len);
 						bitflag |= prefix_len_mask_bit;
 					}
 					free(od);
@@ -1977,6 +1977,7 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 	{
 		SET_NUMBER(received_count);
 		SET_NUMBER(signatures_count);
+
 		if (p < safe_stop)
 		{
 			char *msg_st = info->reject? "reject": info->drop? "drop": "accept";
@@ -1986,7 +1987,8 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 			bitflag |= message_status_mask_bit;
 			zeroflag |= message_status_mask_bit;
 		}
-		else if (info->adsp_any && p < safe_stop)
+
+		if (info->adsp_any && p < safe_stop)
 		{
 			char *adsp_st = info->adsp_all? "all":
 				info->adsp_discardable? "discardable": "unknown";

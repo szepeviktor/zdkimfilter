@@ -3353,6 +3353,8 @@ static void verify_message(dkimfl_parm *parm)
 		case DKIM_STAT_NOSIG:
 			// none
 			vh.dkim_domain = dkim_getdomain(dkim);
+
+		case DKIM_STAT_BADSIG: // should be treated as NOSIG...
 			break;
 
 		case DKIM_STAT_NORESOURCE:
@@ -3393,7 +3395,6 @@ static void verify_message(dkimfl_parm *parm)
 		}
 
 		case DKIM_STAT_SYNTAX:
-		case DKIM_STAT_BADSIG:
 		case DKIM_STAT_NOKEY:
 		case DKIM_STAT_CANTVRFY:
 		case DKIM_STAT_REVOKED:
@@ -3605,9 +3606,10 @@ static void verify_message(dkimfl_parm *parm)
 					parm->dyn.stats->dmarc_subdomain = vh.dmarc.found_at_org != 0;
 					parm->dyn.stats->dmarc_dkim = aligned_sig_is_ok;
 					parm->dyn.stats->dmarc_spf = aligned_spf_is_ok & 1;
-					// dmarc_dispo and dmarc_reason are 0
-					if (POLICY_IS_STRICT(vh.policy) && aligned_spf_is_ok == 2)
-						parm->dyn.stats->dmarc_reason = dmarc_reason_other;
+
+					// default values:
+					assert(parm->dyn.stats->dmarc_reason == dmarc_reason_none);
+					assert(parm->dyn.stats->dmarc_dispo == 0);
 				}
 				else
 				{
@@ -3662,6 +3664,8 @@ static void verify_message(dkimfl_parm *parm)
 						log_reason = "dmarc=quarantine policy for";
 						vh.policy_comment = " (QUARANTINE)";
 						deliver_message = 1;
+						if (parm->dyn.stats)
+							parm->dyn.stats->dmarc_dispo = 1;
 					}
 					else
 						log_reason = "adsp=discardable policy:";
@@ -3725,7 +3729,10 @@ static void verify_message(dkimfl_parm *parm)
 						{
 							fl_pass_message(parm->fl, smtp_reason);
 							if (parm->dyn.stats)
+							{
 								parm->dyn.stats->reject = 1;
+								parm->dyn.stats->dmarc_dispo = 2;
+							}
 						}
 						else // drop, and stop filtering
 						{
@@ -3734,12 +3741,23 @@ static void verify_message(dkimfl_parm *parm)
 							if (parm->dyn.stats)
 								parm->dyn.stats->drop = 1;
 						}
-					
+
 						parm->dyn.rtc = 2;
 					}
 				}
 				else if (parm->dyn.stats)
 					parm->dyn.stats->dmarc_reason = dmarc_reason_local_policy;
+			}
+			else if (POLICY_IS_DMARC(vh.policy) &&
+				aligned_sig_is_ok == 0 && aligned_spf_is_ok == 2)
+			// policy did not fail only because of BOFHSPFFROM
+			{
+				if (parm->z.verbose >= 3)
+					fl_report(LOG_INFO,
+						"id=%s: %s pass only because BOFHSPFFROM",
+						parm->dyn.info.id, vh.dkim_domain);
+				if (parm->dyn.stats)
+					parm->dyn.stats->dmarc_reason = dmarc_reason_other;
 			}
 		}
 	}

@@ -373,8 +373,9 @@ A-R.  This option may prevent such behavior.
 =item B<save_from_anyway> bool
 
 Use the From: header field even if it's not authenticated.  This allows to 
-insert more messages in the database. 
-
+insert more messages and domains in the database.  This setting is overridden
+by B<publicsuffix>, which implies even more domains can be stored although
+unauthenticated.
 
 =item B<add_a_r_anyway> bool
 
@@ -416,6 +417,9 @@ Public Suffix List as maintained by publicsuffix.org.
 The default value is NULL, which may prevent checking DMARC alignment, as well
 as discovering DMARC policy records published by the organizational domain
 (also known as registered domain) if the author domain is a subdomain thereof.
+
+Setting this value also enables storage of unauthenticated domains, in a way
+similar to B<save_from_anyway>.
 
 =item B<honored_report_interval>
 

@@ -3030,7 +3030,7 @@ AT_SETUP([DMARC pass SPF FROM (non standard) by subdomain])
 ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([honor_dmarc])
 AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([FROM], [subdomain.author.example])], [user@author.example])])
-ZF_CTLBATCHDMARC
+ZF_CTLBATCHDMARC([], [ZF_LOG([author.example pass only because BOFHSPFFROM])])
 AT_CHECK(
 head -n 2 mail, 0,
 [Authentication-Results: test.example;
@@ -3081,7 +3081,7 @@ AT_SETUP([DMARC sub SPF FROM (non standard) by domain])
 ZF_KEYFILE([ZF_DMARC([subdomain.author.example], [p=reject])])
 ZF_CONFDMARC([honor_dmarc])
 AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([FROM], [author.example])], [user@subdomain.author.example])])
-ZF_CTLBATCHDMARC
+ZF_CTLBATCHDMARC([], [ZF_LOG([subdomain.author.example pass only because BOFHSPFFROM])])
 AT_CHECK(
 head -n 2 mail, 0,
 [Authentication-Results: test.example;

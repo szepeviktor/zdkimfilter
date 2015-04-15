@@ -1,0 +1,107 @@
+=pod
+
+=head1 NAME
+
+zaggregate - a DMARC aggregate report writer for zfilter database
+
+=head1 SYNOPSIS
+
+ORG_EMAIL=I<email-addr> B<zaggregate> [I<option> [I<option-arg>]]
+
+=head1 DESCRIPTION
+
+B<zaggregate> reads relevant message data from the database, using the queries
+configured as described in L<zfilter_db(1)>, and formats them according to the
+XML schema described in L<RFC 7489, Appendix C>.
+
+
+
+=head1 OPTIONS
+
+=over
+
+=item B<-f> I<config-filename>
+
+Specify a different configuration file.
+
+=item B<-l>
+
+Log to syslog (LOG_MAIL facility) rather than stderr.
+
+
+=item B<-t>
+
+
+=item B<-u>
+
+
+=item B<-v>
+
+
+=item B<-z>
+
+
+=item B<--pipe>
+
+
+=item B<--help>
+
+Print usage and exit.
+
+=item B<--version>
+
+Print version and exit.
+
+=item B<--dry-run>
+
+=item B<--fake-dns>
+
+=back
+
+
+=head1 FILES
+
+
+=over
+
+=item F<@COURIER_SYSCONF_INSTALL@/filters/zdkimfilter.conf>
+
+Default configuration file.
+
+=back
+
+
+=head1 ENVIRONMENT VARIABLES
+
+
+=over
+
+=item REMOTE_ADDR
+
+If this variable is set, zdkimfilter uses it for database logs as the client's
+C<ip> variable.
+
+=back
+
+=head1 AUTHOR
+
+
+Alessandro Vesely E<lt>vesely@tana.itE<gt>
+
+
+=head1 SEE ALSO
+
+=over
+
+=item B<RFC 7489>
+
+Domain-based Message Authentication, Reporting, and Conformance (DMARC).
+
+=item B<zfilter_db>(1)
+
+Detailed explanation of queries and their expected outcome.
+
+=back
+
+=cut
+

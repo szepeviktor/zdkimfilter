@@ -117,6 +117,9 @@ public suffix list (e.g. Debian publicsuffix) --used if configured
 
 Bug fixes and other changes:
 ===========================
+Column 70 wrapping of From:, To:, Cc:, and Reply-To: now occurs before signing.
+This uses the same algorithm and code used by Courier's esmtpclient.
+
 OpenDKIM bug 219 caused a DNS error to look like a temperror.  It is fixed in
 OpenDKIM v2.10.1.  A workaround is compiled in when in zdkimfilter v1.5 is
 configured with an older version of OpenDKIM.

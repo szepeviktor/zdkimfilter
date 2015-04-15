@@ -2,10 +2,10 @@
 
 @SET_MAKE@
 
-man_MANS = zdkimfilter.conf.5 zdkimfilter.8 zfilter_db.1 dkimsign.1 redact.1
+man_MANS = zdkimfilter.conf.5 zdkimfilter.8 zfilter_db.1 dkimsign.1 redact.1 zaggregate.1
 
 CLEANFILES = zdkimfilter.conf.pod zdkimfilter.conf.5 zdkimfilter.8 \
- zfilter_db.1 dkimsign.1 redact.1
+ zfilter_db.1 dkimsign.1 redact.1 zaggregate.1
 
 EXTRA_DIST = resend-with-preheader.pl resend-with-preheader.sh
 

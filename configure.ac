@@ -61,6 +61,19 @@ AC_ARG_ENABLE([allfilter],
 AC_SUBST([zdkimfilter_mode])
 
 
+# setuid dkimsign
+DKIMSIGN_MODE=""
+AC_ARG_ENABLE([dkimsign-setuid],
+	[[  --enable-dkimsign-setuid      dkimsign run as Courier user
+  --disable-dkimsign-setuid     normal install (this is the default)]],
+	[
+	if test "$enableval" = "yes" -o "$enableval" = "on" -o "$enableval" = "all"; then
+		DKIMSIGN_MODE="-m 4755"
+	fi
+	])
+AC_SUBST([DKIMSIGN_MODE])
+
+
 # find courier-config and get variables
 AC_PATH_PROG([COURIER_CONFIG], [courier-config], [no],
 	[${PATH}])
@@ -561,6 +574,7 @@ AC_CONFIG_FILES([Makefile
                  etc/dkimsign.pod
                  etc/redact.pod
                  etc/zfilter_db.pod
+                 etc/zaggregate.pod
                  tests/atlocal
                  tests/Makefile
                 ])
