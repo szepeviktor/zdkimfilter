@@ -3212,21 +3212,21 @@ Subject: Test address wrapping
 ], [])
 AT_CLEANUP
 
-# 
-AT_SETUP([Real DNS queries: vouch, reputation])
-AT_CHECK(
-[TESTmyvbr --query dwltest.com dwl.spamhaus.org
-],
-0,
-[rtc = 0 (noerror) "all"
-],
-[])
-AT_CHECK(
-[TESTmyrep test3 example.com signer.example reptest.tana.it
-],
-0,
-[rtc = 0, rep = 3.
-],
-[])
-AT_CLEANUP
-
+# no real DNS query here...
+dnl AT_SETUP([Real DNS queries: vouch, reputation])
+dnl AT_CHECK(
+dnl [TESTmyvbr --query dwltest.com dwl.spamhaus.org
+dnl ],
+dnl 0,
+dnl [rtc = 0 (noerror) "all"
+dnl ],
+dnl [])
+dnl AT_CHECK(
+dnl [TESTmyrep test3 example.com signer.example reptest.tana.it
+dnl ],
+dnl 0,
+dnl [rtc = 0, rep = 3.
+dnl ],
+dnl [])
+dnl AT_CLEANUP
+dnl 
