@@ -68,48 +68,53 @@ details.
 =head2 Verifying
 
 Messages not qualified as I<RELAYCLIENT> are candidate for DKIM verification.
-zdkimfilter sorts signatures by domain, putting author domain first, followed
-by whitelisted domains, domains claiming a vouch by a trusted voucher in
-VBR-Info fields, and domains authenticated via SPF.  It then verifies one
-signature per domain, until it finds a valid signature by a domain that is
-whitelisted or verifies a VBR, if there are any, or any signature otherwise.
-If configured to report all signatures, it tries to verify all of them.
-Normally, there are only a few signatures in each message, so these settings
-don't actually change much.  However, messages having an unreasonable number of
-signatures are rejected.  That's the only rejection done by default.
+zdkimfilter sorts signatures by domain, putting author domain and whitelisted
+domains first.  It then verifies each domain's signatures until a valid one.
+If the database is used, an attempt is made to authenticate each domain unless
+I<verify_one_domain> is set.  If I<report_all_sigs> is set, all signatures are
+processed.  Normally, there are only a few signatures in each message, so these
+settings don't actually change much.  However, messages having an unreasonable
+number of signatures are rejected (I<max_signatures>).  That's the only
+rejection done by default.
 
-It is possible to configure ADSP rejection.  It is not advisable, because a
-user of a domain that advertizes C<dkim=all> can subscribe to a mailing list
-that invalidates their signatures.  Rejecting that mail would then cause a
-local user to get unsubscribed from such mailing list.  Promptly whitelisting
-senders is crucial if ADSP is enabled.  To whitelist a domain, have the
-I<db_sql_whitelisted> query return a value of 2 or higher for the relevant
-domain name.  The domain name has to be authenticated for that to work, though.
-The I<honor_author_domain> configuration option enables rejecting or dropping
-messages according to ADSP.  The I<reject_on_nxdomain> configuration option
-enables rejecting messages with an invalid C<From:> header field.
-
-The result of Courier's SPF check is read from the first two I<Received-SPF>
-header fields found in the message.  If SPF is not configured in Courier, turn
-off this behavior with the I<no_spf> configuration option, to avoid spurious
-authentications.  SPF authentication is considered equivalent to DKIM, as far
-as whitelisting, logging, and indicating the results are concerned.
+Messages can be rejected or dropped according to DMARC, ADSP, and NXDOMAIN
+configurations, summarized below, and also according to an I<action_header>.
+The latter is meant to be a last resort for messages caught by anti-virus or
+anti-phishing filters that add a given header field instead of discarding the
+message tout-court.  For I<action_header>, whitelisting can be tuned by setting
+I<dnswl_worthiness_pass> and similar options.
 
 By default, zdkimfilter adds an C<Authentication-Results:> (A-R) header field
 only when there are noticeable results to report.  It uses the host name that
 Courier used when adding its C<Received:> field.  Other A-R fields with that
-same name get zapped from the message, if found.  Thus, it is safe to use such
-fields for dealing with ADSP failures on delivery: The I<dkim-adsp> tag can get
-the values C<nxdomain>, C<pass>, C<fail>, and C<discard>.
+same name get zapped from the message, if found.
 
 After the message has been dealt with, zdkimfilter logs to the database the
-list of authenticated domains.  See L<zfilter_db(1)> for the details.
+results.  See L<zfilter_db(1)> for the details.
 
 =head2 DMARC and ADSP policies
 
-During message verification, zdkimfilter learns the author's domain and
-organizational domain.  Those are, respectively, the domain part of C<From:>
-and the possibly shorter domain from I<publicsuffix>, if configured.
+These policies deal with the C<From:> domain.  It is not advisable to honor
+them indiscriminately, because users of a domain with a strict policy can
+subscribe to a mailing list that invalidates their signatures.  Rejecting that
+mail would then cause local users to be unsubscribed from such mailing list.
+
+Options I<honor_dmarc> and I<honor_author_domain> set to 0 or 1 the
+corresponding flags.  Then a query I<db_sql_domain_flags> can increase or
+decrease those values.  A DMARC record is looked up unless DMARC flag is less
+than ADSP's.  If no record is found, an ADSP record is looked up unless ADSP
+flag is less than DMARC's.  Thus, if the flags are equal an ADSP record is
+looked up for domains that still don't have DMARC.  Then, if its flag is
+greater than 0, the policy is honored.  However, if an authenticated domain is
+whitelisted, vouched, or DNSWL allowed, the message is delivered even though
+the policy failed.
+
+In order to look up a DMARC record correctly, the Public Suffix List file must
+be available and configured in I<publicsuffix>.  In addition, to comply with
+DMARC, aggregate reports should be sent and received; see L<zaggregate(1)>.
+
+Record lookup of either policy is not going to work for non-existing domains.
+Rejecting those messages can be enabled by I<reject_on_nxdomain>.
 
 =head1 OPTIONS
 
@@ -139,9 +144,10 @@ Documented in I<esmtpd>.
 
 =back
 
-There is no setting that prevents modifying whitespace around addresses by the
-STMP client.  It is recommended to set B<header_canon_relaxed> (see
-L<zdkimfilter.conf(5)>).
+DMARC requires SPF, besides DKIM.  To enable SPF checking in bofh see
+L<courier(8)>.  The result of Courier's SPF check is read from I<Received-SPF>
+header fields in the message.  If SPF is not configured in Courier, turn
+off this behavior with I<no_spf>, to avoid spurious authentications.
 
 
 =head2 COMMANDLINE OPTIONS
@@ -269,6 +275,14 @@ For retrieving an obfuscated user-id.
 =item B<RFC 6376>
 
 DomainKeys Identified Mail (DKIM) signatures.
+
+=item B<RFC 7208>
+
+Sender Policy Framework (SPF)
+
+=item B<RFC 7489>
+
+Domain-based Message Authentication, Reporting, and Conformance (DMARC).
 
 =item B<RFC 5451>
 

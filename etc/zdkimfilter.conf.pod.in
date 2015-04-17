@@ -535,8 +535,8 @@ Default: reputation_pass = -32768
 
 =item B<reputation_root> string
 
-The host to be queried for reputation.  Default as defined in libopendkim. 
-See http://www.dkim-reputation.org. 
+The host to be queried for reputation.  Apparently defunct.  Perhaps can be
+used for local whitelisting...
 
 
 =item B<trusted_vouchers> array
@@ -604,7 +604,6 @@ example:
 =over
 
 =item -allow=dnswl.local=list.dnswl.org,DNSWL,
-
 
 =back
 

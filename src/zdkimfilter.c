@@ -1666,9 +1666,9 @@ typedef struct verify_parms
 
 	int policy;
 	int presult;
+	int do_adsp, do_dmarc;
 	size_t received_spf;
 
-	uint8_t do_adsp, do_dmarc;
 	unsigned int org_domain_in_dwa: 1;
 	unsigned int aligned_spf_pass: 1;
 	unsigned int domain_flags:1;
@@ -3441,7 +3441,7 @@ static void verify_message(dkimfl_parm *parm)
 		if (vh.presult != 0 && vh.presult != 3 && vh.do_dmarc <= vh.do_adsp)
 			vh.presult = my_get_adsp(vh.dkim_domain, &vh.policy);
 		if (vh.presult <= -2 &&
-			(vh.do_dmarc || vh.do_adsp || parm->z.reject_on_nxdomain))
+			(vh.do_dmarc > 0 || vh.do_adsp > 0 || parm->z.reject_on_nxdomain))
 		{
 			if (parm->z.verbose >= 3)
 				fl_report(LOG_ERR,
@@ -3641,7 +3641,7 @@ static void verify_message(dkimfl_parm *parm)
 					if (parm->dyn.stats)
 						parm->dyn.stats->dmarc_reason = dmarc_reason_sampled_out;
 				}
-				else if ((vh.do_dmarc || vh.do_adsp) ||
+				else if ((vh.do_dmarc > 0 || vh.do_adsp > 0) ||
 					parm->z.reject_on_nxdomain && vh.presult == 3)
 				{
 					char const *log_reason, *smtp_reason = NULL;
