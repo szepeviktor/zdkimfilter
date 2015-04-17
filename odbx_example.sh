@@ -6,7 +6,7 @@
 # to populate it.  After a few minutes, run a command like the following to
 # see aggregate reports:
 #
-# ORG_EMAIL=foo@example.edu src/zaggregate -f odbx_example.conf
+# ORG_EMAIL=foo@example.edu src/zaggregate -vf odbx_example.conf
 
 ZFILTER_DB=src/zfilter_db
 

@@ -188,6 +188,8 @@ typedef struct stats_info
 	unsigned dmarc_found: 1;
 	unsigned dmarc_dkim: 1; // 0=fail
 	unsigned dmarc_spf: 1;
+	unsigned dkim_any: 1; // any signature seen
+	unsigned spf_any: 1; // any Received-SPF seen
 	unsigned dmarc_dispo: 2; // 0=none, 1=quarantine, 2=reject (as honored)
 	unsigned dmarc_reason: 3; // dmarc_reason
 	unsigned dmarc_subdomain: 1;

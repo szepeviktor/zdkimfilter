@@ -126,8 +126,8 @@ Default configuration file.
 
 =item REMOTE_ADDR
 
-If this variable is set, zdkimfilter uses it for database logs as the client's
-C<ip> variable.
+If this variable is set, the zdkimfilter child uses it for storing the client's
+C<ip> variable to the database.
 
 =back
 

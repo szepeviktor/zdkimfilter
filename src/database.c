@@ -1587,10 +1587,10 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 	} while (0)
 
 	/* dmarc_{dkim,spf,dispo,reason} are message variables */
-	CONST_STRING(dmarc_dkim, info->dmarc_found? info->dmarc_dkim?
-		"pass": "fail": "none");
-	CONST_STRING(dmarc_spf, info->dmarc_found? info->dmarc_spf?
-		"pass": "fail": "none");
+	CONST_STRING(dmarc_dkim, info->dmarc_found && info->dkim_any?
+		info->dmarc_dkim? "pass": "fail": "none");
+	CONST_STRING(dmarc_spf, info->dmarc_found && info->spf_any?
+		info->dmarc_spf? "pass": "fail": "none");
 	CONST_STRING(dmarc_dispo, info->dmarc_dispo == 0? "none":
 		info->dmarc_dispo == 1? "quarantine": "reject");
 	char *reason;
@@ -2482,6 +2482,7 @@ int main(int argc, char*argv[])
 
 			domain_prescreen **pdps = &stats.domain_head;
 			size_t prelength = sizeof(domain_prescreen) + maxarglen + 1;
+			size_t dkim_order = 0;
 			for (int i = set_stats_domain; i < argc; ++i)
 			{
 				char *arg = argv[i];
@@ -2540,6 +2541,7 @@ int main(int argc, char*argv[])
 							dps->dkim = rand()/32 % 7;
 						dps->u.f.sig_is_ok = dps->dkim == dkim_pass;
 						dps->nsigs = rand() % 2 + 1;
+						dps->dkim_order = ++dkim_order;
 					}
 					else if (strcmp(arg, "vbr") == 0)
 					{

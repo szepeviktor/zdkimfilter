@@ -131,6 +131,9 @@ Log temperrors at verbosity >= 3; permerrors at verbosity >= 4.
 
 Have log files line-buffered, to avoid garbled lines.
 
+Added configure --enable-dkimsign-setuid switch, and make V=0 for less verbose
+build.
+
 Format of zfilter_db test arguments: use slash (/) instead of comma (,) to
 separate stats tokens, so as to allow commas in tokens.  Thus,
 	--set-stats dir [message data|domain[,token]]

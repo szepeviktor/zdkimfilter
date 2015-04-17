@@ -1661,7 +1661,7 @@ typedef struct verify_parms
 
 	int dnswl_count;
 
-	// number of domains, elements of domain_ptr
+	// number of DKIM signing domains, elements of domain_ptr
 	int ndoms;
 
 	int policy;
@@ -3606,6 +3606,8 @@ static void verify_message(dkimfl_parm *parm)
 					parm->dyn.stats->dmarc_subdomain = vh.dmarc.found_at_org != 0;
 					parm->dyn.stats->dmarc_dkim = aligned_sig_is_ok;
 					parm->dyn.stats->dmarc_spf = aligned_spf_is_ok & 1;
+					parm->dyn.stats->dkim_any = vh.ndoms > 0;
+					parm->dyn.stats->spf_any = vh.received_spf > 0;
 
 					// default values:
 					assert(parm->dyn.stats->dmarc_reason == dmarc_reason_none);
