@@ -1535,21 +1535,6 @@ static char*date_convert(char const *date)
 #endif
 
 
-static char *get_dkim_result(dkim_result r)
-{
-	switch (r)
-	{
-		default:
-		case dkim_none: return "none";
-		case dkim_pass: return "pass";
-		case dkim_fail: return "fail";
-		case dkim_policy: return "policy";
-		case dkim_neutral: return "neutral";
-		case dkim_temperror: return "temperror";
-		case dkim_permerror: return "permerror";
-	}
-}
-
 static char *get_spf_result(spf_result r)
 {
 	switch (r)
@@ -2741,6 +2726,7 @@ void db_set_authenticated_user(db_work_area *dwa,
 	char const *local_part, char const *domain) {}
 void db_set_client_ip(db_work_area *dwa, char const *ip) {}
 void db_set_stats_info(db_work_area* dwa, stats_info *info) {}
+void db_set_org_domain(db_work_area *dwa, char *org_domain) {}
 #if defined TEST_MAIN
 int main()
 {

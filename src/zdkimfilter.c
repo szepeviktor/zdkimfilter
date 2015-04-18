@@ -42,7 +42,11 @@ the resulting work.
 #include <syslog.h> // for LOG_DEBUG,... constants
 #include <stdint.h>
 #include <fcntl.h>
+
+// name conflict with older opendkim versions
+#define dkim_policy unsupported_dkim_policy
 #include <opendkim/dkim.h>
+#undef dkim_policy
 
 #include <stddef.h>
 #include <time.h>
@@ -1302,7 +1306,9 @@ copy_replacement(dkimfl_parm *parm, FILE *fp, FILE *fp_out, replacement *repl)
 			{
 				in = sizeof buf < repl->length? sizeof buf: repl->length;
 				repl->length -= in;
-				fread(buf, 1, in, fp);
+				if (fread(buf, 1, in, fp) != in)
+					fl_report(LOG_ERR,
+						"cannot advance %zu in mail file: %s", in, strerror(errno));
 			}
 
 			repl = repl->next;
@@ -1673,6 +1679,7 @@ typedef struct verify_parms
 	unsigned int aligned_spf_pass: 1;
 	unsigned int domain_flags:1;
 	unsigned int have_spf_pass:1;
+	unsigned int have_trusted_voucher:1;
 
 } verify_parms;
 
@@ -1937,6 +1944,7 @@ static int domain_flags(verify_parms *vh)
 					{
 						dps->domain_val += vbr_factor * (vbr_count - trust) + 200;
 						dps->u.f.vbr_is_trusted = 1;
+						vh->have_trusted_voucher = 1;
 					}
 				}
 			}
@@ -2184,13 +2192,17 @@ static inline dkim_result sig_is_good(DKIM_SIGINFO *const sig)
 		rc == DKIM_SIGERROR_OK)
 			return dkim_pass;
 
-	// idea: if it's wrong in the DNS it is an error, otherwise a failure.
-	if ((sig_flags & DKIM_SIGFLAG_PROCESSED) != 0 &&
-		rc == DKIM_SIGERROR_KEYFAIL)
-			return dkim_temperror;
+	// we didn't process this sig
+	if ((sig_flags & DKIM_SIGFLAG_PROCESSED) == 0 ||
+		rc == DKIM_SIGERROR_UNKNOWN && bh == DKIM_SIGBH_UNTESTED)
+			return dkim_none;
 
+	// idea: if it's wrong in the DNS it is an error, otherwise a failure.
 	switch (rc)
 	{
+		case DKIM_SIGERROR_KEYFAIL:
+			return dkim_temperror;
+
 		case DKIM_SIGERROR_NOKEY:
 		case DKIM_SIGERROR_DNSSYNTAX:
 		case DKIM_SIGERROR_KEYVERSION:
@@ -2224,11 +2236,12 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	* run all sigs if any of the following is true:
 	*  - all of them are to be reported on the message
 	*  - we use a database and report them there
+	*  - we have trusted vouchers to check
 	*  - we need reputation to accept the message
 	*/
 	int const verify_all = do_all ||
 		!vh->parm->z.verify_one_domain &&
-		(vh->parm->dwa != NULL ||
+		(vh->parm->dwa != NULL || vh->have_trusted_voucher ||
 			vh->parm->dyn.action_header != NULL && reputation_root);
 
 	int do_more_sigs = 1;
@@ -2904,12 +2917,25 @@ static int print_signature_resinfo(FILE *fp, domain_prescreen *dps, int nsig,
 		return 0;
 
 	int const is_test = (sig_flags & DKIM_SIGFLAG_TESTKEY) != 0;
+	dkim_result dr = sig_is_good(sig);
+	char const *result = get_dkim_result(dr), *err = NULL;
+
+	if (dr == dkim_neutral || dr == dkim_fail)
+	{
+		unsigned int const bh = dkim_sig_getbh(sig);
+		DKIM_SIGERROR const rc = dkim_sig_geterror(sig);
+		if (rc == DKIM_SIGERROR_OK)
+			if ((sig_flags & DKIM_SIGFLAG_PASSED) != 0 &&
+				bh == DKIM_SIGBH_MISMATCH)
+					err = "body hash mismatch";
+			else
+				err = "bad signature";
+		else
+			err = dkim_sig_geterrorstr(rc);
+	}
+
+#if 0
 	char const *const failresult = is_test? "neutral": "fail";
-	char const *result = NULL, *err = NULL;
-
-	unsigned int const bh = dkim_sig_getbh(sig);
-	DKIM_SIGERROR const rc = dkim_sig_geterror(sig);
-
 	switch (rc)
 	{
 		case DKIM_SIGERROR_OK:
@@ -2941,6 +2967,7 @@ static int print_signature_resinfo(FILE *fp, domain_prescreen *dps, int nsig,
 			err = dkim_sig_geterrorstr(rc);
 			break;
 	}
+#endif
 
 	fprintf(fp, ";\n  dkim=%s ", result);
 

@@ -91,6 +91,21 @@ typedef enum dkim_result
 	dkim_permerror
 } dkim_result;
 
+static inline char *get_dkim_result(dkim_result r)
+{
+	switch (r)
+	{
+		default:
+		case dkim_none: return "none";
+		case dkim_pass: return "pass";
+		case dkim_fail: return "fail";
+		case dkim_policy: return "policy";
+		case dkim_neutral: return "neutral";
+		case dkim_temperror: return "temperror";
+		case dkim_permerror: return "permerror";
+	}
+}
+
 typedef struct domain_prescreen
 {
 	int sigval;       // multiple uses: index, verified sigs

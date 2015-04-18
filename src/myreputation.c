@@ -37,7 +37,11 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+
+// name conflict with older opendkim versions
+#define dkim_policy unsupported_dkim_policy
 #include <opendkim/dkim.h>
+#undef dkim_policy
 
 #if defined HAVE_SYS_TYPES_H
 #include <sys/types.h>

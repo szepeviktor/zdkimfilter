@@ -34,7 +34,11 @@ directory.  Two files per report, with the same base name and different
 extensions.  The base name is composed according to DMARC specification, that
 is:
 
-  receiver "!" domain "!" period_start "!" period_end [ "!" unique-id ]
+=over
+
+receiver "!" domain "!" period_start "!" period_end [ "!" unique-id ]
+
+=back
 
 where C<receiver> is the domain part of the ORG_EMAIL environment variable,
 C<domain> is the one where the DMARC record was retrieved from, period

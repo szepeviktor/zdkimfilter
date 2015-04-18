@@ -2908,6 +2908,7 @@ ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
 AT_CLEANUP
 
 AT_SETUP([DMARC failed reject honored from database])
+ZF_REQUIRE_OPENDBX
 ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([db_sql_domain_flags author.example:0:1:1])
 AT_DATA([mail], [ZF_MESSAGE])
@@ -2916,6 +2917,7 @@ ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
 AT_CLEANUP
 
 AT_SETUP([DMARC failed subdomain honored from database])
+ZF_REQUIRE_OPENDBX
 ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([db_sql_domain_flags author.example:0:1:1])
 AT_DATA([mail], [ZF_MESSAGE_AUTH([], [user@subdomain.author.example])])
@@ -2924,6 +2926,7 @@ ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
 AT_CLEANUP
 
 AT_SETUP([DMARC reject not honored if whitelisted])
+ZF_REQUIRE_OPENDBX
 ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([honor_dmarc
 db_sql_whitelisted sender.example:3
