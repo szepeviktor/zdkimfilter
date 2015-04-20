@@ -104,8 +104,8 @@ return 0; (void)query, (void)len_d, (void)len_sub, (void)parse_fn, (void)parse_a
 
 	if (rc < 0)
 	{
-		if (h_errno != HOST_NOT_FOUND)
-			return h_errno == TRY_AGAIN? -2: -3;
+		if (h_errno == NO_DATA)
+			return 0;
 
 		// check the base domain exists
 		if (len_sub == 0)
@@ -113,11 +113,35 @@ return 0; (void)query, (void)len_d, (void)len_sub, (void)parse_fn, (void)parse_a
 
 		len_d -= len_sub;
 		query_cmp = query + len_sub;
-		rc = res_query(query_cmp, 1 /* Internet */, qtype = 2 /* NS */,
-			buf.answer, sizeof buf.answer);
-		if (rc < 0)
-			return h_errno == TRY_AGAIN? -2:
-				h_errno == HOST_NOT_FOUND? -4: -3;
+
+		static const int try_qtype[] =
+		{
+			1,  // A
+			28, // AAAA
+			2,  // NS
+			15, // MX
+			6   // SOA
+		};
+		for (size_t t = 0; t < sizeof try_qtype/ sizeof try_qtype[0]; ++t)
+		{
+			rc = res_query(query_cmp, 1 /* Internet */, qtype = try_qtype[t],
+				buf.answer, sizeof buf.answer);
+			if (rc >= 0)
+				break;
+
+			int my_h_errno = h_errno;
+			if (my_h_errno == NO_DATA)
+				return 0;
+
+			if (my_h_errno == HOST_NOT_FOUND)
+				return -4;
+		}
+
+#if defined TEST_MAIN
+		if (isatty(fileno(stdout)))
+			printf("tried qtype=%d, rc=%d\n", qtype, rc);
+#endif
+		if (rc < 0) return -2;
 	}
 
 	size_t ancount;
@@ -143,6 +167,8 @@ return 0; (void)query, (void)len_d, (void)len_sub, (void)parse_fn, (void)parse_a
 		ns_get16(cp) != qtype ||
 			ns_get16(cp + INT16SZ) != 1) // qclass
 				return -3;
+
+	if (qtype != 16 /* TXT */) return 0;
 
 	cp += 2*INT16SZ;
 
@@ -853,7 +879,7 @@ static inline int nqr_to_int(int p)
 {
 	if (p == 'q') return DMARC_POLICY_QUARANTINE;
 	if (p == 'r') return DMARC_POLICY_REJECT;
-	return 0;
+	return DMARC_POLICY_NONE;
 }
 
 int verify_dmarc_addr(char const *poldo, char const *rcptdo,
@@ -962,7 +988,7 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
 		// check subdomain policy that may apply
 		// don't check domains of rua addresses: do once on sending
 		dmarc->found_at_org = found_at_org;
-		dmarc->effective_p = 4 |
+		dmarc->effective_p =
 			nqr_to_int(found_at_org && dmarc->sp? dmarc->sp: dmarc->p);
 	}
 	else
@@ -974,17 +1000,40 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
 	return rtc == -4? 3: rtc >= 0? rtc != 1: rtc;
 }
 
+char const *presult_explain(int rtc)
+{
+	if (rtc == 0) return "found";
+	if (rtc == 1) return "not found";
+	if (rtc == 3) return "NXDOMAIN";
+	if (rtc == -1) return "internal error";
+	if (rtc == -2) return "DNS temperror";
+	if (rtc == -3) return "garbled DNS";
+	return "unknown error";
+}
+
 #if defined TEST_MAIN && ! defined NO_DNS_QUERY
 
-static char const *rtc_explain(int rtc)
+static void disp_dmarc(dmarc_rec *dmarc)
 {
-	if (rtc == 0) return "found, response given";
-	if (rtc == 1) return "domain exists, but no adsp retrieved";
-	if (rtc == 3) return "NXDOMAIN";
-	if (rtc == -1) return "caller's error";
-	if (rtc == -2) return "temporary error (includes SERVFAIL)";
-	if (rtc == -3) return "bad DNS data or other error";
-	return "???????";
+	char *bad = NULL, *rua = NULL, *rua2 = NULL;
+	char *wrec = write_dmarc_rec(dmarc);
+	if (dmarc->rua)
+	{
+		rua2 = strdup(dmarc->rua);
+		rua = adjust_rua(&dmarc->rua, &bad);
+	}
+
+	printf(
+		"rewritten as: \"%s\"\n", wrec? wrec: "");
+	if (rua2) printf(
+		"rua:          \"%s\"\n"
+		"rewritten as: \"%s\"\n"
+		"and bad URI:  \"%s\"\n",
+			rua2, rua? rua: "", bad? bad: "");
+	free(rua);
+	free(bad);
+	free(wrec);
+	free(rua2);
 }
 
 int main(int argc, char *argv[])
@@ -1001,28 +1050,11 @@ int main(int argc, char *argv[])
 				int rtc = parse_dmarc_rec(&dmarc, argv[i]);
 				if (rtc == 0)
 				{
-					char *bad = NULL, *rua = NULL, *rua2 = NULL;
-					char *wrec = write_dmarc_rec(&dmarc);
-					if (dmarc.rua)
-					{
-						rua2 = strdup(dmarc.rua);
-						rua = adjust_rua(&dmarc.rua, &bad);
-					}
 					if (i > 2)
 						putchar('\n');
 					printf(
-						"record:       \"%.20s%s\"\n"
-						"rewritten as: \"%s\"\n",
-							argv[i], more, wrec? wrec: "");
-					if (rua2) printf(
-						"rua:          \"%s\"\n"
-						"rewritten as: \"%s\"\n"
-						"and bad URI:  \"%s\"\n",
-							rua2, rua? rua: "", bad? bad: "");
-					free(rua);
-					free(bad);
-					free(wrec);
-					free(rua2);
+						"record:       \"%.20s%s\"\n", argv[i], more);
+					disp_dmarc(&dmarc);
 				}
 				else printf("bad record %.20s%s\n", argv[i], more);
 			}
@@ -1031,13 +1063,20 @@ int main(int argc, char *argv[])
 		{
 			int policy = 0;
 			char *a = argv[i];
-			if (a[0] == '-' && strchr("rkp", a[1]))
+			if (a[0] == '-' && strchr("rkp", a[1]) && a[2] == 0)
 			{
 				set_adsp_query_faked(a[1]);
-				a += 2;
+				continue;
 			}
-			int rtc = my_get_adsp(a, &policy);
-			printf("rtc = %d %s, policy = %d\n", rtc, rtc_explain(rtc), policy);
+			dmarc_rec dmarc;
+			memset(&dmarc, 0, sizeof dmarc);
+			int rtc = get_dmarc(a, NULL, &dmarc);
+			printf("rtc = %d %s\n", rtc, presult_explain(rtc));
+			if (rtc == 0)
+				disp_dmarc(&dmarc);
+			rtc = my_get_adsp(a, &policy);
+			printf("rtc = %d %s, policy = %d\n\n",
+				rtc, presult_explain(rtc), policy);
 		}
 	}
 	else

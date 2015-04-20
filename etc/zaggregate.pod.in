@@ -43,9 +43,9 @@ receiver "!" domain "!" period_start "!" period_end [ "!" unique-id ]
 where C<receiver> is the domain part of the ORG_EMAIL environment variable,
 C<domain> is the one where the DMARC record was retrieved from, period
 boundaries are expressed as seconds since Unix epoch, UTC, and C<unique-id>
-depends on option I<-u>.  The first file has an F<.env> extension, and contains
+depends on option I<-u>.  The first file has an C<.env> extension, and contains
 the environment variables described below.  The second file contains the
-report; its extension is either F<.xml> or F<.xml.gz.b64> depending on option
+report; its extension is either C<.xml> or C<.xml.gz.b64> depending on option
 I<-z>.
 
 
@@ -158,8 +158,8 @@ they are written, one per line, to a F<*.env> file.
 =item FILENAME
 
 The report filename.  When I<-z> is used, the real filename gets an additional
-F<.b64> extension, but the environment variable only has F<.gz>.  Otherwise the
-extension is just F<.xml>.
+C<.b64> extension, but the environment variable only has C<.gz>.  Otherwise the
+extension is just C<.xml>.
 
 =item CONTENT_TYPE
 

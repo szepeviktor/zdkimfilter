@@ -82,12 +82,13 @@ configurations, summarized below, and also according to an I<action_header>.
 The latter is meant to be a last resort for messages caught by anti-virus or
 anti-phishing filters that add a given header field instead of discarding the
 message tout-court.  For I<action_header>, whitelisting can be tuned by setting
-I<dnswl_worthiness_pass> and similar options.
+I<dnswl_worthiness_pass> and similar options.  By setting I<save_drop>, the
+messages dropped after I<action_header> can be saved.
 
 By default, zdkimfilter adds an C<Authentication-Results:> (A-R) header field
 only when there are noticeable results to report.  It uses the host name that
-Courier used when adding its C<Received:> field.  Other A-R fields with that
-same name get zapped from the message, if found.
+Courier uses in its C<Received:> field.  Other A-R fields with that same name
+get zapped from the message, if found.
 
 After the message has been dealt with, zdkimfilter logs to the database the
 results.  See L<zfilter_db(1)> for the details.
@@ -113,8 +114,12 @@ In order to look up a DMARC record correctly, the Public Suffix List file must
 be available and configured in I<publicsuffix>.  In addition, to comply with
 DMARC, aggregate reports should be sent and received; see L<zaggregate(1)>.
 
+A DMARC policy can ask to quarantine a message.  If that is honored, A-R field
+contains a C<(QUARANTINE)> comment and the message is delivered normally.
+
 Record lookup of either policy is not going to work for non-existing domains.
-Rejecting those messages can be enabled by I<reject_on_nxdomain>.
+For A-R, ADSP provides a C<dkim-adsp=nxdomain> result code.  Rejecting those
+messages can be enabled by I<reject_on_nxdomain>.
 
 =head1 OPTIONS
 

@@ -1816,6 +1816,11 @@ and then conveyed to ctlfile 'f' (COMCTLFILE_FROMMTA).  E.g.
 	return 0;
 }
 
+static inline int change_sign(int old, int newval)
+{
+	return (old <= 0 && newval > 0) || (old > 0 && newval <= 0);
+}
+
 static int domain_flags(verify_parms *vh)
 /*
 * Called either before or after checking signatures.
@@ -1918,9 +1923,27 @@ static int domain_flags(verify_parms *vh)
 					dps->u.f.is_known = 1;
 					if (c > 1 && dps->u.f.is_aligned)
 					{
-						vh->do_dmarc += dmarc;
+						int old = vh->do_dmarc;
+						dmarc += old;
+						vh->do_dmarc = dmarc;
+						if (change_sign(old, dmarc) &&
+							vh->parm->z.verbose >= 8)
+								fl_report(LOG_WARNING,
+									"id=%s: %sabling DMARC for %s: %d -> %d",
+									vh->parm->dyn.info.id,
+									dmarc > 0? "en": "dis", dps->name, old, dmarc);
 						if (c > 2 && dps->u.f.is_from)
-							vh->do_adsp += adsp;
+						{
+							old = vh->do_adsp;
+							adsp += old;
+							vh->do_adsp = adsp;
+							if (change_sign(old, adsp) &&
+								vh->parm->z.verbose >= 8)
+									fl_report(LOG_WARNING,
+										"id=%s: %sabling ADSP for %s: %d -> %d",
+										vh->parm->dyn.info.id,
+										adsp > 0? "en": "dis", dps->name, old, adsp);
+						}
 					}
 				}
 				else
@@ -3056,6 +3079,10 @@ static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status)
 					spf_domain[1] = dps->name;
 			}
 
+	/*
+	* The only authentication may happen to be BOFHSPFFROM, not written:
+	* will get "Authentication-Results: authserv.id; none" in that case.
+	*/
 	if (spf_domain[0] || spf_domain[1])
 	{
 		fprintf(fp, ";\n  spf=pass smtp.%s=%s",
@@ -3462,11 +3489,50 @@ static void verify_message(dkimfl_parm *parm)
 	*/
 	if (parm->dyn.rtc == 0 && vh.dkim_domain != NULL)
 	{
-		if (vh.do_dmarc >= vh.do_adsp &&
-			(vh.presult = get_dmarc(vh.dkim_domain, vh.org_domain, &vh.dmarc)) == 0)
+		if (vh.do_dmarc >= vh.do_adsp)
+		{
+			vh.presult = get_dmarc(vh.dkim_domain, vh.org_domain, &vh.dmarc);
+			if (vh.presult == 0)
 				vh.policy = vh.dmarc.effective_p;
+
+			if (parm->z.verbose >= 7)
+			{
+				char *disp = vh.dkim_domain;
+				if (vh.org_domain && strcmp(vh.dkim_domain, vh.org_domain) != 0)
+				{
+					size_t len = strlen(vh.dkim_domain), le = strlen(vh.org_domain);
+					char *p = len > le? malloc(len + 3): NULL;
+					if (p)
+					{
+						size_t diff = len - le;
+						disp = p;
+						*p++ = '[';
+						memcpy(p, vh.dkim_domain, diff);
+						p += diff;
+						*p++ = ']';
+						memcpy(p, vh.org_domain, le + 1);
+					}
+				}
+				fl_report(LOG_INFO,
+					"DMARC %sabled (%d), policy %s for %s",
+						vh.do_dmarc > 0? "en": "dis", vh.do_dmarc,
+						presult_explain(vh.presult), disp);
+				if (disp != vh.dkim_domain)
+					free(disp);
+			}
+		}
+
 		if (vh.presult != 0 && vh.presult != 3 && vh.do_dmarc <= vh.do_adsp)
+		{
 			vh.presult = my_get_adsp(vh.dkim_domain, &vh.policy);
+
+			if (parm->z.verbose >= 7)
+				fl_report(LOG_INFO,
+					"ADSP %sabled (%d), policy %s for %s",
+						vh.do_adsp > 0? "en": "dis", vh.do_adsp,
+						presult_explain(vh.presult), vh.dkim_domain);
+		}
+
 		if (vh.presult <= -2 &&
 			(vh.do_dmarc > 0 || vh.do_adsp > 0 || parm->z.reject_on_nxdomain))
 		{
@@ -3581,10 +3647,17 @@ static void verify_message(dkimfl_parm *parm)
 			*
 			* Here, we assume that quarantine is going to be honored downstream,
 			* based on A-R, if do_dmarc is set.
+			*
+			* If NXDOMAIN, pretend to have a strict ADSP policy, so as to enable
+			* adsp-nxdomain.
 			*/
+
+			if (vh.presult == 3)
+				vh.policy = ADSP_POLICY_ALL;
+
 			bool policy_fail = POLICY_IS_STRICT(vh.policy) &&
-				(POLICY_IS_DMARC(vh.policy) && aligned_auth_is_ok == 0) ||
-				(POLICY_IS_ADSP(vh.policy) && from_sig_is_ok == 0);
+				(POLICY_IS_DMARC(vh.policy) && aligned_auth_is_ok == 0 ||
+				POLICY_IS_ADSP(vh.policy) && from_sig_is_ok == 0);
 
 			if (parm->dyn.stats)
 			{
@@ -3667,9 +3740,14 @@ static void verify_message(dkimfl_parm *parm)
 					deliver_message = true;
 					if (parm->dyn.stats)
 						parm->dyn.stats->dmarc_reason = dmarc_reason_sampled_out;
+					if (parm->z.verbose >= 7)
+						fl_report(LOG_INFO,
+							"id=%s: %s dmarc=fail, but toss >= %d%%",
+							parm->dyn.info.id, vh.dkim_domain, vh.dmarc.pct);
 				}
-				else if ((vh.do_dmarc > 0 || vh.do_adsp > 0) ||
-					parm->z.reject_on_nxdomain && vh.presult == 3)
+				else if ((POLICY_IS_DMARC(vh.policy) && vh.do_dmarc > 0) ||
+					(POLICY_IS_ADSP(vh.policy) && vh.do_adsp > 0) ||
+					(parm->z.reject_on_nxdomain && vh.presult == 3))
 				{
 					char const *log_reason, *smtp_reason = NULL;
 				
@@ -3696,8 +3774,17 @@ static void verify_message(dkimfl_parm *parm)
 						if (parm->dyn.stats)
 							parm->dyn.stats->dmarc_dispo = 1;
 					}
-					else
+					else if (vh.policy == ADSP_POLICY_DISCARDABLE)
 						log_reason = "adsp=discardable policy:";
+					else
+					{
+						log_reason = "INTERNAL ERROR!";
+						fl_report(LOG_CRIT,
+							"%s: policy=%d, presult=%d, do_dmarc=%d, do_adsp=%d",
+							log_reason,
+							vh.policy, vh.presult, vh.do_dmarc, vh.do_adsp);
+						deliver_message = true;
+					}
 
 					if (parm->z.verbose >= 3)
 					{

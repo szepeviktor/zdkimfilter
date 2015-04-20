@@ -36,16 +36,16 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #if defined DKIM_POLICY_NONE
 #undef DKIM_POLICY_NONE
 #endif
-#define DKIM_POLICY_NONE        16
+#define DKIM_POLICY_NONE          0
 
-#define ADSP_POLICY_UNKNOWN      0   /* unknown */
-#define ADSP_POLICY_ALL          1   /* all */
-#define ADSP_POLICY_DISCARDABLE  2   /* discardable */
-#define DMARC_POLICY_NONE        4
-#define DMARC_POLICY_QUARANTINE  5
-#define DMARC_POLICY_REJECT      6
-#define POLICY_IS_DMARC(n) (((n)&4) != 0)
-#define POLICY_IS_ADSP(n) (((n)&4) == 0)
+#define DMARC_POLICY_NONE         4
+#define DMARC_POLICY_QUARANTINE   5
+#define DMARC_POLICY_REJECT       6
+#define ADSP_POLICY_UNKNOWN       8
+#define ADSP_POLICY_ALL           9
+#define ADSP_POLICY_DISCARDABLE  10
+#define POLICY_IS_DMARC(n)  (((n)&4) != 0)
+#define POLICY_IS_ADSP(n)   (((n)&8) != 0)
 #define POLICY_IS_STRICT(n) (((n)&3) != 0)
 
 #if ! defined DKIM_PRESULT_NONE
@@ -75,6 +75,7 @@ int parse_dmarc_rec(dmarc_rec *dmarc, char const *rec);
 int check_remove_sentinel(char *rua);
 int adjust_ri(int ri, int min_ri);
 char* adjust_rua(char**, char**);
+char const *presult_explain(int);
 static inline int adjust_period(int period)
 {
 	if (period <= 0 || period > 86400)

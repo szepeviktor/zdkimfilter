@@ -810,7 +810,7 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 				++seen;
 				int column_count = odbx_column_count(result);
 
-				// we only support _one_ query returning some columns
+				// unless cb, we only support _one_ query returning some columns
 				if (got_result == 0 && column_count > 0)
 				{
 					got_result = column_count;
@@ -819,11 +819,11 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 					for (int column = 0; column < column_count; ++column)
 						fields[column] = odbx_field_value(result, column);
 
-					if (arg == wantcb)
+					if (arg == wantcb) // here cb can reset to 0 and get more rows
 					{
 						got_result = (*arg_cb)(column_count, fields, arg_cb_arg);
 					}
-					else
+					else // this runs once only, because of va_arg
 					{
 						if (column_count > count)
 						{
@@ -841,30 +841,53 @@ static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 							if (arg == wantint)
 							{
 								int *want = va_arg(ap, int*);
-								if (field != NULL)
+								if (want)
 								{
-									char *t = NULL;
-									long l = strtol(field, &t, 0);
-									if (t && *t == 0 && l < INT_MAX && l > INT_MIN)
-										*want = (int)l;
-									else
+									if (field != NULL)
 									{
-										*want = *field != 0;
+										char *t = NULL;
+										long l = strtol(field, &t, 0);
+										if (t && *t == 0 && l < INT_MAX && l > INT_MIN)
+											*want = (int)l;
+										else
+										{
+											*want = *field != 0;
 #if !defined TEST_MAIN
-										(*do_report)(LOG_WARNING,
-											"query %s, part #%d, row 1, col %d "
-											"is not a number: %s converted to %d",
-												stmt_name[sid], r_set, column + 1,
-												field, *want);
+											(*do_report)(LOG_WARNING,
+												"DB query %s, part #%d, row 1, col %d "
+												"is not a number: %s converted to %d",
+													stmt_name[sid], r_set, column + 1,
+													field, *want);
 #endif
+										}
 									}
+									else
+										*want = 0;
 								}
+								else
+									(*do_report)(LOG_ERR,
+										"DB query %s, part #%d, row 1, column %d: "
+										"int *result is NULL!",
+											stmt_name[sid], r_set, column + 1);
 							}
 							else
 							{
 								char **want = va_arg(ap, char**);
-								if (field != NULL && (*want = strdup(field)) == NULL)
-									(*do_report)(LOG_ALERT, "MEMORY FAULT");
+								if (want)
+								{
+									if (field != NULL)
+									{
+										if ((*want = strdup(field)) == NULL)
+											(*do_report)(LOG_ALERT, "MEMORY FAULT");
+									}
+									else
+										*want = NULL;
+								}
+								else
+									(*do_report)(LOG_ERR,
+										"DB query %s, part #%d, row 1, column %d: "
+										"char **result is NULL!",
+											stmt_name[sid], r_set, column + 1);
 							}
 #if CONSOLE_DEBUG
 							if (verbose >= 1)
