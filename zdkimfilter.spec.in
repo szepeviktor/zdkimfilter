@@ -1,0 +1,70 @@
+Summary:       DKIM filter for Courier-MTA
+Name:          zdkimfilter
+Version:       @PACKAGE_VERSION@
+Release:       1%{?dist}
+License:       GPLv3+ with some additional rights; see LICENSE
+Group:         Applications/Mail
+URL:           http://www.tana.it/sw/zdkimfilter/
+Source0:       http://www.tana.it/sw/zdkimfilter/%{name}-%{version}.tar.gz
+BuildRequires: courier, libopendkim-devel, opendbx-devel, nettle-devel
+BuildRequires: libidn2-devel, libunistring-devel, zlib-devel, uuid
+Requires:      courier, libopendkim, opendbx, nettle, libidn2
+Requires:      libunistring, zlib, uuid, publicsuffix-list
+
+%description
+"z" DKIM filter for Courier-MTA using the OpenDKIM Project's library.
+
+
+%prep
+%setup -q
+
+
+%build
+cconfig=$(rpm -ql courier |grep courier-config |sed 's#/courier-config##')
+export PATH="$cconfig:$PATH"
+%configure --prefix=/usr
+make
+
+
+%install
+%define clibexec %(rpm -ql courier |grep 'dupfilter$' |sed 's#dupfilter##')
+mkdir -p %{buildroot}%{_bindir}
+mkdir -p %{buildroot}%{clibexec}
+mkdir -p %{buildroot}%{_mandir}/{man1,man5,man8}
+mkdir -p %{buildroot}%{_sysconfdir}/courier/filters
+
+install -p -m0755 %{_builddir}/%{name}-%{version}/src/{dkimsign,redact,zfilter_db,zaggregate} %{buildroot}%{_bindir}/
+install -p -m0755 %{_builddir}/%{name}-%{version}/src/zdkimfilter %{buildroot}%{clibexec}
+install -p -m0644 %{_builddir}/%{name}-%{version}/etc/{zfilter_db.1,dkimsign.1,redact.1,zaggregate.1} %{buildroot}%{_mandir}/man1/
+install -p -m0644 %{_builddir}/%{name}-%{version}/etc/zdkimfilter.conf.5 %{buildroot}%{_mandir}/man5/
+install -p -m0644 %{_builddir}/%{name}-%{version}/etc/zdkimfilter.8 %{buildroot}%{_mandir}/man8/
+install -p -m0644 %{_builddir}/%{name}-%{version}/etc/zdkimfilter.conf.dist %{buildroot}%{_sysconfdir}/courier/filters/
+mv %{buildroot}%{_sysconfdir}/courier/filters/zdkimfilter.conf.dist %{buildroot}%{_sysconfdir}/courier/filters/zdkimfilter.conf
+
+
+%files
+%defattr(-, root, root, -)
+%doc AUTHORS COPYING INSTALL LICENSE LICENSE.Sendmail NEWS README ChangeLog release-notes* zaggregate-example.sh odbx_example*
+%{_bindir}/*
+%{clibexec}/zdkimfilter
+%{_mandir}/man1/*
+%{_mandir}/man5/zdkimfilter.conf.5.gz
+%{_mandir}/man8/zdkimfilter.8.gz
+%config(noreplace) %{_sysconfdir}/courier/filters/zdkimfilter.conf
+
+
+%post
+cconfig=$(rpm -ql courier |grep courier-config)
+courieruser=$($cconfig |grep mailuser |sed 's/.*=//')
+couriergroup=$($cconfig |grep mailgroup |sed 's/.*=//')
+chown $courieruser:$couriergroup %{_bindir}/dkimsign
+if [ $1 -eq 2 -a -f %{_sysconfdir}/courier/filters/zdkimfilter.conf.rpmnew ]; then
+chown $courieruser:$couriergroup %{_sysconfdir}/courier/filters/zdkimfilter.conf.rpmnew
+else
+chown $courieruser:$couriergroup %{_sysconfdir}/courier/filters/zdkimfilter.conf
+fi
+
+
+%changelog
+* Sat Jun 20 2015 Zenon Panoussis <oracle@provocation.net> 1.5
+- Initial packaging.

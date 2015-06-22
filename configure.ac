@@ -564,6 +564,7 @@ AC_CONFIG_TESTDIR([tests], [src])
 AM_MISSING_PROG([AUTOM4TE], [autom4te])
 
 AC_CONFIG_FILES([Makefile
+                 zdkimfilter.spec
                  myinstall.sh
                  src/Makefile
                  src/filedefs.h

@@ -337,3 +337,8 @@ FROM domain AS d, msg_out_ref AS r, message_out AS m, user AS u
 WHERE d.id = r.domain AND r.message_out = m.id AND m.user = u.id 
 GROUP BY d.id, u.id ORDER BY cnt DESC LIMIT 10;
 
+# find what messages were received from a given IP/domain in a given period
+SELECT INET_NTOA(CONV(HEX(m.ip),16,10)) AS ip, FROM_UNIXTIME(m.mtime) AS time,
+r.auth, r.spf, r.dkim, d.domain FROM domain AS d, msg_ref AS r, message_in AS m
+WHERE r.domain = d.id AND r.message_in = m.id AND
+ m.mtime >= 1429660800 AND m.mtime <= 1429747200 AND d.domain = 'yahoo.it';
