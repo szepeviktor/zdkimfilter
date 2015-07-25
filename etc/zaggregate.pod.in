@@ -1,0 +1,259 @@
+=pod
+
+=head1 NAME
+
+zaggregate - a DMARC aggregate report writer for zfilter database
+
+=head1 SYNOPSIS
+
+ORG_EMAIL=I<email-addr> B<zaggregate> [I<option> [I<option-arg>]]
+
+=head1 DESCRIPTION
+
+B<zaggregate> reads relevant message data from the database, using the queries
+configured as described in L<zfilter_db(1)>, and formats the result according
+to the XML schema defined in L<RFC 7489, Appendix C>.
+
+To comply with DMARC specifications, this command should be run by cron once
+per day or according to the configured B<honored_report_interval>.
+
+DMARC provides for sending aggregate reports to multiple URIs, subject to size
+limits.  Only C<mailto:> URIs are considered here.  The size limits refer to
+the compressed and encoded content of reports, so they can be enacted only
+after compression and base64 encoding (option I<-z>).  For each target address,
+B<zaggregate> verifies that either its domain part is aligned with the domain
+reported or the target domain authorizes sending reports about the domain
+reported.
+
+B<zaggregate> design goal is to ease reporting while letting users devise
+how to set up actual sending.  In addition, it provides for debugging its
+three queries, which L<zfilter_db(1)> does not.
+
+Unless I<--pipe> is used, reports are written to files in the current
+directory.  Two files per report, with the same base name and different
+extensions.  The base name is composed according to DMARC specification, that
+is:
+
+=over
+
+receiver "!" domain "!" period_start "!" period_end [ "!" unique-id ]
+
+=back
+
+where C<receiver> is the domain part of the ORG_EMAIL environment variable,
+C<domain> is the one where the DMARC record was retrieved from, period
+boundaries are expressed as seconds since Unix epoch, UTC, and C<unique-id>
+depends on option I<-u>.  The first file has an C<.env> extension, and contains
+the environment variables described below.  The second file contains the
+report; its extension is either C<.xml> or C<.xml.gz.b64> depending on option
+I<-z>.
+
+
+=head1 OPTIONS
+
+Short options can be stuffed into a single argument.
+
+=over
+
+=item B<-f> I<config-filename>
+
+Specify a different configuration file.
+
+=item B<-l>
+
+Log to syslog (LOG_MAIL facility) rather than stderr.
+
+=item B<-t>
+
+If I<--pipe> is given, write the report to a temporary file before piping.
+This option is automatically enabled if there are multiple size limits.
+
+=item B<-u>
+
+Generate a unique identifier for each report.  If generated, the unique-id
+appears in the filename as well as in the body of the report.  It should
+also match the C<Message-Id:> header field.
+
+This option is available only if zaggregate is compiled with the UUID library.
+
+=item B<-v>
+
+Debug queries.  If issued multiple times, it increases verbosity.  This option
+is automatically enabled if I<zdkimfilter.conf> has verbose >= 10.
+
+=item B<-z>
+
+Zip and encode the report.  This enables checking size limits.  If the limit is
+exceeded the report is aborted.  A line is logged saying no rcpt left.  DMARC
+recommends sending a notice to the relevant domain so that they can increase
+the report frequency, the size limit, or both.
+
+=item B<--pipe>
+
+This pipes the output to a child process.  The arguments following this option
+are passed to the child process, starting with the executable path.
+
+A child is forked for each report, setting the environment variables described
+below.  The report content is piped to child's standard input.  If the size
+limit is exceeded, the child is killed with SIGTERM.  However, if there are
+multiple limits or option I<-t> is used, the report is first written to a
+temporary file, and, if all size limits are exceeded, no child is forked.
+
+Children are spawned one at a time, and waited for.  If a child exit status is
+not 0, the report is not considered sent, and the domain timestamp is not
+updated.
+
+=item B<--help>
+
+Print usage and exit.
+
+=item B<--version>
+
+Print version and exit.
+
+=item B<--dry-run>
+
+Don't update domain timestamps after report is (considered) sent.
+
+=item B<--fake-dns>
+
+For debugging, don't issue DNS queries but look up TXT records in KEYFILE.
+The latter is a plain text file in the current directory, having a name, a
+space, and text RDATA in each relevant line.
+
+=back
+
+
+=head1 ENVIRONMENT VARIABLES
+
+=head2 Input Environment Variables
+
+These variables are read from the environment.  They are also available to any
+child, of course.
+
+=over
+
+=item ORG_EMAIL
+
+The email address of the reporting organization.  Its domain part is used
+for the first piece of the filename (C<receiver> above).
+
+=item ORG_NAME
+
+Human readable name of the reporting organization.
+
+=item EXTRA_CONTACT
+
+If set, goes to the C<extra_contact_info> part of the report.
+
+=back
+
+=head2 Output Environment Variables
+
+These variables are added to child environment if I<--pipe> is used.  Otherwise
+they are written, one per line, to a F<*.env> file.
+
+=over
+
+=item FILENAME
+
+The report filename.  When I<-z> is used, the real filename gets an additional
+C<.b64> extension, but the environment variable only has C<.gz>.  Otherwise the
+extension is just C<.xml>.
+
+=item CONTENT_TYPE
+
+Either C<application/gzip> or C<text/xml> depending on I<-z>.
+
+=item CONTENT_TRANSFER_ENCODING
+
+Either C<base64> or C<7bit> depending on I<-z>.
+
+=item DOMAIN
+
+The target domain, which also makes the second piece of the filename.
+
+=item LIMIT
+
+The lowest limit specified by target addresses.  If no address specifies a
+limit, the default is 18446744073709551615 (UINT64_MAX).
+
+=item TO_HEADER
+
+The C<To:> header field, containing all addresses.  If I<-z> is used, only
+addresses that accept the report size are included.  In any case, addresses
+which specify a non-default size limit are followed by a comment with the
+specified limit.
+
+=item MESSAGE_ID
+
+This variable is only set if option I<-u> is used.  It contains the uniq-id.
+
+=back
+
+
+=head1 FILES
+
+=over
+
+=item F<@COURIER_SYSCONF_INSTALL@/filters/zdkimfilter.conf>
+
+Default configuration file.
+
+=item F<*.env> and F<*.xml[.gz.b64]>
+
+Reports generated in the current directory.
+
+=back
+
+=head1 EXAMPLES
+
+A pipeline, where C<head> and C<tail> have the initial and final parts of the
+report, expressed in terms of environment variables and printf escape
+sequences, can be structured like so:
+
+  ORG_EMAIL=foo@example.com zaggregate -zul --pipe /bin/sh -c \
+    '(eval printf %b "\"$(<head)\""; cat -; printf %b "\"$(<tail)\"") |\
+      sendmail'
+
+Using I<--pipe> instead of a real pipe is necessary because a new
+/bin/sh has to be spawned for each report.  C<eval> replaces shell variables in
+C<head>, and is not needed for C<tail> if there are none.  For a fully worked
+out example using that approach see F<zaggregate-example.sh> in the tarball.
+
+Working with files may allow greater control and flexibility.
+
+To test database queries from the distribution directory:
+
+  source ./odbx_example.sh
+  source ./odbx_example.sh
+  sleep 5m
+  ORG_EMAIL=foo@example.com src/zaggregate -vf odbx_example.conf
+
+
+=head1 AUTHOR
+
+Alessandro Vesely E<lt>vesely@tana.itE<gt>
+
+
+=head1 SEE ALSO
+
+=over
+
+=item B<RFC 7489>
+
+Domain-based Message Authentication, Reporting, and Conformance (DMARC).
+
+=item B<zfilter_db>(1)
+
+Detailed explanation of queries and their expected outcome.
+
+=item B<zdkimfilter.conf>(5)
+
+Other configuration options, including I<honored_report_interval> and
+I<verbose>.
+
+=back
+
+=cut
+

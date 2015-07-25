@@ -1,0 +1,79 @@
+Config file changes:
+===================
+New parameters for header-driven message drop/reject. An upstream filter can
+add a header to force drop/reject unless whitelisted. The new parameters are
+action_header, header_action_is_reject, dnswl_worthiness_pass, dnswl_invalid_ip,
+dnswl_octet_index, whitelisted_pass.
+
+New parameter split_verify, to have separate filter processes.  In this case,
+downstream filters can whitelist based on Authentication-Results.
+
+New parameter verify_one_domain.  In 1.2, unless report_all_sigs is enabled,
+only the first domain gets verified.  In 1.3, verifying is tried for each
+signing domain in the same situation, unless the new parameter is enabled.
+
+New parameter add_ztags, to add z= in the signature, for debugging.
+
+
+Database changes:
+================
+The example was wrong, as a domain can send multiple messages simultaneously
+(that is, handled by parallel zdkimfilter processes).  This lead to log lines
+like:
+ * part #1 of query db_sql_whitelisted had 2 rows, or
+ * DB error: Result consisted of more than one row.
+
+Procedure recv_from_domain has to be replaced.  In addition, the domain table
+has to be altered.
+
+   ALTER TABLE domain DROP INDEX by_dom, ADD UNIQUE INDEX by_dom(domain);
+
+To avoid losing old domain data, one can create a new table using the statement
+in odbx_example.sql, copy existing data, and rename the table:
+
+   CREATE TABLE new_domain (...);
+
+   INSERT INTO new_domain
+   SELECT MIN(id), domain, SUM(recv) AS recv, SUM(sent) AS sent,
+      MAX(whitelisted) AS whitelisted,
+      MIN(since) AS since, MAX(last) AS last
+   FROM domain
+   GROUP BY domain;
+
+   RENAME TABLE domain TO old_domain, new_domain TO domain;
+   DROP TABLE old_domain;
+
+
+New variable complaint_flag can be used to avoid whitelisting domains to which
+one (manually) sends a complaint.  The flag checks if From: is postmaster and
+if there is an empty bounce address.  Procedure sent_to_domain has to be
+replaced to receive the new variable, and the query calling it changes like so:
+
+--- odbx_example-1.2.conf       2012-12-01 11:51:46.000000000 +0100
++++ odbx_example.conf   2014-12-18 09:01:48.000000000 +0100
+@@ -44,7 +44,7 @@
+  '$(content_encoding)',\
+  $(rcpt_count))
+ 
+-db_sql_insert_target_ref CALL sent_to_domain($(message_ref), '$(domain)')
++db_sql_insert_target_ref CALL sent_to_domain($(message_ref), $(complaint_flag), '$(domain)')
+ 
+ db_sql_check_user SELECT IF ((SELECT SUM(rcpt_count)\
+  FROM message_out WHERE user = $(user_ref) AND\
+
+
+Bug fixes and other changes:
+===========================
+Domains with non-alnum chars (hyphen) didn't work --thanks to Ilmar Kruis.
+
+Config file couldn't be reloaded, this can now be done with kill -HUP.
+
+'author' and similar flags were set in messages even if DKIM signature failed.
+
+Drop log line (verbose>=1) changed from dropped,From-MTA=... to drop msg,id=...
+at LOG_INFO (was LOG_ERR).  Other logging cleaned up a bit (see ChangeLog).
+
+Reputation checking was preserved, in the hope that someone will provide it,
+but dkim-reputation.org is not working.  If you ever enabled do_reputation,
+remove it from the conf file.
+

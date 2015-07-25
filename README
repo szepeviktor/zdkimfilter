@@ -1,0 +1,103 @@
+This is a lynx dump of http://www.tana.it/sw/zdkimfilter/
+
+   home [1]old
+   documentation:[2]zdkimfilter [3]dkimsign [4]redact [5]zaggregate
+   [6]zfilter_db [7]zdkimfilter.conf
+
+                                  ZDKIMFILTER
+      "z" DKIM filter for Courier-MTA using the OpenDKIM Project's library
+
+Download
+
+
+   [8][rel.notes]
+   [9]current--> v1.4 Thu 08 Jan 2015 16:01:37 [10][gpg signature]
+   [11][announce] [12][rel.notes]
+   [13]v1.3 Tue 23 Dec 2014 17:12:41 [14][gpg signature] [15][announce]
+   [16][rel.notes]
+   [17]v1.2 Sat 30 Mar 2013 15:03:19 [18][gpg signature] [19][announce]
+   [20][rel.notes]
+   [21]v1.1 Wed 05 Dec 2012 17:12:44 [22][gpg signature] [23][announce]
+   [24][rel.notes]
+   [25]v1.0 Sun 28 Oct 2012 20:10:41 [26][gpg signature] [27][announce]
+
+Requirements
+
+     * courier and libopendkim, of course,
+     * libopendbx,
+     * libnettle,
+     * libresolv,
+     * libidn2*,
+     * libunistring*,
+     * zlib*,
+     * uuid*,
+     * the pkg-config utility, and
+     * libtool (even if we build no libraries.)
+     * In addition, the Public Suffix List* is used if configured.
+
+   (*) New in version 1.5
+
+   (Some [28]old mumbling about where to get required software may still
+   be valid.)
+
+License
+
+   [29]GPLv3
+
+   Keep in mind that DKIM relies on patented technology that may require a
+   separate licence.
+
+   As far as software copyright is concerned, zdkimfilter is free
+   software: you can redistribute it and/or modify it under the terms of
+   the GNU [30]General Public Licence as published by the Free Software
+   Foundation, either version 3 of the License, or (at your option) any
+   later version.
+
+   zdkimfilter is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the [31]GNU
+   General Public Licence for more details.
+
+   As an additional permission under GNU GPLv3 section 7,
+
+     If you modify zdkimfilter, or any covered part of it, by linking or
+     combining it with OpenSSL, OpenDKIM, Sendmail, or any software
+     developed by The Trusted Domain Project or Sendmail Inc., containing
+     parts covered by the applicable licence, the licensor of zdkimfilter
+     grants you additional permission to convey the resulting work.
+
+   Copyright (C) 2012-2014 Alessandro Vesely
+
+References
+
+   1. http://www.tana.it/sw/zdkimfilter/v-0.5.shtml
+   2. http://www.tana.it/sw/zdkimfilter/zdkimfilter.html
+   3. http://www.tana.it/sw/zdkimfilter/dkimsign.html
+   4. http://www.tana.it/sw/zdkimfilter/redact.html
+   5. http://www.tana.it/sw/zdkimfilter/zaggregate.html
+   6. http://www.tana.it/sw/zdkimfilter/zfilter_db.html
+   7. http://www.tana.it/sw/zdkimfilter/zdkimfilter.conf.html
+   8. http://www.tana.it/sw/zdkimfilter/release-notes-1.5.txt
+   9. http://www.tana.it/sw/zdkimfilter/zdkimfilter-1.4.tar.gz
+  10. http://www.tana.it/sw/zdkimfilter/zdkimfilter-1.4.tar.gz.asc
+  11. http://www.mail-archive.com/courier-users@lists.sourceforge.net/msg37538.html
+  12. http://www.tana.it/sw/zdkimfilter/release-notes-1.4.txt
+  13. http://www.tana.it/sw/zdkimfilter/zdkimfilter-1.3.tar.gz
+  14. http://www.tana.it/sw/zdkimfilter/zdkimfilter-1.3.tar.gz.asc
+  15. http://www.mail-archive.com/courier-users@lists.sourceforge.net/msg37523.html
+  16. http://www.tana.it/sw/zdkimfilter/release-notes-1.3.txt
+  17. http://www.tana.it/sw/zdkimfilter/zdkimfilter-1.2.tar.gz
+  18. http://www.tana.it/sw/zdkimfilter/zdkimfilter-1.2.tar.gz.asc
+  19. http://www.mail-archive.com/courier-users@lists.sourceforge.net/msg36596.html
+  20. http://www.tana.it/sw/zdkimfilter/release-notes-1.2.txt
+  21. http://www.tana.it/sw/zdkimfilter/zdkimfilter-1.1.tar.gz
+  22. http://www.tana.it/sw/zdkimfilter/zdkimfilter-1.1.tar.gz.asc
+  23. http://www.mail-archive.com/courier-users@lists.sourceforge.net/msg36438.html
+  24. http://www.tana.it/sw/zdkimfilter/release-notes-1.1.txt
+  25. http://www.tana.it/sw/zdkimfilter/zdkimfilter-1.0.tar.gz
+  26. http://www.tana.it/sw/zdkimfilter/zdkimfilter-1.0.tar.gz.asc
+  27. http://www.mail-archive.com/courier-users@lists.sourceforge.net/msg36402.html
+  28. http://www.tana.it/sw/zdkimfilter/v-0.5.shtml
+  29. http://www.gnu.org/licenses/gpl.html
+  30. http://www.gnu.org/licenses/gpl.html
+  31. http://www.gnu.org/licenses/gpl.html

@@ -1,0 +1,147 @@
+Database changes:
+================
+New statement db_sql_domain_flags, similar to db_sql_whitelisted, but it can
+set two additional flags to selectively enable or disable DMARC or ADSP on a
+per domain basis.  For a minimum DMARC implementation, the following three
+statements are also new: db_sql_dmarc_agg_domain, db_sql_dmarc_agg_record, and
+db_sql_set_dmarc_agg.  Their usage is exemplified in odbx_example.conf.
+
+New variables for incoming messages:
+
+message variables:
+	dmarc_dkim    pass/fail/none
+	dmarc_spf     pass/fail/none
+	dmarc_reason  why DMARC policy was overridden
+	dmarc_dispo   was the message accepted/rejected/quarantined
+
+domain variables:
+	dmarc_record  an extract of the record published
+	dmarc_rua     address for sending aggregate reports
+	dmarc_ri      served report interval
+	original_ri   required report interval
+	spf_result    actual SPF result for a domain
+	dkim_result   actual DKIM result for a domain
+	dkim_order    order of domain among dkim signers (reverse alpha)
+	prefix_len    chars of domain name prepended to org_domain
+
+and a new variable is available for db_sql_domain_flags:
+	org_domain    the "organizational domain" relative to a message's From:
+
+The auth_type variable can get the additional enumerated values "org", "dmarc",
+"aligned", and "nx", which respectively mean a domain is the organizational
+domain of message's From: header field, is aligned with it, and has no DNS
+server.  The variable is still named auth_type, even though it doesn't imply
+authentication succeeded; for example, if DMARC is enabled, auth_type can have
+the spf_helo flag with an spf_result of "softfail".
+
+In odbx_example.sql, domain.last is split into last_recv and last_sent, and the
+type is changed to INT UNSIGNED in order to get rid of lossy conversions on
+daylight saving changes.  BIGINT columns ino, mtime, and pid can be safely
+reduced to INT, which is a 32-bit datum in MySQL.  You may want to check actual
+values by `df -i` and `cat /proc/sys/kernel/pid_max`.
+
+Existing tables can be upgraded from v1.4 like so:
+
+ALTER TABLE domain
+  ADD COLUMN dmarc_rua VARCHAR(64) NOT NULL DEFAULT '' AFTER domain,
+  ADD COLUMN dmarc_rec VARCHAR(63) NOT NULL DEFAULT '' AFTER dmarc_rua,
+  ADD COLUMN dmarc_ri MEDIUMINT UNSIGNED NOT NULL DEFAULT 0 AFTER sent,
+  ADD COLUMN original_ri MEDIUMINT UNSIGNED NOT NULL DEFAULT 0 AFTER dmarc_ri,
+  ADD COLUMN add_dmarc TINYINT NOT NULL DEFAULT 0 AFTER whitelisted,
+  ADD COLUMN add_adsp TINYINT NOT NULL DEFAULT 0 AFTER add_dmarc,
+  ADD COLUMN prefix_len TINYINT NOT NULL DEFAULT 0 AFTER add_adsp,
+  ADD COLUMN last_report INT UNSIGNED NOT NULL DEFAULT 0,
+  ADD COLUMN last_recv INT UNSIGNED NOT NULL DEFAULT 0,
+  ADD COLUMN last_sent INT UNSIGNED NOT NULL DEFAULT 0;
+
+UPDATE domain SET
+  last_recv = UNIX_TIMESTAMP(CONVERT_TZ(last, 'SYSTEM', '+00:00')) + 0
+  WHERE recv > 0;
+
+UPDATE domain SET
+  last_sent = UNIX_TIMESTAMP(CONVERT_TZ(last, 'SYSTEM', '+00:00')) + 0
+  WHERE sent > 0;
+
+ALTER TABLE domain DROP COLUMN last;
+
+ALTER TABLE msg_ref
+ CHANGE COLUMN auth auth SET ('author', 'spf_helo', 'spf',
+   'dkim', 'org', 'dmarc', 'aligned', 'vbr', 'rep', 'rep_s', 'dnswl', 'nx')
+   NOT NULL,
+ ADD COLUMN spf ENUM ('none', 'neutral', 'pass', 'fail', 'softfail',
+   'temperror', 'permerror') NOT NULL AFTER auth,
+ ADD COLUMN dkim ENUM ('none', 'pass', 'fail', 'policy', 'neutral',
+   'temperror', 'permerror') NOT NULL AFTER spf,
+ ADD COLUMN dkim_order TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER dkim;
+
+CREATE INDEX by_msg_auth ON msg_ref (message_in, auth);
+
+ALTER TABLE message_in
+  CHANGE COLUMN ino ino INT UNSIGNED NOT NULL,
+  CHANGE COLUMN mtime mtime INT UNSIGNED NOT NULL,
+  CHANGE COLUMN pid pid INT UNSIGNED NOT NULL,
+  ADD COLUMN dmarc_dkim ENUM ('none', 'fail', 'pass') NOT NULL
+    DEFAULT 'none' AFTER message_id,
+  ADD COLUMN dmarc_spf ENUM ('none', 'fail', 'pass') NOT NULL
+    DEFAULT 'none' AFTER dmarc_dkim,
+  ADD COLUMN dmarc_reason ENUM ('none', 'forwarded', 'sampled_out',
+    'trusted_forwarder', 'mailing_list', 'local_policy', 'other') NOT NULL
+    DEFAULT 'none' AFTER dmarc_spf,
+  ADD COLUMN dmarc_dispo ENUM ('none', 'quarantine', 'reject') NOT NULL
+    DEFAULT 'none' AFTER dmarc_reason;
+
+ALTER TABLE message_out
+  CHANGE COLUMN ino ino INT UNSIGNED NOT NULL,
+  CHANGE COLUMN mtime mtime INT UNSIGNED NOT NULL,
+  CHANGE COLUMN pid pid INT UNSIGNED NOT NULL;
+
+All three procedures changed, some more than others.  So have the configured
+statements db_sql_insert_msg_ref and db_sql_insert_message.
+
+
+New configuration parameters:
+============================
+log_dkim_order_above     = 0 (int)
+publicsuffix             = NULL (filename)
+honored_report_interval  = 86400 (seconds)
+
+
+New dependencies:
+================
+libidn2 (e.g. Debian libidn2-0-dev)
+libunistring  (e.g. Debian libunistring-dev)
+zlib (e.g. Debian zlib1g-dev)
+uuid (e.g. Debian uuid-dev) --optionally linked with
+public suffix list (e.g. Debian publicsuffix) --used if configured
+
+
+Bug fixes and other changes:
+===========================
+Column 70 wrapping of From:, To:, Cc:, and Reply-To: now occurs before signing.
+This uses the same algorithm and code used by Courier's esmtpclient.
+
+OpenDKIM bug 219 caused a DNS error to look like a temperror.  It is fixed in
+OpenDKIM v2.10.1.  A workaround is compiled in when in zdkimfilter v1.5 is
+configured with an older version of OpenDKIM.
+
+Issue a temperror if SERVFAIL or similar happens during ADSP lookup; this
+can cause a temporary reject if tempfail_on_error is set.
+
+Log temperrors at verbosity >= 3; permerrors at verbosity >= 4.
+
+Have log files line-buffered, to avoid garbled lines.
+
+Added configure --enable-dkimsign-setuid switch, and make V=0 for less verbose
+build.
+
+Format of zfilter_db test arguments: use slash (/) instead of comma (,) to
+separate stats tokens, so as to allow commas in tokens.  Thus,
+	--set-stats dir [message data|domain[,token]]
+becomes
+	--set-stats dir [message data|domain[/token]]
+and
+	--set-stats-domain domain[,token]
+becomes
+	--set-stats-domain domain[/token]
+
+

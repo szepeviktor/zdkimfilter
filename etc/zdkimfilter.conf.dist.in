@@ -1,0 +1,31 @@
+# Config file for zdkimfilter
+# Syntax of each line: [ "#" comment ] | name [ "=" ] [ value ]
+# Backslashes ("\") can be used to wrap multiple physical lines into a single
+# logical one, also comments.
+#
+# Only a few name/value settings are shown below, see zdkimfilter.conf(5) and
+# zfilter_db(1) man pages for a comprehensive list.
+
+# all_mode (bool)
+# Courier runs all-mode filters after non-all-mode ones, in alphabetical order.
+# This determines in which directory zdkimfilter's socket is created.
+all_mode = @zdkimfilter_mode@
+
+# trust_a_r (bool)
+# Don't remove any Authentication-Results: (A-R) header field.
+# Courier renames existing A-R fields since 0.71.0, if ALLOW_EXCLUSIVE is set.
+# Set this parameter after enabling ALLOW_EXCLUSIVE.
+
+# verbose (int)
+# default: verbose = 3
+
+# domain_keys (string)
+# Directory for domain private keys.  See zdkimfilter(8) for examples.
+# Default: domain_keys = @COURIER_SYSCONF_INSTALL@/filters/keys
+
+# Canonicalization for header or body can be simple or relaxed.  Set it to
+# relaxed in order to lower the likelihood of breaking signatures.  Uncomment
+# the following two lines to do so.
+# header_canon_relaxed
+# body_canon_relaxed
+

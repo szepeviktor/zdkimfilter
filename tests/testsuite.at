@@ -1,0 +1,3235 @@
+# Process this file with autom4te to create testsuite. -*- Autotest -*-
+
+# why wouldn't these be allowed?
+m4_pattern_allow([m4_ifblank])
+m4_pattern_allow([m4_ifnblank])
+#m4#_pattern_allow([m4_join])
+
+# config file, accept extra lines as a parameter
+m4_define([ZF_CONFIG],
+[cat >zftest.conf <<'_ZEOF'
+verbose = $1
+domain_keys = .
+tmp = .
+
+$2
+_ZEOF
+])
+
+# batch file preparation
+# NB: before a ctlfile and mailfile, this may call any of test1, test2, test3
+# which do report_config, set_keyfile, set_policyfile, respectively.
+m4_define([ZF_BATCH], [AT_DATA([batch],
+[$1
+
+exit
+])])
+
+# batch invocation with config file
+# (can use ./testsuite -d VALGRIND_AND_OPTS="valgrind -v --leak-check=full --trace-children=yes --log-file=valgrind%p.out")
+m4_define([ZF_RUN], [$VALGRIND_AND_OPTS zdkimfilter -f zftest.conf --batch-test <batch])
+
+# keyfile loaded with test2
+m4_define([ZF_KEYFILE], [AT_DATA([KEYFILE],
+[x1._domainkey.author.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
+x2._domainkey.sender.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCz8gES8szE0tPe1NgAENU7BoVZHZRhWiPs6MdCCIYJ06RoV9vmAXlXzcHK/IM7fSHVQKYvf1E7dUwQIwCUe5S+qdkB0KxtmzCCBqjqcju8b6EEJb5e6HiMHjErS+33fNtS8qYCQNt1Xl5Ga94o1oXeZxroYSjeps8z82j/JQsPswIDAQAB
+x3._domainkey.other.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDFTpY+8YuikRLRfNLU3krD8h7lNnbK4eZ0TuPfRur6TDEg+bOQD1g1yJ1bnyQ1uCtwEkZ54Zs56C8PVpvU7jjR2/YcS92PiOhm3MXWyD3caekCZ7ezXvEkD/KaTkuKypiTmDlefQ39t5oq60fufb61/lUGzLech/kKLOexYohqEwIDAQAB
+x4._domainkey.subdomain.author.example v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDHoVBC8uC7kB90cJZBirpAxJjqv5rgWwk7yE9zjWeCsvxqisIP0hLT4ffQFSk6NcnxD6cm67FIOKKSY0jznzvObyqndBn4jNYIcjdfUY+Erq/2dtcKljeYdR63N9QNgP8un4/taLqkNBZ+H3hhFLqY5V65+CnlclAnERcpJ+wl9wIDAQAB
+$1])])
+
+# policyfile (unknown) loaded with test3
+m4_define([ZF_POLICYFILE], [AT_DATA([POLICYFILE],
+[dkim=unknown
+])])
+
+m4_define([ZF_SIGAUTHOR],
+[DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+	t=1267195653; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301;
+	h=Message-ID:Date:From:MIME-Version:To:Subject:Content-Type:
+	 Content-Transfer-Encoding;
+	b=ZmMMHnWo7xMM2V1zZEYWp7jCXHB7hJ/D8TpCleG0SZ8njWjXaspgOtD/F52SJK90G
+	 tx3/m0Y3F58NBVjVfTeAq+znjGER6TbwOQQfbpkHb0jvcgrSYCWVcekS7hIlCtT5mF
+	 8gZbgYgOo3rIFUy9vdHkse1jzNR8kxrIYv3aZ0tc=
+])
+
+# Date header field changed...
+m4_define([ZF_FAILAUTHOR],
+[DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+	t=1267205960; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301;
+	h=Message-ID:Date:From:MIME-Version:To:Subject:Content-Type:
+	 Content-Transfer-Encoding;
+	b=bANxWNgMVyGL6Yo2esWSkR3tVTtMX4cTQe6JP01wkm3yCZDUo2kI3Q9NZ6fQ18hCU
+	 D2/xuZw293Gx+oetp/j2jksGh+AMVEZ/wSMkYO5Sx4jg1FcbRej2E+BEj//TChzJa+
+	 gWyV1/f26deNVeiTYOxgzsW8XUp97eWe5JnK+uYw=
+])
+
+m4_define([ZF_SIGSENDER],
+[DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=sender.example; s=x2;
+	t=1267197537; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301;
+	h=Message-ID:Date:From:MIME-Version:To:Subject:Content-Type:
+	 Content-Transfer-Encoding;
+	b=d6AyU6LW/aOb2S0KQjewLe1AApiloi/CZSn9c1WOjZLJmz7govCghGjgI3ebMl5mC
+	 cVzheZ+sjWJRFTj+L2Sd30j9L+gOc2ZmJ6wyK/UqhNGPIvZfhn4Sap4J51sk5JhvLr
+	 zd6a1TVrz5nYJU3fF6QW7lLPtAcg2v05+UE38Ios=
+])
+
+m4_define([ZF_SIGSENDER2],
+[DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=sender.example; s=x2;
+	t=1350490237; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301;
+	h=Message-ID:Date:From:MIME-Version:To:Subject:Content-Type:
+	 Content-Transfer-Encoding;
+	b=mDCtHhur76zwYTOuYoKaBF7WUbx6STaV2hiDSrF1rnGsIwShaopm1gHymPcr9ykHG
+	 ilz/gCrdtNlr7SbKfI3z2j7ipXjwMwCrEV8ZkV83r1H5gELVmw+0k1QwUeOkZIPB3Z
+	 I1yQbxcXWma6Wq45J0bEscYqHrS2FMHWcb0BXhCs=
+])
+
+m4_define([ZF_SIGOTHER],
+[DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=other.example; s=x3;
+	t=1267197617; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301;
+	h=Message-ID:Date:From:MIME-Version:To:Subject:Content-Type:
+	 Content-Transfer-Encoding;
+	b=ejTAOxjZ1TFzdE0KT0/I/Dd7dL76iPzUq3sc4ngUt/78pFSFSL4p3nXNIMYeGHVT6
+	 7kwAhFlmpT0UgBaisyjfyGTgx4k/N2+Kbbne1NV/kYG9wYRylk9fooS08ZRkY7Ieuu
+	 K5pYsL12X5UfS1+TRnv2ONLxQDgSn+4r8ZwaEWZ8=
+])
+
+m4_define([ZF_SIGAUTHOR_BYSUB],
+[DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple;
+	d=subdomain.author.example; s=x4; t=1425475173;
+	bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=; l=301;
+	h=Date:From:To:Subject;
+	b=QB5afafnvYV8ML6CPwhzNAAwt7mVdy5zUxqjKWv155g+/bZcZYQjNpj7kIIkTFQ/S
+	 XXHm7ajuXdB01ZqQnvfHe6mbDiB4VPReSIKEE8Q4znyoODdWDVmwqVBmmj1YjDHePc
+	 0CrmhdsaCX4FW+X8td1hOcopogke4e3CrWy7vr8k=
+])
+
+m4_define([ZF_SIGSUB_BYAUTHOR],
+[DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+	t=1425636964; bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=;
+	l=301; h=Date:From:To:Subject;
+	b=Z9W9qCvybTs80lAmboko3ZFAxfYiSJW/l8r7Azpp4BLDrXB3kOYFcERRn6k6L70jv
+	 VOj7WwFIbLDHrk5W/XhveRu4lChRqDetyrqy+hOsrYbnJgbOCizi439JtYMub+zTwm
+	 d8PidNs04FFInGGUE2zRaD6AT/M+fz5J41uvs3oE=
+])
+
+m4_define([ZF_SIGSUB_BYSUB],
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple;
+	d=subdomain.author.example; s=x4; t=1425636862;
+	bh=L8QGcsUoP9USzqJEAQJWO+T54ucacbfWHYBLHXpfgpM=; l=301;
+	h=Date:From:To:Subject;
+	b=t1ZnIYMPY41Vq/Gy8S12eTEqBFVa7mkoMj23TZCeuuPadOQN4SEcSHqQ1qTPXzn0b
+	 zuy3hJAoIDneoRzgkCAIJAHtX2hZWFBv5FUJ0IvaFpc4TIj6ElJj1oepyUSZ1rYIIA
+	 a9ovpSSgMLOnle66Dc6xIGHU3/0PaKIR4zBxTK4k=
+])
+
+
+# header tail and body of message
+m4_define([ZF_MESSAGE_BODY],
+[Message-ID: <123456@author.example>
+Date: Mon, 08 Feb 2010 13:12:55 +0100
+From: Author <][m4_default([$1], [user@author.example])][>
+VBR-Info: mc=all; md=author.example; mv=author-cert.example
+VBR-Info: mc=all; md=sender.example; mv=sender-cert.example
+MIME-Version: 1.0
+To: (undisclosed recipients)
+Subject: Test multiple signatures
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+This is going to be signed by multiple signers:
+author, sender, and other. The filter only reports
+one signature: the first valid one in the order
+1) author,
+2) sender, and
+3) other
+
+Note that to distinguish the sender we need a valid
+SPF record. We relay on Courier's SPF checking for that.
+])
+
+m4_define([ZF_SPFPASS],
+[Received-SPF: pass SPF=$1 sender=someone@$2;
+])
+
+
+# message with 1=authetication (dnswl, SPF, and/or DKIM), and 2=author
+m4_define([ZF_MESSAGE_AUTH],
+[Received: from server.example by test.example with ESMTP
+$1Received: from mail.example.com by server.example with ESMTPA
+][ZF_MESSAGE_BODY([$2])])
+
+# message with up to 4 signatures and SPF pass
+m4_define([ZF_MESSAGE],
+[$1Received: from server.example by test.example with ESMTP
+Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
+Received-SPF: pass SPF=HELO sender=server.sender.example;
+Authentication-Results: (with a (nested) comment) mail.example.com; none
+$2Received: from mail.example.com by server.example with ESMTPA
+$3$4][ZF_MESSAGE_BODY])
+
+# message with up to 3 signatures and SPF none
+m4_define([ZF_MESSAGE_NOSPF],
+[$1Received: from server.example by test.example with ESMTP
+$4Received-SPF: none SPF=MAILFROM sender=someone@sender.example;
+$2Received: from mail.example.com by server.example with ESMTPA
+$3][ZF_MESSAGE_BODY])
+
+# private author key ( file, link-list)
+m4_define([ZF_PRIVATEKEY], [AT_DATA([$1],
+[-----BEGIN RSA PRIVATE KEY-----
+MIICXAIBAAKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk
+5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9
+GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
+AoGARPaCa4eHJWQnF2MwB2cQD7MdUsizx6GFs5ms9bGxxwyknTmmT2PA/rFEYjb+
+V8PmTCu4Y/Nk88IzgXTfJ8pN6GfnN1O0qMTUoMuHTf/LMWT/WsFstjiuuFCQddBz
+xVyup6Rnl30mYU5WE0PheUTG0AVbzMn2Aj/SEYXlEYPnENECQQDbsLlcEitqnj+i
+ipFz9H5RnfoDC4pFHSSqMlddYIA9e2DoNdxjU275eyt2g2p9hQMMXdB7LnoyFeHz
+jeRpK3RlAkEAxsj5uOvBctleM2ERPPXTm0nYUWSH4aPZkE/olThgQMogTwSQc6vI
+M6RkzKfF5Dr5g/b2kyoZhxIvdtUcPzfGVwJBALrZaA3C9mJMDdt095kjzXwlXMrS
+OdvmmZSYFG468VdZZGabyMJB6BUQiTrXMu9m/dy6veLG+O84ZWD8wdQhPXECQBf4
+nlyVWXOfEMQDXY/LWSQtyH8wL06fcpn7eOGdtcW6WiENPNomCfNoTJt9U9jM38/x
+FRT0C7YFFGIxGsHo2OsCQF2PGJ3yKn2l9VX+M6qj4hE+POdgnJLqNMp5kRIBj9De
+rlKqG0nWxNFVhVzXsgeNUTDCmVm3cdODa94wXn9WNvY=
+-----END RSA PRIVATE KEY-----
+])
+m4_if([$#], [1],, m4_foreach([link], [$2],
+[$LN_S $1 link
+]))
+])
+
+# DNSWL authenticated address
+m4_define([ZF_DNSWL], [Authentication-Results: test.example;
+ dnswl=pass dns.zone=list.dnswl.org policy.ip=127.0.10.0
+ policy.txt="sender.example http://www.dnswl.example/"
+])
+
+m4_define([ZF_DNSWL_INVALID_IP_ENDIAN], [@S|@((DNSWL_ORG_INVALID_IP_ENDIAN + 0))])
+
+# default parms
+m4_define([ZF_DEFAULT_PARM_TMP],
+[all_mode                 = N (Y/N)
+trust_a_r                = N (Y/N)
+verbose                  = 0 (int)
+domain_keys              = . (key's directory)
+header_canon_relaxed     = N (Y/N, N for simple)
+body_canon_relaxed       = N (Y/N, N for simple)
+sign_rsa_sha1            = N (Y/N, N for rsa-sha256)
+key_choice_header        = NULL (key choice header)
+default_domain           = m4_default([$1], [NULL]) (dns)
+selector                 = NULL (global)
+sign_hfields             = NULL (space-separated, no colon)
+skip_hfields             = NULL (space-separated, no colon)
+no_signlen               = N (Y/N)
+min_key_bits             = 0 (int)
+redact_received_auth     = NULL (any text)
+add_auth_pass            = N (Y/N)
+tmp                      = . (temp directory)
+tempfail_on_error        = N (Y/N)
+split_verify             = NULL (exec name)
+add_ztags                = N (Y/N, Y for debug z=)
+blocked_user_list        = NULL (filename)
+no_spf                   = N (Y/N)
+save_from_anyway         = N (Y/N)
+add_a_r_anyway           = N (Y/N)
+report_all_sigs          = N (Y/N)
+verify_one_domain        = N (Y/N)
+max_signatures           = 128 (int)
+log_dkim_order_above     = 0 (int)
+publicsuffix             = NULL (filename)
+honored_report_interval  = 86400 (seconds)
+honor_dmarc              = N (Y/N)
+honor_author_domain      = N (Y/N)
+reject_on_nxdomain       = N (Y=procrustean ADSP)
+action_header            = NULL (header field name)
+header_action_is_reject  = N (Y/N)
+save_drop                = NULL (quarantine directory)
+do_reputation            = N (Y=do reputation lookup)
+reputation_fail          = 32767 (high int)
+reputation_pass          = -32768 (low int)
+reputation_root          = host.dkim-reputation.example (lookup host)
+trusted_vouchers         = NULL (space-separated, no colon)
+dnswl_worthiness_pass    = 1 (int)
+dnswl_invalid_ip         =] [ZF_DNSWL_INVALID_IP_ENDIAN] [(int)
+dnswl_octet_index        = 3 (int)
+trusted_dnswl            =  (space-separated dns.zones)
+                         0 list.dnswl.org
+whitelisted_pass         = 3 (int)
+dns_timeout              = 0 (secs)
+])
+
+#
+AT_INIT
+AT_TESTED([zdkimfilter])
+
+# test only valid with libopendkim v. 2.2.0 or better
+# (need autoconf 2.64 for AT_SKIP_IF?)
+m4_define([ZF_REQUIRE_22], [AT_CHECK([test "$HAVE_LIBOPENDKIM_220" = "1" || exit 77])])
+
+#
+AT_SETUP([test default parameters])
+ZF_CONFIG(0, [reputation_root host.dkim-reputation.example
+])
+ZF_BATCH([test1])
+AT_CHECK(
+ZF_RUN,
+0,
+[ZF_DEFAULT_PARM_TMP], [])
+AT_CLEANUP
+
+#
+AT_SETUP([test integer overflow is caught])
+ZF_CONFIG(0,
+[# 32 bit:     12345678
+dns_timeout=0x100000000
+])
+ZF_BATCH([test1])
+AT_CHECK(
+ZF_RUN,
+2,
+[],
+[ERR:zdkimfilter[[0]]:Invalid value 0x100000000 for dns_timeout at line 6 in zftest.conf
+ERR:zdkimfilter[[0]]:Unable to read config file
+])
+AT_CLEANUP
+
+
+#
+AT_SETUP([test backslash for parameter line continuation])
+ZF_CONFIG(0, [reputation_root host.dkim-reputation.example
+default_domain should be a domain name, but here we use it to test that\
+a rather lengthy string can be put into that variable. In facts, it is\
+just a string variable...])
+ZF_BATCH([test1])
+AT_CHECK(
+ZF_RUN,
+0,
+[ZF_DEFAULT_PARM_TMP([should be a domain name, but here we use it to test that a rather lengthy string can be put into that variable. In facts, it is just a string variable...])], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Sign and verify my signature])
+ZF_CONFIG(6, [trust_a_r
+add_auth_pass
+sign_hfields Date From To Subject Authentication-Results
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctls], [Msignmsg
+uauthsmtp
+iuser@example.com
+])
+ZF_BATCH([mail
+ctls
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user@example.com with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+# make a modified copy of mail for later
+AT_CHECK([sed '/^Authentication-Results:/s/^/Old-/' mail > mail2])
+# verify mail normally
+AT_DATA([ctlv], [Mverifymsg
+usmtp
+])
+AT_DATA([KEYFILE],
+[s._domainkey.example.com v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mail
+ctlv
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: Authentication-Results by example.com: please check ALLOW settings
+INFO:zdkimfilter[[0]]:id=verifymsg: Authentication-Results by mail.example.com: empty
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@example.com, stat=0) rep=0
+INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
+])
+# now repeat the test with modified mail
+ZF_BATCH([test2
+test3
+mail2
+ctlv
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@example.com, stat=0) rep=0
+INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Sign with default domain])
+ZF_CONFIG(6, [default_domain example.com
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Sign with default domain, selector given])
+ZF_CONFIG(6, [default_domain example.com
+selector given
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector given
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Sign with default domain, selector linked])
+ZF_CONFIG(6, [default_domain example.com
+selector given
+])
+ZF_PRIVATEKEY([linked], [example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector linked
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+AT_CLEANUP
+
+# common setup for author signature verification
+#
+# since this relies on libopendkim, it is enough to check the logs of its
+# results, rather than going down to verify file contents.
+#
+m4_define([ZF_KEYCONFIG],
+[ZF_KEYFILE([$1])
+ZF_CONFIG([m4_default([$3], [3])], [db_backend test
+db_sql_insert_msg_ref dummy
+$2])])
+
+m4_define([ZF_CTLBATCH],
+[AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[m4_join([ ],
+	[INFO:zdkimfilter[0]:id=verifymsg: verified:],
+	m4_ifblank([$2], [[spf=pass,]]),
+	[dkim=$1 rep=0
+])])])
+
+#
+AT_SETUP([Verify simple author signature])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)])
+AT_CLEANUP
+
+# for any possible order of the 3 signatures, must be id=@author.example
+#
+AT_SETUP([Verify author signature mixed with other 1/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify author signature mixed with other 2/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGOTHER, ZF_SIGSENDER)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify author signature mixed with other 3/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGSENDER, ZF_SIGAUTHOR, ZF_SIGOTHER)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify author signature mixed with other 4/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGSENDER, ZF_SIGOTHER, ZF_SIGAUTHOR)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify author signature mixed with other 5/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGOTHER, ZF_SIGAUTHOR, ZF_SIGSENDER)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify author signature mixed with other 6/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGOTHER, ZF_SIGSENDER, ZF_SIGAUTHOR)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify simple author failed signature])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
+ZF_CTLBATCH([fail (id=@author.example, signature verification failed, stat=1)])
+AT_CLEANUP
+
+# for any possible order of the 3 signatures, must be id=@sender.example
+#
+AT_SETUP([Verify sender signature mixed with other 1/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
+ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
+AT_CLEANUP
+
+
+#
+AT_SETUP([Verify sender signature mixed with other 2/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGOTHER, ZF_SIGSENDER)])
+ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify sender signature mixed with other 3/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGSENDER, ZF_FAILAUTHOR, ZF_SIGOTHER)])
+ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify sender signature mixed with other 4/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGSENDER, ZF_SIGOTHER, ZF_FAILAUTHOR)])
+ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify sender signature mixed with other 5/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGOTHER, ZF_FAILAUTHOR, ZF_SIGSENDER)])
+ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify sender signature mixed with other 6/6])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGOTHER, ZF_SIGSENDER, ZF_FAILAUTHOR)])
+ZF_CTLBATCH([pass (id=@sender.example, stat=0)])
+AT_CLEANUP
+
+# test only valid with opendbx
+m4_define([ZF_REQUIRE_OPENDBX], [AT_CHECK([$HAVE_OPENDBX || exit 77])])
+
+
+#
+AT_SETUP([Verify the IP address passed to database])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(ZF_SIGAUTHOR)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)], [nospf])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'ip: c0000201' database_dump, 0,
+[ip: c0000201
+],[])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify the bounce address passed to database])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(ZF_SIGAUTHOR)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)], [nospf])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'envelope_sender:' database_dump, 0,
+[envelope_sender: bounces@server.example
+],[])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify bounce address after signing])
+ZF_CONFIG(6, [default_domain example.com
+db_backend test
+db_sql_insert_target_ref dummy
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [suser-bounce@example.com
+Msignmsg
+uauthsmtp
+iuser
+rrecipient@example.org
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'envelope_sender:' database_dump, 0,
+[envelope_sender: user-bounce@example.com
+],[])
+AT_CLEANUP
+
+#
+AT_SETUP([Reject message with non-existent From: domain])
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_insert_msg_ref dummy
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Mfraudmsg
+usmtp
+])
+ZF_BATCH([test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 Invalid author domain
+],
+[INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, no VBR and no whitelist
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Accept message with non-existent From: domain])
+ZF_CONFIG(3)
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Mfraudmsg
+usmtp
+])
+ZF_BATCH([test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim-adsp=nxdomain header.from=user@author.example
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Whitelisted sender, non-existent From: domain])
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_whitelisted sender.example:2
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Musenetmsg
+usmtp
+])
+ZF_BATCH([test3
+mail
+ctl
+
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: SPF)
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim-adsp=nxdomain header.from=user@author.example
+], [])
+
+# same with db_sql_domain_flags
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_domain_flags sender.example:2
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: SPF)
+INFO:zdkimfilter[[0]]:id=usenetmsg: removing Authentication-Results from test.example
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Whitelisted signer, non-existent From: domain])
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_whitelisted sender.example:2
+])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_DATA([ctl], [Musenetmsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: DKIM)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim=pass (whitelisted) header.i=@sender.example;
+  dkim-adsp=nxdomain header.from=user@author.example
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Whitelisted both ways, SPF ignored])
+ZF_CONFIG(3, [reject_on_nxdomain
+verify_one_domain
+db_backend test
+db_sql_whitelisted other.example:2 sender.example:2
+])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_DATA([ctl], [Musenetmsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: DKIM)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass (whitelisted) header.i=@sender.example;
+  dkim-adsp=nxdomain header.from=user@author.example
+], [])
+
+# same with db_sql_domain_flags
+ZF_CONFIG(3, [reject_on_nxdomain
+verify_one_domain
+db_backend test
+db_sql_domain_flags other.example:2 sender.example:2
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: DKIM)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
+INFO:zdkimfilter[[0]]:id=usenetmsg: removing Authentication-Results from test.example
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Dkim whitelisting with SPF-validated signer])
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_whitelisted other.example:2
+])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE
+AT_DATA([mail], [ZF_MESSAGE(, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_DATA([ctl], [Musenetmsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but other.example is whitelisted (auth: DKIM)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@other.example, stat=0) adsp=nxdomain rep=0
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass (whitelisted) header.i=@other.example;
+  dkim-adsp=nxdomain header.from=user@author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([Whitelisted but not authenticated From: domain])
+ZF_CONFIG(3, [reject_on_nxdomain
+save_from_anyway
+db_backend test
+db_sql_whitelisted author.example:2
+db_sql_select_domain dummy
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Mfraudmsg
+usmtp
+])
+ZF_BATCH([test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 Invalid author domain
+],
+[INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, no VBR and no whitelist
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'domain: author.example' database_dump, 0,
+[domain: author.example
+domain: author.example
+domain: author.example
+],[])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify author signature with policy: all])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
+author.example X
+])
+ZF_CONFIG(3)
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) adsp:all=pass rep=0
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim-adsp=pass header.from=user@author.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify author signature with policy: discard])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(3)
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) adsp:discardable=pass rep=0
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim-adsp=pass header.from=user@author.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Fail author signature with policy: all])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
+author.example X
+])
+ZF_CONFIG(3)
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=fail (id=@author.example, signature verification failed, stat=1) adsp:all=fail rep=0
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=fail (signature verification failed) header.i=@author.example;
+  dkim-adsp=fail header.from=user@author.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Reject author signature with policy: all])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
+author.example X
+])
+ZF_CONFIG(0, [honor_author_domain
+])
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 DKIM signature required by ADSP
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Drop author signature with policy: discard])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(3, [honor_author_domain
+])
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+fTesT
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[INFO:zdkimfilter[[0]]:id=policymsg: adsp=discardable policy: author.example, no VBR and no whitelist
+INFO:zdkimfilter[[0]]:drop msg,id=policymsg: adsp=discard
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Whitelisted sender, failed policy: discard])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(3, [honor_author_domain
+db_backend test
+db_sql_whitelisted sender.example:2
+])
+ZF_REQUIRE_OPENDBX
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=policymsg: adsp=discardable policy: author.example, but sender.example is whitelisted (auth: SPF)
+INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=fail (id=@author.example, signature verification failed, stat=1) adsp:discardable=discard rep=0
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=fail (signature verification failed) header.i=@author.example;
+  dkim-adsp=discard header.from=user@author.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify sender, fail author, policy: all])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
+author.example X
+])
+ZF_CONFIG(3)
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp:all=fail rep=0
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@sender.example;
+  dkim-adsp=fail header.from=user@author.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify sender, fail author, policy: discard])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(0)
+AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR, ZF_SIGSENDER)])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@sender.example;
+  dkim-adsp=discard header.from=user@author.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Missing author signature with policy: all])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=all
+author.example X
+])
+ZF_CONFIG(0)
+AT_DATA([POLICYFILE], [dkim=all
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim-adsp=fail header.from=user@author.example
+Received: from server.example by test.example with ESMTP
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Missing author signature with policy: discard])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(0)
+AT_DATA([POLICYFILE], [dkim=discardable
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim-adsp=discard header.from=user@author.example
+Received: from server.example by test.example with ESMTP
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Mandatory author signature without SPF])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
+author.example X
+])
+ZF_CONFIG(0)
+AT_DATA([POLICYFILE], [dkim=discardable
+])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim-adsp=discard header.from=user@author.example
+Received: from server.example by test.example with ESMTP
+], [])
+AT_CLEANUP
+
+# it is not practical to thoroughly test dropping...
+AT_SETUP([Drop missing signature with 1 recipient])
+ZF_KEYFILE
+AT_DATA([POLICYFILE], [dkim=discardable
+])
+ZF_CONFIG(0, [honor_author_domain
+])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+fTesT
+rfoo@example.org
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[])
+AT_CHECK(
+head -n 5 ctl, 0,
+[Mpolicymsg
+usmtp
+fTesT
+rfoo@example.org
+I0 R 250 Dropped.
+], [])
+AT_CLEANUP
+
+
+#
+AT_SETUP([No signature, no policy, and no SPF])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=unknown
+author.example X
+])
+AT_DATA([POLICYFILE], [dkim=unknown
+])
+ZF_CONFIG(0, [db_backend test
+db_sql_insert_msg_ref dummy
+])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+AT_DATA([database_dump], [])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 not filtered.
+],
+[])
+AT_CHECK(
+head -n 1 mail, 0,
+[Received: from server.example by test.example with ESMTP
+], [])
+AT_CHECK([cat database_dump], 0, [], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Save From: even with no authentication])
+ZF_KEYFILE([_adsp._domainkey.author.example dkim=unknown
+author.example X
+])
+AT_DATA([POLICYFILE], [dkim=unknown
+])
+ZF_CONFIG(0, [db_backend test
+db_sql_insert_msg_ref dummy
+save_from_anyway
+])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF])
+AT_DATA([ctl], [Mpolicymsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 not filtered.
+],
+[])
+AT_CHECK(
+[head -n 1 mail], 0,
+[Received: from server.example by test.example with ESMTP
+], [])
+ZF_REQUIRE_OPENDBX
+AT_CHECK([grep 'domain: ' database_dump], 0, [domain: author.example
+], [])
+AT_CLEANUP
+
+
+#
+AT_SETUP([Cannot write unauthenticated msg w/o From:])
+ZF_CONFIG(0, [db_backend test
+db_sql_insert_msg_ref dummy
+save_from_anyway
+])
+AT_DATA([mail],
+[Received: from server.example by test.example with ESMTP
+Received-SPF: none SPF=MAILFROM sender=someone@sender.example;
+Received-SPF: none SPF=HELO sender=server.sender.example;
+Message-ID: <123456@author.example>
+Date: Mon, 08 Feb 2010 13:12:55 +0100
+VBR-Info: mc=all; md=author.example; mv=author-cert.example
+VBR-Info: mc=all; md=sender.example; mv=sender-cert.example
+MIME-Version: 1.0
+To: (undisclosed recipients)
+Subject: Message without From:
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+Cannot write this message on the DB, because it wouldn't be
+attached to any domain.  Perhaps we could attach it to the
+IP address, looking it up in some number-whois server...
+])
+AT_DATA([ctl], [Manonymousmsg
+usmtp
+])
+AT_DATA([database_dump], [])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 not filtered.
+],
+[])
+AT_CHECK(
+[head -n 1 mail], 0,
+[Received: from server.example by test.example with ESMTP
+], [])
+AT_CHECK([cat database_dump], 0, [], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Logging specific header fields to the DB])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [db_backend test
+db_sql_insert_msg_ref dummy
+])
+AT_DATA([mail],
+[Received: from server.example by test.example with ESMTP
+Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
+Received-SPF: none SPF=HELO sender=server.sender.example;
+Message-ID: <123456@author.example>
+Date: Mon, 08 Feb 2010 13:12:55 +0100
+VBR-Info: mc=all; md=author.example; mv=author-cert.example
+VBR-Info: mc=all; md=sender.example; mv=sender-cert.example
+MIME-Version: 1.0
+From:     The (sender)
+	<author@author.example>
+To: (undisclosed recipients)
+Subject: This continues to the next line;
+		 		after the                    semicolon
+Content-Type: text/plain; charset=us-ascii
+
+hi there!
+])
+AT_DATA([ctl], [sauthor-bounce@author.example
+Mloggedmsg
+usmtp
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+AT_CHECK([grep 'content_type:' database_dump], 0,
+[content_type: text/plain
+], [])
+AT_CHECK([grep 'content_encoding:' database_dump], 0,
+[content_encoding: -- not given --
+], [])
+AT_CHECK([grep 'date:' database_dump], 0,
+[date: Mon, 08 Feb 2010 13:12:55 +0100
+], [])
+AT_CHECK([grep 'message_id:' database_dump], 0,
+[message_id: <123456@author.example>
+], [])
+AT_CHECK([grep 'from:' database_dump], 0,
+[from: The (sender) <author@author.example>
+], [])
+AT_CHECK([grep 'subject:' database_dump], 0,
+[subject: This continues to the next line; after the semicolon
+], [])
+AT_CHECK([grep 'envelope_sender:' database_dump], 0,
+[envelope_sender: author-bounce@author.example
+], [])
+AT_CLEANUP
+
+
+# common setup for dynamic signing domain determination
+
+# ZF_MESSAGE_DYN(fromdomain, lines-before, lines-after)
+m4_define([ZF_MESSAGE_DYN],
+[$2Message-ID: <123456@author.example>
+Received: from test.example
+ by another.example
+Date: Sun, 05 Sep 2010 15:42:58 +0200
+From: Author <user@$1>
+MIME-Version: 1.0
+To: (undisclosed recipients)
+Subject: Test multiple signatures
+$3Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+This is going to be signed by the domain determined from the header:
+the relevant field names have to be configured.
+
+The header of the message has to be read an additional time in order
+to check what field, if any, leads to the signing domain.
+])
+
+# ZF_DATA_DYN(message)
+m4_define([ZF_DATA_DYN],
+[AT_DATA([mail], [$1])
+AT_DATA([ctl], [Mdyndom
+uauthsmtp
+iuser@example.com
+])
+ZF_BATCH([mail
+ctl
+
+])])
+
+# ZF_EXPECT(domain_expected), or ZF_EXPECT(NO, domain-or-key)
+m4_define([ZF_EXPECT],
+[AT_CHECK(
+ZF_RUN,
+0,
+m4_if([$1], [NO], [250 not filtered.
+], [250 Ok.
+]),
+m4_if([$1], [NO],
+[[[INFO:zdkimfilter[0]:id=dyndom: not signing for user@example.com: no $2
+INFO:zdkimfilter[0]:id=dyndom: response: 250 not filtered.
+]]],
+[[[INFO:zdkimfilter[0]:id=dyndom: signing for user@example.com with domain $1, selector linked
+INFO:zdkimfilter[0]:id=dyndom: response: 250 Ok.
+]]]))])
+
+# one field, given
+AT_SETUP([Signing after the From field])
+ZF_CONFIG(6, [default_domain example.com
+key_choice_header from
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([example.org])
+AT_CLEANUP
+
+# one field, not given
+AT_SETUP([Not signing for missing choice field])
+ZF_CONFIG(6, [default_domain example.com
+key_choice_header no-such-header-field
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([NO], [domain])
+AT_CLEANUP
+
+# one field, given, but the key is missing
+AT_SETUP([Not signing for missing key])
+ZF_CONFIG(6, [default_domain example.com
+selector given
+key_choice_header from
+])
+ZF_PRIVATEKEY([linked], [[example.com]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([NO], [key])
+AT_CLEANUP
+
+# default default_domain
+AT_SETUP([Default domain even if login domain])
+ZF_CONFIG(6, [default_domain example.org
+key_choice_header - *
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([example.org])
+AT_CLEANUP
+
+# default login domain
+AT_SETUP([Login domain preferred])
+ZF_CONFIG(6, [default_domain example.org
+key_choice_header * -
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([example.com])
+AT_CLEANUP
+
+# from overrides default
+AT_SETUP([Login domain not preferred])
+ZF_CONFIG(6, [default_domain example.org
+key_choice_header from *
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([example.org])])
+ZF_EXPECT([example.org])
+AT_CLEANUP
+
+# repeated field overrides default
+AT_SETUP([Custom field, second instance overrides])
+ZF_CONFIG(6, [default_domain example.com
+key_choice_header from x-repeated x-repeated *
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([another.example],
+[X-Repeated: me@yet.another.example (format like mailbox)
+],
+[X-Repeated: (this works) <x@example.org>
+])])
+ZF_EXPECT([example.org])
+AT_CLEANUP
+
+# repeated field does not override default
+AT_SETUP([Custom field, second instance does not override])
+ZF_CONFIG(6, [default_domain example.com
+key_choice_header from x-repeated * x-repeated
+])
+ZF_PRIVATEKEY([linked], [[example.com], [example.org]])
+ZF_DATA_DYN([ZF_MESSAGE_DYN([another.example],
+[X-Repeated: me@yet.another.example (format like mailbox)
+],
+[X-Repeated: (this worked before) <x@example.org>
+])])
+ZF_EXPECT([example.com])
+AT_CLEANUP
+
+# ZF_SIGREPORT(configlines, alt-message)
+m4_define([ZF_SIGREPORT],
+[ZF_KEYFILE([author.example X
+])
+ZF_CONFIG(2, [db_backend test
+db_sql_insert_msg_ref dummy
+$1])
+AT_DATA([mail],
+	[m4_default([$2], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])])
+AT_DATA([ctl], [Mverifymsg
+usmtp
+])
+AT_DATA([VBRFILE], [author.example._vouch.author-cert.example all
+sender.example._vouch.sender-cert.example all
+])
+ZF_BATCH([test2
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])])
+
+# check A-R layout with multiple signatures
+AT_SETUP([A-R layout with multiple signatures])
+ZF_SIGREPORT
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+# check A-R layout with multiple signatures: whitelisted
+AT_SETUP([Whitelisted domain reported])
+ZF_SIGREPORT([# already defined: db_backend test
+db_sql_whitelisted sender.example:2
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+head -n 5 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim=pass (whitelisted) header.i=@sender.example
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+# check A-R layout with multiple signatures: vouched
+AT_SETUP([Vouched domain reported])
+ZF_SIGREPORT([trusted_vouchers sender-cert.example
+])
+AT_CHECK(
+head -n 6 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim=pass (vbr) header.i=@sender.example;
+  vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+# check A-R layout with multiple signatures: whitelisted+vouched
+AT_SETUP([Whitelisted + vouched domain])
+ZF_SIGREPORT([trusted_vouchers sender-cert.example
+# already defined: db_backend test
+db_sql_whitelisted sender.example:2
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+head -n 6 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim=pass (whitelisted, vbr) header.i=@sender.example;
+  vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+# check A-R layout with multiple signatures: vouched + report_all_sigs
+AT_SETUP([Report all sigs])
+ZF_SIGREPORT([trusted_vouchers sender-cert.example
+report_all_sigs
+])
+AT_CHECK(
+head -n 7 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim=pass (vbr) header.i=@sender.example;
+  dkim=pass header.i=@other.example;
+  vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Report all sigs with header.b])
+ZF_SIGREPORT([trusted_vouchers sender-cert.example
+report_all_sigs
+], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER, ZF_SIGSENDER2)])
+AT_CHECK(
+head -n 10 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dkim=pass (vbr) header.i=@sender.example
+    header.b=d6AyU6LW;
+  dkim=pass (vbr) header.i=@sender.example
+    header.b=mDCtHhur;
+  dkim=pass header.i=@other.example;
+  vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=author.example; s=x1;
+], [])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'vbr_mv: ' database_dump, 0,
+[vbr_mv: -- not given --
+vbr_mv: sender-cert.example
+vbr_mv: -- not given --
+vbr_mv: -- not given --
+],[])
+AT_CLEANUP
+
+AT_SETUP([Reject too many signatures])
+ZF_KEYFILE([author.example X
+])
+ZF_CONFIG(2, [max_signatures 2
+])
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_DATA([ctl], [Mverifymsg
+usmtp
+])
+ZF_BATCH([test2
+mail
+ctl
+
+exit
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 Too many DKIM signatures
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Obfuscate userid])
+ZF_CONFIG(3, [default_domain example.com
+redact_received_auth using this secret text
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE([Received: from test.example
+ (whatever is going to be written here AUTH: method user, and some more)
+ by submission.server.example with ESMTPA
+])])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+[obfuscated=`test "$HAVE_NETTLE" = "1" && echo "Xr@LC"`
+]
+AT_CHECK_NOESCAPE(
+[sed -n '/^Received: from test/,+2p' mail], 0, m4_join([],
+[Received: from test.example
+ (whatever is going to be written here AUTH: method ],
+ [$obfuscated],
+ [, and some more)
+ by submission.server.example with ESMTPA
+]), [])
+AT_CLEANUP
+
+# test only valid with libnettle
+m4_define([ZF_REQUIRE_NETTLE], [AT_CHECK([test "$HAVE_NETTLE" = "1" || exit 77])])
+
+#
+AT_SETUP([Retrieve obfuscated userid])
+ZF_CONFIG(3, [default_domain example.com
+redact_received_auth using this secret text
+])
+ZF_REQUIRE_NETTLE
+AT_CHECK(
+[redact -f zftest.conf --decode Xr@LC], 0, [user
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Retrieve target domains])
+ZF_CONFIG(6, [default_domain example.com
+db_backend test
+db_sql_select_target dummy
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+rsomeone@example.org
+rmyself@example.com
+rsomeone-else@example.org
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'example.org' database_dump, 0,
+[domain: example.org
+domain: example.org
+],[])
+AT_CHECK(
+grep 'rcpt_count' database_dump, 0,
+[rcpt_count: 3
+rcpt_count: 3
+rcpt_count: 3
+rcpt_count: 3
+],[])
+AT_CLEANUP
+
+#
+AT_SETUP([Check dkimsign finds the right executable])
+ZF_CONFIG(3, [default_domain example.com
+redact_received_auth using this secret text
+])
+AT_CHECK([dkimsign -f zftest.conf --version], 0, [ignore], [ignore])
+AT_CLEANUP
+
+# batch invocation a-la dkimsign, with config file; adding --batch-test for fl_log_no_pid
+# (can use ./testsuite -d VALGRIND_AND_OPTS="valgrind -v --leak-check=full --trace-children=yes --log-file=valgrind%p.out")
+m4_define([ZF_NOFORK], [$VALGRIND_AND_OPTS zdkimfilter -f zftest.conf --no-db --no-fork [-t1,dkimsign] ctls $1 --batch-test <mail >mailsig ])
+m4_define([ZDKSIGN], [$VALGRIND_AND_OPTS dkimsign -f zftest.conf --filter $1 -- --batch-test >mailsig ])
+#
+AT_SETUP([Sign and verify with no-fork])
+ZF_CONFIG(6)
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctls], [Mdkimsign
+uauthsmtp
+ipostmaster@example.com
+])
+AT_CHECK(
+ZF_NOFORK,
+0,
+[],
+[zdkimfilter: running for dkimsign on 1 ctl + 1 mail files
+INFO:zdkimfilter[[0]]:id=dkimsign: signing for postmaster@example.com with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=dkimsign: response: 250 Ok.
+
+FILTER-RESPONSE:250 Ok.
+])
+AT_DATA([ctlv], [Mverifymsg
+usmtp
+])
+AT_DATA([KEYFILE],
+[s._domainkey.example.com v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mailsig
+ctlv
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@example.com, stat=0) rep=0
+INFO:zdkimfilter[[0]]:id=verifymsg: found Authentication-Results by mail.example.com
+INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Non filtered file copied to stdout if no-fork])
+ZF_CONFIG(6)
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctls], [Mdkimsign
+uauthsmtp
+ipostmaster@example.com
+])
+AT_CHECK(
+ZF_NOFORK,
+0,
+[],
+[zdkimfilter: running for dkimsign on 1 ctl + 1 mail files
+INFO:zdkimfilter[[0]]:id=dkimsign: not signing for postmaster@example.com: no key
+INFO:zdkimfilter[[0]]:id=dkimsign: response: 250 not filtered.
+
+FILTER-RESPONSE:250 not filtered.
+])
+AT_CHECK(cmp mail mailsig, 0, [], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Dkimsign copies pipe to tmp])
+ZF_CONFIG(6)
+AT_DATA([mail], [ZF_MESSAGE])
+AT_CHECK([cat mail | ZDKSIGN(--domain example.com)],
+0,
+[], [INFO: zfilter: zdkimfilter: running for dkimsign on 1 ctl + 1 mail files
+INFO: zfilter: zdkimfilter[[0]]:id=dkimsign: not signing for postmaster@example.com: no key
+INFO: zfilter: zdkimfilter[[0]]:id=dkimsign: response: 250 not filtered.
+INFO: zfilter: 250 not filtered.
+])
+AT_CHECK(cmp mail mailsig, 0, [], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Dkimsign reads default domain])
+ZF_CONFIG(6, [
+#this is the default domain
+default_domain = example.com
+])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_CHECK([ZDKSIGN(--domain example.com) <mail],
+0,
+[], [INFO: zfilter: zdkimfilter: running for dkimsign on 1 ctl + 1 mail files
+INFO: zfilter: zdkimfilter[[0]]:id=dkimsign: not signing for postmaster@example.com: no key
+INFO: zfilter: zdkimfilter[[0]]:id=dkimsign: response: 250 not filtered.
+INFO: zfilter: 250 not filtered.
+])
+AT_CHECK(cmp mail mailsig, 0, [], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Dkimsign reads message recipients])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(1, [
+#this is the default domain
+default_domain = example.com
+db_backend test
+db_sql_select_target dummy
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail],
+[ZF_MESSAGE([], [], [Cc: name@some.example
+], [Bcc: "User" <user2@example.org>, user3@example(user's domain).net
+])])
+AT_CHECK([REMOTE_ADDR=192.0.2.2 ZDKSIGN(--db-filter -t. --domain user@example.com) <mail],
+0, [], [])
+AT_CHECK(
+grep 'ip: c0000202' database_dump, 0,
+[ip: c0000202
+ip: c0000202
+ip: c0000202
+ip: c0000202
+ip: c0000202
+ip: c0000202
+],[])
+AT_CHECK(
+grep 'domain:' database_dump, 0,
+[domain: some.example
+domain: some.example
+domain: example.org
+domain: example.org
+domain: example.net
+domain: example.net
+],[])
+AT_CLEANUP
+
+#
+AT_SETUP([Create blocked user list])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [
+blocked_user_list = bul.txt
+db_backend test
+db_sql_check_user user: is-naughty
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail],
+[ZF_MESSAGE([], [], [Cc: name@some.example
+], [Bcc: "User" <user2@example.org>, user3@example(user's domain).net
+])])
+AT_CHECK([ZDKSIGN(--db-filter --domain user@example.com) <mail],
+0, [], [])
+AT_CHECK(grep 'user@example' bul.txt, 0, [ignore], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Update blocked user list])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [
+blocked_user_list = bul.txt
+db_backend test
+db_sql_check_user user: is-naughty
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([bul.txt], [someonelse@another.example is also naughty
+])
+AT_DATA([mail],
+[ZF_MESSAGE([], [], [Cc: name@some.example
+], [Bcc: "User" <user2@example.org>, user3@example(user's domain).net
+])])
+AT_CHECK([ZDKSIGN(--db-filter --domain user@example.com) <mail],
+0, [], [])
+AT_CHECK(grep 'user@example' bul.txt, 0, [ignore], [])
+AT_CHECK(grep 'someonelse@another.example' bul.txt, 0,
+[someonelse@another.example is also naughty
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Update blocked user list missing key])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [
+blocked_user_list = bul.txt
+db_backend test
+db_sql_check_user user: is-naughty
+])
+AT_DATA([bul.txt], [someonelse@another.example is also naughty
+])
+AT_DATA([mail],
+[ZF_MESSAGE([], [], [Cc: name@some.example
+], [Bcc: "User" <user2@example.org>, user3@example(user's domain).net
+])])
+AT_CHECK([ZDKSIGN(--db-filter --domain user@example.com) <mail],
+0, [], [])
+AT_CHECK(grep 'user@example' bul.txt, 0, [ignore], [])
+AT_CHECK(grep 'someonelse@another.example' bul.txt, 0,
+[someonelse@another.example is also naughty
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Update blocked user list missing key and domain])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [
+blocked_user_list = bul.txt
+db_backend test
+db_sql_check_user user: not referenced: postmaster: naughty
+])
+AT_DATA([bul.txt], [someonelse@another.example is also naughty
+])
+AT_DATA([mail],
+[ZF_MESSAGE([], [], [Cc: name@some.example
+], [Bcc: "User" <user2@example.org>, user3@example(user's domain).net
+])])
+AT_CHECK([ZDKSIGN(--db-filter) <mail],
+0, [], [])
+AT_CHECK(grep 'postmaster' bul.txt, 0, [ignore], [])
+AT_CHECK(grep 'someonelse@another.example' bul.txt, 0,
+[someonelse@another.example is also naughty
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Reject blocked user])
+ZF_CONFIG(1, [
+blocked_user_list bul.txt
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Moutgoingmsg
+uauthsmtp
+iuser@example.com
+rsomeone@somewhere.example
+])
+AT_DATA([bul.txt], [user@example.com is naughty
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 BLOCKED: can send to <postmaster@example.com> only.
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Reject blocked user missing domain])
+ZF_CONFIG(1, [
+blocked_user_list bul.txt
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Moutgoingmsg
+uauthsmtp
+iuser
+rsomeone@somewhere.example
+])
+AT_DATA([bul.txt], [user is naughty
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 BLOCKED: can send to <postmaster@--domain misconfigured--> only.
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Reject blocked user sending also to postmaster])
+ZF_CONFIG(1, [
+blocked_user_list bul.txt
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Moutgoingmsg
+uauthsmtp
+iuser@example.com
+rpostmaster@example.com
+rsomeone@somewhere.example
+])
+AT_DATA([bul.txt], [user@example.com is naughty
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 BLOCKED: can send to <postmaster@example.com> only.
+],
+[])
+AT_CLEANUP
+
+#
+AT_SETUP([Accept blocked user sending to postmaster only])
+ZF_CONFIG(1, [
+blocked_user_list bul.txt
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Moutgoingmsg
+uauthsmtp
+iuser@example.com
+rpostmaster@example.com
+])
+AT_DATA([bul.txt], [user@example.com is naughty
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+AT_CLEANUP
+
+m4_define([ZFARTEST], [$VALGRIND_AND_OPTS TESTutil a_r])
+m4_define([ZFARDATA], [example.com;
+ dnswl/3=pass dns.zone=list.dnswl.org policy.ip=127.0.6.2 policy.txt=test.tana.it http://www.tana.it/
+ spf=pass smtp.mailfrom=bounce.example.org
+ dkim=pass header.i=@example.org
+])
+#
+AT_SETUP([Check parsing Authentication-Results])
+AT_DATA([a_r], [example.com; none
+])
+AT_CHECK(ZFARTEST, 0,
+[example.com;
+], [])
+AT_DATA([a_r], [example.com;
+ dnswl/3=pass dns.zone=list.dnswl.org policy.ip=127.0.6.2 policy.txt="test.tana.it http://www.tana.it/";
+ spf=pass smtp.mailfrom=bounce.example.org;
+ dkim=pass header.i=@example.org
+])
+AT_CHECK(ZFARTEST, 0, ZFARDATA, [])
+AT_DATA([a_r], [example.com;
+ dnswl (comment is allowed here) / (here) 3 = pass   dns.zone = list.dnswl.org
+ 	policy.ip=127.0.6.2 policy.txt="test.tana.it http://www.tana.it/";
+ spf (and here) = pass smtp.mailfrom=bounce.example.org;
+ dkim(evenwithoutspaces)=pass header.i=@example.org
+])
+AT_CHECK(ZFARTEST, 0, ZFARDATA, [])
+AT_DATA([a_r], [example.com;dnswl/3=pass dns.zone=list.dnswl.org policy.ip=127.0.6.2 policy.txt=test.tana.it\ http://www.tana.it/;spf=pass smtp.mailfrom=bounce.example.org;dkim=pass header.i=@example.org
+])
+AT_CHECK(ZFARTEST, 0, ZFARDATA, [])
+AT_DATA([a_r], [example.com;p1=v p2=v p3=v p4=v p5=v p6=v p7=v p8=v p9=v p10=v
+p11=v p12=v p13=v p14=v p15=v p16=v
+])
+AT_CHECK(ZFARTEST, 0, [example.com;
+ p1=v p2=v p3=v p4=v p5=v p6=v p7=v p8=v p9=v p10=v p11=v p12=v p13=v p14=v p15=v p16=v
+], [])
+AT_DATA([a_r], [example.com;p1=v p2=v p3=v p4=v p5=v p6=v p7=v p8=v p9=v p10=v
+p11=v p12=v p13=v p14=v p15=v p16=v p17=v
+])
+AT_CHECK(ZFARTEST, 1, [example.com;
+], [])
+AT_DATA([a_r], [example.com/8b / 12345678901234567890;
+ spf=pass reason = "various tests that \"may\" occur" smtp.mailfrom=bounce.example.org;
+ dkim=pass header.i=@example.org;
+ dkim=pass header.i = thebox (whatch for this) @ example.org;
+ dkim=pass header.i = "the ugly box" (whatch for this) @ example.org
+])
+AT_CHECK(ZFARTEST, 0, [example.com/8b/12345678901234567890;
+ spf=pass reason=various tests that "may" occur smtp.mailfrom=bounce.example.org
+ dkim=pass header.i=@example.org
+ dkim=pass header.i=thebox@example.org
+ dkim=pass header.i=the ugly box@example.org
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([DNSWL sender, non-existent From: domain])
+ZF_CONFIG(3, [reject_on_nxdomain
+trust_a_r
+])
+ZF_KEYFILE
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(, ZF_SIGSENDER, ZF_SIGOTHER, ZF_DNSWL)])
+AT_DATA([ctl], [Musenetmsg
+usmtp
+])
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but I found 1 DNSWL record(s) --sender.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
+])
+ZF_REQUIRE_22
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim=pass header.i=@sender.example;
+  dkim-adsp=nxdomain header.from=user@author.example
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([DNSWL sender domain logged to the database])
+ZF_CONFIG(3, [trust_a_r
+db_backend test
+db_sql_insert_msg_ref dummy
+])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(,,, ZF_DNSWL)])
+AT_DATA([ctl], [Mdnswlmsg
+usmtp
+])
+ZF_POLICYFILE
+ZF_BATCH([test3
+mail
+ctl
+
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK( ZF_RUN, 0, [250 not filtered.
+], [])
+AT_CHECK([grep 'domain: ' database_dump], 0, [domain: sender.example
+], [])
+AT_CHECK([grep 'auth_type: ' database_dump], 0, [auth_type: spf,dnswl
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Reload config after signing])
+ZF_CONFIG(6, [default_domain example.com
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+sleep 1
+sighup
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Check parsing split_verify option])
+ZF_CONFIG(3, [split_verify zdkimfilter
+])
+ZF_BATCH([sighup
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[],
+[INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+INFO:zdkimfilter[[0]]:zdkimfilter configured to verify only
+])
+ZF_CONFIG(3, [split_verify dkimfilter
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[],
+[INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+INFO:zdkimfilter[[0]]:zdkimfilter configured to sign only
+])
+AT_CLEANUP
+
+# produce database_dump
+m4_define([ZF_BATCH_CHECK], [ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[])
+])
+
+#
+AT_SETUP([Check complaint_flag values])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(0, [db_backend test
+db_sql_select_user dummy
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [suser-bounce@author.example
+Msignmsg
+uauthsmtp
+iuser@example.com
+rrecipient@another.example
+])
+ZF_BATCH_CHECK
+AT_CHECK([grep 'complaint_flag:' database_dump], 0,
+[complaint_flag: 0
+], [])
+
+AT_DATA([mail],
+[Received: from server.example by test.example with ESMTP
+Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
+Received-SPF: none SPF=HELO sender=server.sender.example;
+Message-ID: <123456@author.example>
+Date: Mon, 08 Feb 2010 13:12:55 +0100
+VBR-Info: mc=all; md=author.example; mv=author-cert.example
+VBR-Info: mc=all; md=sender.example; mv=sender-cert.example
+MIME-Version: 1.0
+From:     The (sender <faked@example.com>)
+	<postmaster@author.example>
+To: whoever is concerned:;
+Subject: This may be a complaint
+Content-Type: text/plain; charset=us-ascii
+
+hi there!
+])
+ZF_BATCH_CHECK
+AT_CHECK([grep 'complaint_flag:' database_dump], 0,
+[complaint_flag: 0
+complaint_flag: 2
+], [])
+
+AT_DATA([ctl], [s
+Msignmsg
+uauthsmtp
+iuser@example.com
+rrecipient@another.example
+])
+ZF_BATCH_CHECK
+AT_CHECK([grep 'complaint_flag:' database_dump], 0,
+[complaint_flag: 0
+complaint_flag: 2
+complaint_flag: 3
+], [])
+
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_BATCH_CHECK
+AT_CHECK([grep 'complaint_flag:' database_dump], 0,
+[complaint_flag: 0
+complaint_flag: 2
+complaint_flag: 3
+complaint_flag: 1
+], [])
+AT_CLEANUP
+
+# common setup for action_header testing
+#
+# since this relies on libopendkim, it is enough to check the logs of its
+# results, rather than going down to verify file contents.
+#
+
+# message with frop-me header, dnswl, spf, author signature, other sig
+# params: policy.ip, no sigs
+m4_define([ZF_DNSWL_MESSAGE], m4_join([],
+[Received: from server.example by test.example with ESMTP
+Authentication-Results: server.example; dnswl=pass dns.zone=list.dnswl.org
+  policy.ip=$1 policy.txt="sender.example and some other stuff"
+],
+[m4_ifblank([$2], ZF_SIGAUTHOR)],
+[Received-SPF: pass SPF=MAILFROM sender=someone@sender.example;
+Received-SPF: pass SPF=HELO sender=server.sender.example;
+Drop-Me: file name
+],
+[m4_ifblank([$2], ZF_SIGOTHER)],
+[Received: from mail.example.com by server.example with ESMTPA
+],
+[ZF_MESSAGE_BODY]))
+
+#
+AT_SETUP([Verify action_header drop and 127.0.0.255])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.0.255])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[CRIT:zdkimfilter[[0]]:Zone list.dnswl.org lookup has invalid IP 127.0.0.255
+INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if worthiness 1 (signed)])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.1])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is in dnswl (1)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if worthiness 1 (not signed)])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.1], [nosigs])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is in dnswl (1)
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if whitelisted (author signature)])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted author.example:3
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is whitelisted (3)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if whitelisted (SPF auth)])
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted sender.example:3
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0], [nosigs])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is whitelisted (3)
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if whitelisted (SPF auth, signed)])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted sender.example:3
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is whitelisted (3)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if vouched])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+trusted_vouchers author-cert.example
+])
+AT_DATA([VBRFILE], [author.example._vouch.author-cert.example all
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is vouched (author-cert.example)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if reputed author sig])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+do_reputation
+reputation_pass -50
+reputation_root al.dkim-reputation.org
+])
+AT_DATA([REPFILE], [author.example author.example -100
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is in al.dkim-reputation.org (-100)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=-100
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Not dropped if reputed other sig])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+do_reputation
+reputation_pass -50
+reputation_root al.dkim-reputation.org
+])
+AT_DATA([REPFILE], [author.example other.example -100
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is in al.dkim-reputation.org (-100)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=-100
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify action_header reject])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+dnswl_worthiness_pass 4
+header_action_is_reject
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.3])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 drop-me.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: 550 drop-me (was: file name)
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Verify action_header drop and save message])
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+dnswl_worthiness_pass 4
+save_drop .
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.3])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+recipient@1
+recipient@2
+recipient@3
+])
+ZF_BATCH([test2
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
+])
+[tail -n +9 zdrop-file_name* > no-preheader
+]
+AT_CHECK(cmp mail no-preheader, 0, [], [])
+AT_CLEANUP
+
+#
+# DMARC
+#
+m4_define([ZF_CTLBATCHDMARC],
+[AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_BATCH([sighup
+test2
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[m4_default([$1], [250 Ok.])][
+],
+[INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+$2])])
+
+# 1=domain, 2=p/sp..
+m4_define([ZF_DMARC], [_dmarc.$1 v=DMARC1; $2; rua=mailto:dmarc-feedback@$1
+])
+
+m4_define([ZF_DOMAIN], [$1 X
+])
+
+# config file and publicsuffix; 1=extra config, [2=override verbose]
+m4_define([ZF_CONFDMARC],
+[ZF_CONFIG([m4_default([$2], [3])], [publicsuffix=publicsuffix
+db_backend test
+db_sql_insert_msg_ref dummy
+$1
+])
+AT_DATA([publicsuffix], [example
+])])
+
+m4_define([ZF_LOG],
+[INFO:zdkimfilter[[0]]:id=verifymsg: $1
+])
+
+m4_define([ZF_VLOG], [ZF_LOG([verified: $1 rep=0])])
+
+#
+AT_SETUP([DMARC non-none policy reported])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=quarantine])])
+ZF_CONFDMARC
+AT_DATA([mail], [ZF_MESSAGE(ZF_SIGAUTHOR)])
+ZF_CTLBATCHDMARC([], [ZF_VLOG([spf=pass, dkim=pass (id=@author.example, stat=0) dmarc:quarantine=pass])])
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass header.i=@author.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed quarantine reported])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=quarantine])])
+ZF_CONFDMARC
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dmarc=fail header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed quarantine honored])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=quarantine])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC([], [ZF_LOG([dmarc=quarantine policy for author.example, no VBR and no whitelist])])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dmarc=fail (QUARANTINE) header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed reject reported])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dmarc=fail header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed reject honored])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
+	[ZF_LOG([dmarc=reject policy for author.example, no VBR and no whitelist])])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed reject honored from database])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([db_sql_domain_flags author.example:0:1:1])
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
+	[ZF_LOG([dmarc=reject policy for author.example, no VBR and no whitelist])])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed subdomain honored from database])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([db_sql_domain_flags author.example:0:1:1])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([], [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
+	[ZF_LOG([dmarc=reject policy for subdomain.author.example, no VBR and no whitelist])])
+AT_CLEANUP
+
+AT_SETUP([DMARC reject not honored if whitelisted])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc
+db_sql_whitelisted sender.example:3
+])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([HELO], [sender.example])])])
+ZF_CTLBATCHDMARC([],
+	[ZF_LOG([dmarc=reject policy for author.example, but sender.example is whitelisted (auth: SPF)])])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.helo=sender.example;
+  dmarc=fail header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC reject not honored if dnswl'd])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc
+trust_a_r
+])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_DNSWL)])
+ZF_CTLBATCHDMARC([],
+	[ZF_LOG([dmarc=reject policy for author.example, but I found 1 DNSWL record(s) --sender.example])])
+AT_CHECK(
+head -n 2 mail, 0,
+[Authentication-Results: test.example;
+  dmarc=fail header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC reject not honored if vouched])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc
+trusted_vouchers sender-cert.example
+])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [sender.example])])])
+AT_DATA([VBRFILE], [sender.example._vouch.sender-cert.example all
+])
+ZF_CTLBATCHDMARC([],
+	[ZF_LOG([dmarc=reject policy for author.example, but sender.example is VBR vouched by sender-cert.example (auth: SPF)])])
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dmarc=fail header.from=author.example;
+  vbr=pass header.mv=sender-cert.example header.md=sender.example (all)
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC reject honored even if reputed])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc
+do_reputation
+reputation_pass -50
+reputation_root al.dkim-reputation.org
+])
+AT_DATA([REPFILE], [author.example other.example -100
+])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGOTHER)])
+ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
+	[ZF_LOG([dmarc=reject policy for author.example, even if author.example is in al.dkim-reputation.org (-100)])])
+AT_CLEANUP
+
+AT_SETUP([DMARC pass signed by subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGAUTHOR_BYSUB, [user@author.example])])
+ZF_CTLBATCHDMARC([], [ZF_VLOG([dkim=pass (id=@subdomain.author.example, stat=0) dmarc:reject=pass])])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim=pass header.i=@subdomain.author.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC pass SPF HELO by subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([HELO], [subdomain.author.example])], [user@author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.helo=subdomain.author.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC pass SPF MAILFROM by subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [subdomain.author.example])], [user@author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=subdomain.author.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC pass SPF FROM (non standard) by subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([FROM], [subdomain.author.example])], [user@author.example])])
+ZF_CTLBATCHDMARC([], [ZF_LOG([author.example pass only because BOFHSPFFROM])])
+AT_CHECK(
+head -n 2 mail, 0,
+[Authentication-Results: test.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain signed by domain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])][ZF_DOMAIN([subdomain.author.example])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGSUB_BYAUTHOR, [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([], [ZF_VLOG([dkim=pass (id=@author.example, stat=0) dmarc:reject=pass])])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim=pass header.i=@author.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain SPF HELO by domain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([HELO], [author.example])], [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.helo=author.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain SPF MAILFROM by domain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [author.example])], [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=author.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC sub SPF FROM (non standard) by domain])
+ZF_KEYFILE([ZF_DMARC([subdomain.author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([FROM], [author.example])], [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([], [ZF_LOG([subdomain.author.example pass only because BOFHSPFFROM])])
+AT_CHECK(
+head -n 2 mail, 0,
+[Authentication-Results: test.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain signed by subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])][ZF_DOMAIN([subdomain.author.example])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGSUB_BYSUB, [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([], [ZF_VLOG([dkim=pass (id=@subdomain.author.example, stat=0) dmarc:reject=pass])])
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  dkim=pass header.i=@subdomain.author.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain SPF by another subdomain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [anothersub.author.example])], [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC
+AT_CHECK(
+head -n 3 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=anothersub.author.example;
+  dmarc=pass header.from=subdomain.author.example
+], [])
+AT_CLEANUP
+
+m4_define([ZF_MESSAGE_AUTH_BYSUB],
+[AT_DATA([mail],
+[ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [subdomain.author.example])]dnl
+ZF_SIGAUTHOR_BYSUB, [user@author.example])])])
+
+AT_SETUP([DMARC auth by subdomain strict dkim])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject; adkim=s])])
+ZF_CONFDMARC([honor_dmarc])
+ZF_MESSAGE_AUTH_BYSUB
+ZF_CTLBATCHDMARC([], [ZF_VLOG([spf=pass, dkim=pass (id=@subdomain.author.example, stat=0) dmarc:reject=pass])])
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=subdomain.author.example;
+  dkim=pass header.i=@subdomain.author.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC auth by subdomain strict spf])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject; aspf=s])])
+ZF_CONFDMARC([honor_dmarc])
+ZF_MESSAGE_AUTH_BYSUB
+ZF_CTLBATCHDMARC([], [ZF_VLOG([spf=pass, dkim=pass (id=@subdomain.author.example, stat=0) dmarc:reject=pass])])
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=subdomain.author.example;
+  dkim=pass header.i=@subdomain.author.example;
+  dmarc=pass header.from=author.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC auth by subdomain strict both])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject; adkim=s; aspf=s])])
+ZF_CONFDMARC([honor_dmarc])
+ZF_MESSAGE_AUTH_BYSUB
+ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
+	[ZF_LOG([dmarc=reject policy for author.example, no VBR and no whitelist])])
+AT_CLEANUP
+
+
+#
+AT_SETUP([Check wrapping long lines on signing])
+ZF_CONFIG(6, [default_domain example.com
+])
+ZF_PRIVATEKEY([example.com])
+AT_DATA([mail], [Received: from server.example by test.example with ESMTP
+Message-ID: <123456@author.example>
+Date: Fri, 10 Apr 2015 19:35:00 +0200
+From: Author One <user@author.example>,user2@author.example(Author Two), user3@author.example
+MIME-Version: 1.0
+To  : (XYZ) x@y.z, and a bunch of people: Rc1 <rc1@dest.example>, Rc2 <rc2@dest.example>, Rc3 <rc3@dest.example>;
+Reply-To:
+ Author
+  One
+   <user@author.example>       ,
+    user2@author.example
+     (Author Two),
+         user3@author.example
+Subject: Test address wrapping
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+The header will be wrapped before being signed!
+])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+iuser
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for user with domain example.com, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+AT_CHECK([head -17 mail | tail -11], 0,
+[Received: from server.example by test.example with ESMTP
+Message-ID: <123456@author.example>
+Date: Fri, 10 Apr 2015 19:35:00 +0200
+From: Author One <user@author.example>,
+  user2@author.example (Author Two), user3@author.example
+MIME-Version: 1.0
+To: x@y.z (XYZ), and a bunch of people: Rc1 <rc1@dest.example>,
+  Rc2 <rc2@dest.example>, Rc3 <rc3@dest.example>;
+Reply-To: Author One <user@author.example>,
+  user2@author.example (Author Two), user3@author.example
+Subject: Test address wrapping
+], [])
+AT_CLEANUP
+
+# no real DNS query here...
+dnl AT_SETUP([Real DNS queries: vouch, reputation])
+dnl AT_CHECK(
+dnl [TESTmyvbr --query dwltest.com dwl.spamhaus.org
+dnl ],
+dnl 0,
+dnl [rtc = 0 (noerror) "all"
+dnl ],
+dnl [])
+dnl AT_CHECK(
+dnl [TESTmyrep test3 example.com signer.example reptest.tana.it
+dnl ],
+dnl 0,
+dnl [rtc = 0, rep = 3.
+dnl ],
+dnl [])
+dnl AT_CLEANUP
+dnl 

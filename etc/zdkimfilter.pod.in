@@ -1,0 +1,303 @@
+=pod
+
+=head1 NAME
+
+zdkimfilter - DKIM filter for the Courier mail server
+
+=head1 SYNOPSIS
+
+
+filterctl (C<start> | C<stop>) B<zdkimfilter>
+
+@COURIER_FILTER_INSTALL@/B<zdkimfilter> I<OPTION>
+
+The second form can be used for scripting or testing.  See OPTIONS below.
+
+
+=head1 DESCRIPTION
+
+zdkimfilter is a global filter, in the sense that it works for all users.
+It works in either signing or verifying mode, based on whether the sender
+is authenticated with user-id and password.
+
+=head2 Signing
+
+If the sender is authenticated, zdkimfilter signs the message on behalf of a
+I<domain>.  By default, the domain name is determined after the user-id, if it
+contains an C<@>.  Alternatively, one can define a I<default_domain>.  Finally,
+the domain name can be obtained from a suitable header field of the message,
+such as C<From:>.  Use the I<key_choice_header> configuration option to specify
+that.
+
+The domain name is then looked up in the I<domain_keys> directory.  It should
+be a soft link to the actual key.  The basename of the linked-to file contains
+the selector: If the basename starts with the same string as the domain name,
+then that initial part and an optional dot are skipped.  In addition, an
+extension of C<.private> or C<.pem> is discarded.  For example, the following
+will all result in assigning selector F<sel> as the key for F<example.com>: 
+
+	example.com -> ../anywhere/sel.private
+	example.com -> ../anywhere/sel
+	example.com -> ../anywhere/example.com.sel
+	example.com -> ../anywhere/example.comsel
+	example.com -> ../anywhere/example.com.sel.private
+	example.com -> ../anywhere/example.comsel.private
+	example.com -> ../anywhere/example.com.sel.pem
+	example.com -> ../anywhere/example.comsel.pem
+	example.com -> ../anywhere/sel.pem
+
+
+Keys can be created using I<opendkim-genkey>.  The public key must be published
+on the DNS in order to make it possible for remote receivers to verify the
+signatures.  Domain owners should change selector on a regular basis, or
+whenever they think the private key might have been compromised.  The soft link
+that enables signing with a given private key should be set I<after> publishing
+the corresponding public key.  The file existence is going to be effective on
+It is not necessary to restart zdkimfilter for
+that to take effect.
+
+The user-id used for SMTP authentication is also reported in Courier's
+C<Received:> header field.  If the I<redact_received_auth> configuration option
+is set, zdkimfilter obscures it.  See L<redact(1)>.
+
+After signing an outgoing message, zdkimfilter logs to the database the list of
+domains that appeared in any RCPT command.  The database can be used for
+whitelisting and for rate-limiting users.  See L<zfilter_db(1)> for more
+details.
+
+=head2 Verifying
+
+Messages not qualified as I<RELAYCLIENT> are candidate for DKIM verification.
+zdkimfilter sorts signatures by domain, putting author domain and whitelisted
+domains first.  It then verifies each domain's signatures until a valid one.
+If the database is used, an attempt is made to authenticate each domain unless
+I<verify_one_domain> is set.  If I<report_all_sigs> is set, all signatures are
+processed.  Normally, there are only a few signatures in each message, so these
+settings don't actually change much.  However, messages having an unreasonable
+number of signatures are rejected (I<max_signatures>).  That's the only
+rejection done by default.
+
+Messages can be rejected or dropped according to DMARC, ADSP, and NXDOMAIN
+configurations, summarized below, and also according to an I<action_header>.
+The latter is meant to be a last resort for messages caught by anti-virus or
+anti-phishing filters that add a given header field instead of discarding the
+message tout-court.  For I<action_header>, whitelisting can be tuned by setting
+I<dnswl_worthiness_pass> and similar options.  By setting I<save_drop>, the
+messages dropped after I<action_header> can be saved.
+
+By default, zdkimfilter adds an C<Authentication-Results:> (A-R) header field
+only when there are noticeable results to report.  It uses the host name that
+Courier uses in its C<Received:> field.  Other A-R fields with that same name
+get zapped from the message, if found.
+
+After the message has been dealt with, zdkimfilter logs to the database the
+results.  See L<zfilter_db(1)> for the details.
+
+=head2 DMARC and ADSP policies
+
+These policies deal with the C<From:> domain.  It is not advisable to honor
+them indiscriminately, because users of a domain with a strict policy can
+subscribe to a mailing list that invalidates their signatures.  Rejecting that
+mail would then cause local users to be unsubscribed from such mailing list.
+
+Options I<honor_dmarc> and I<honor_author_domain> set to 0 or 1 the
+corresponding flags.  Then a query I<db_sql_domain_flags> can increase or
+decrease those values.  A DMARC record is looked up unless DMARC flag is less
+than ADSP's.  If no record is found, an ADSP record is looked up unless ADSP
+flag is less than DMARC's.  Thus, if the flags are equal an ADSP record is
+looked up for domains that still don't have DMARC.  Then, if its flag is
+greater than 0, the policy is honored.  However, if an authenticated domain is
+whitelisted, vouched, or DNSWL allowed, the message is delivered even though
+the policy failed.
+
+In order to look up a DMARC record correctly, the Public Suffix List file must
+be available and configured in I<publicsuffix>.  In addition, to comply with
+DMARC, aggregate reports should be sent and received; see L<zaggregate(1)>.
+
+A DMARC policy can ask to quarantine a message.  If that is honored, A-R field
+contains a C<(QUARANTINE)> comment and the message is delivered normally.
+
+Record lookup of either policy is not going to work for non-existing domains.
+For A-R, ADSP provides a C<dkim-adsp=nxdomain> result code.  Rejecting those
+messages can be enabled by I<reject_on_nxdomain>.
+
+=head1 OPTIONS
+
+Configuration options are documented in L<zdkimfilter.conf(5)> and
+L<zfilter_db(1)>.
+
+=head2 COURIER SETTINGS
+
+The I<esmtpd> configuration files can be tweaked to avoid rewritings that
+would break existing signatures.
+
+=over
+
+=item B<ALLOW_EXCLUSIVE>
+
+Set this value in I<esmtpd>.  See also C<trust_a_r> in L<zdkimfilter.conf(5)>.
+Setting both flags allows smooth usage of A-R header fields.
+
+=item B<MIME>
+
+Setting MIME=none prevents rewriting the MIME structure.  If you use this,
+you may want to override it in I<esmtpd-msa>, e.g. by setting MIME=some.
+
+=item B<NOADDRREWRITE>
+
+Documented in I<esmtpd>.
+
+=back
+
+DMARC requires SPF, besides DKIM.  To enable SPF checking in bofh see
+L<courier(8)>.  The result of Courier's SPF check is read from I<Received-SPF>
+header fields in the message.  If SPF is not configured in Courier, turn
+off this behavior with I<no_spf>, to avoid spurious authentications.
+
+
+=head2 COMMANDLINE OPTIONS
+
+These are only useful for testing.
+
+=over
+
+=item -f I<config-filename>
+
+Override the default configuration file; config-filename can be an empty
+string ("").
+
+=item --no-db
+
+Omit database processing.
+
+=item --help
+
+Print usage and exit.
+
+=item --version
+
+Print version info, including versions of the underlying libopendkim, and exit.
+
+=item --no-fork
+
+Any following -t option will directly parse ctlfiles, rather than sending their
+names through a pipe to one child per mailfile.  Albeit read from stdin, the
+mail file must be a regular file.  It is copied to stdout even if not modified,
+unless errors occur.
+
+=item -tI<N>[,I<x>] I<file...>
+
+Scan the arguments that follow as N ctl and mail file(s).  With I<,x> behave
+like batch test, that is non-interactively.  Otherwise prompt the user with
+the id of the forked process, to ease attaching a debugger to it.
+
+
+=item --batch-test
+
+Enter batch test mode.  This mode accepts a few commands from standard input,
+in addition of mail and ctl files.  These cause DKIM keys (test2),  policies
+(test3), and VBR assertions (test4) to be retrieved from files in the current
+directory rather than from the DNS.
+
+=back
+
+=head1 SIGNALS
+
+The B<HUP> signal can be used to have zdkimfilter reload its configuration.
+
+Upon receiving the signal, zdkimfilter reads its configuration file and opens
+new connections to OpenDKIM library and (possibly) to the database.  If no
+error occurs, it then cleans up the old area, closing old connections, and
+writes LOG_INFO if verbosity is 2 or higher.
+
+=head1 BUGS
+
+Please report bugs to the author.  Command-line options above should allow to
+reproduce any misbehavior in a controlled fashion.
+
+=head1 FILES
+
+=over
+
+=item F<@ZDKIMFILTER_PID_DIR@/zdkimfilter.pid>
+
+The id of the parent zdkimfilter process.  The basename of this file reflects
+the command name by which the filter was loaded.
+
+=item F<@FILTERSOCKETDIR@/zdkimfilter> or F<@ALLFILTERSOCKETDIR@/zdkimfilter>
+
+The socket where filter process listens to filtering requests.  This socket is
+created in one or the other directory based on C<all_mode> configuration option
+(see B<zdkimfilter.conf>(5)).    The basename of this file reflects the command
+name by which the filter was loaded.
+
+=item F<@COURIER_SYSCONF_INSTALL@/filters/keys>
+
+Default directory for links to private keys.
+
+=item F<@COURIER_SYSCONF_INSTALL@/filters/zdkimfilter.conf>
+
+Default configuration file.
+
+=back
+
+
+=head1 AUTHOR
+
+
+Alessandro Vesely E<lt>vesely@tana.itE<gt>
+
+
+=head1 SEE ALSO
+
+=over
+
+=item B<courier>(8), B<courierfilter>(8)
+
+Explain the C<enablefiltering> configuration file, and how to start and stop
+filters.
+
+=item B<opendkim-genkey>(8)
+
+Generate an asymmetric key pair suitable for DKIM use.
+
+=item B<zdkimfilter.conf>(5)
+
+Explains each configuration option, excluding those for database.
+
+=item B<zfilter_db>(1)
+
+Explains the database configuration options and how to test them.
+
+=item B<dkimsign>(1)
+
+Also useful for testing a configuration file.
+
+=item B<redact>(1)
+
+For retrieving an obfuscated user-id.
+
+=item B<RFC 6376>
+
+DomainKeys Identified Mail (DKIM) signatures.
+
+=item B<RFC 7208>
+
+Sender Policy Framework (SPF)
+
+=item B<RFC 7489>
+
+Domain-based Message Authentication, Reporting, and Conformance (DMARC).
+
+=item B<RFC 5451>
+
+Message header field for indicating message authentication status.
+
+=item B<RFC 5617>
+
+DomainKey Identified Mail (DKIM) Author Domain Signing Practices (ADSP).
+
+=back
+
+=cut
+

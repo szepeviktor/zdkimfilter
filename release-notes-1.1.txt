@@ -1,0 +1,27 @@
+Database changes:
+
+The query db_sql_select_user used to return $(user_ref).  Now it returns two
+values: $(user_ref) and $(message_ref), in that order.
+
+The variable $(user_ref) cannot be used in db_sql_*_target* queries any more.
+Use $(message_ref) instead.  Now $(user_ref) can only be used in the new query
+db_sql_check_user, which is issued after all other outgoing message queries.
+
+The variable $(ip) can now be used for outgoing messages as well.
+
+The new variable $(rcpt_count) can be used for outgoing message queries.
+
+
+Other config file change:
+
+New option: blocked_user_list.  It is loosely related with db_sql_check_user;
+that is, one can define neither, either, or both.  See zdkimfilter.conf(5).
+
+
+Enhanced dkimsign command:
+
+New command line options --filter and --db-filter, for using stdin/stdout; the
+second also provides for logging, quite like SMTP submit, including the block/
+check user_list thing.  The argument following --domain can now take the full
+authenticated email address.
+

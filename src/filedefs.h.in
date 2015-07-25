@@ -1,0 +1,33 @@
+/*
+** filedefs.h - written by vesely in milan on Thursday 11 February 2010 
+*/
+#if !defined PACKAGE_BUGREPORT
+#define PACKAGE_BUGREPORT "@PACKAGE_BUGREPORT@"
+#endif
+#if !defined(MAILUID)
+#define MAILUID @MAILUID@
+#endif
+#if !defined(MAILGID)
+#define MAILGID @MAILGID@
+#endif
+#if !defined(MAILUSER)
+#define MAILUSER "@MAILUSER@"
+#endif
+#if !defined(ALLFILTERSOCKETDIR)
+#define ALLFILTERSOCKETDIR "@ALLFILTERSOCKETDIR@"
+#endif
+#if !defined(FILTERSOCKETDIR)
+#define FILTERSOCKETDIR "@FILTERSOCKETDIR@"
+#endif
+#if !defined(COURIER_SYSCONF_INSTALL)
+#define COURIER_SYSCONF_INSTALL "@COURIER_SYSCONF_INSTALL@"
+#endif
+#if !defined(ZDKIMFILTER_PID_DIR)
+#define ZDKIMFILTER_PID_DIR "@ZDKIMFILTER_PID_DIR@"
+#endif
+#if !defined(ZDKIMFILTER_EXECUTABLE)
+#define ZDKIMFILTER_EXECUTABLE "@COURIER_FILTER_INSTALL@/zdkimfilter"
+#endif
+#if !defined(DNSWL_ORG_INVALID_IP_ENDIAN)
+#define DNSWL_ORG_INVALID_IP_ENDIAN @DNSWL_ORG_INVALID_IP_ENDIAN@
+#endif

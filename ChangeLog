@@ -1,0 +1,1143 @@
+------------------------------------------------------------------------
+r136 | ale | 2015-04-20 13:10:30 +0200 (Mon, 20 Apr 2015) | 8 lines
+
+myadsp: more reliable error codes for TXT lookup failures,
+        clearer distinction between DMARC/ADSP policies.
+database: NULL domain flags yield zeroes.
+zdkimfilter: log when DMARC or ADSP are enabled (verbose>=8),
+             log DMARC/ADSP lookup (verbose>=7)
+             pretend ADSP policy on NXDOMAIN,
+             log INTERNAL ERROR.
+
+------------------------------------------------------------------------
+r135 | ale | 2015-04-18 16:09:05 +0200 (Sat, 18 Apr 2015) | 2 lines
+
+tag v1.5
+
+------------------------------------------------------------------------
+r134 | ale | 2015-04-18 16:08:43 +0200 (Sat, 18 Apr 2015) | 2 lines
+
+old tag was not exact
+
+------------------------------------------------------------------------
+r133 | ale | 2015-04-18 15:56:03 +0200 (Sat, 18 Apr 2015) | 1 line
+
+
+------------------------------------------------------------------------
+r132 | ale | 2015-04-18 15:43:28 +0200 (Sat, 18 Apr 2015) | 7 lines
+
+database: move get_dkim_result() from .c to .h,
+          define empty db_set_org_domain() if no OpenDBX.
+zdkimfilter: #define dkim_policy around dkim.h (also in myreputation),
+             #if-out duplicated code in print_signature_resinfo(),
+             return dkim_none for non-processed signatures,
+             verify all signing domains if trusted vouchers.
+
+------------------------------------------------------------------------
+r131 | ale | 2015-04-17 20:05:56 +0200 (Fri, 17 Apr 2015) | 2 lines
+
+testsuite: comment out DNS real query.
+
+------------------------------------------------------------------------
+r130 | ale | 2015-04-17 19:27:07 +0200 (Fri, 17 Apr 2015) | 2 lines
+
+tag v1.5
+
+------------------------------------------------------------------------
+r129 | ale | 2015-04-17 19:26:52 +0200 (Fri, 17 Apr 2015) | 3 lines
+
+zdkimfilter: make do_{dmarc,adsp} int, not uint8_t.
+docs: minor changes to zdkimfilter(8)
+
+------------------------------------------------------------------------
+r128 | ale | 2015-04-17 19:25:01 +0200 (Fri, 17 Apr 2015) | 2 lines
+
+tag v1.5
+
+------------------------------------------------------------------------
+r127 | ale | 2015-04-17 16:14:29 +0200 (Fri, 17 Apr 2015) | 5 lines
+
+zdkimfilter: have dmarc_dkim=none if no signatures, ditto spf.
+docs: complete zaggregate man page.
+examples: remove unneeded escapes.
+
+
+------------------------------------------------------------------------
+r126 | ale | 2015-04-15 18:17:00 +0200 (Wed, 15 Apr 2015) | 10 lines
+
+database: fix prefix_len and adsp.
+zdkimfilter: move BADSIG out of logged permerrors,
+             review use of dmarc reason and disposition,
+             log (verbose>=3) if BOFHSPFFROM is the sole pass.
+testsuite: account for the aded log line.
+configure: add --enable-dkimsign-setuid.
+docs: finish query documentation in zfilter_db,
+      mention unauthorized scope in zdkimfilter.conf,
+      start zaggregate man page.
+
+------------------------------------------------------------------------
+r125 | ale | 2015-04-11 09:43:53 +0200 (Sat, 11 Apr 2015) | 3 lines
+
+zdkimfilter: set dkim_order according to preference.
+database: compute prefix_len for non-aligned domains.
+
+------------------------------------------------------------------------
+r124 | ale | 2015-04-11 08:54:51 +0200 (Sat, 11 Apr 2015) | 6 lines
+
+zdkimfilter: new functions copy_replacement(),
+             replace_received_auth(), and
+             replace_courier_wrap().
+rfc822: imported Courier sources to parse and rewrite addresses.
+testsuite: check wrapping long lines on signing.
+
+------------------------------------------------------------------------
+r123 | ale | 2015-04-10 10:18:31 +0200 (Fri, 10 Apr 2015) | 5 lines
+
+zaggregate: fix limit comparison.
+zdkimfilter: log_dkim_order_above as warning.
+example: review, fix table creation.
+docs: added new z parms, begin zfilter_db.
+
+------------------------------------------------------------------------
+r122 | ale | 2015-04-07 13:01:22 +0200 (Tue, 07 Apr 2015) | 10 lines
+
+zdkimfilter: clarify use of dkim_permerror vs dkim_fail,
+             better verification failure messages,
+             define default report interval in database.h,
+             change default from 3600 to 86400.
+database: add original_ri besides adjusted dmarc_ri.
+zaggregate: fix xml structure, allow adding reason comment,
+            choose what spf scope to report.
+example: add 'none' defaults, clean up odbx_example.sql and
+         odbx_example.sh, add zaggregate-example.sh.
+
+------------------------------------------------------------------------
+r121 | ale | 2015-04-02 18:44:28 +0200 (Thu, 02 Apr 2015) | 29 lines
+
+zaggregate: new program to produce DMARC reports.
+cstring: new source to ease handling C strings.
+database: new statement db_sql_set_dmarc_agg,
+          new vars period, period_start, and period_end,
+          flag variable bumped to 64 bit,
+          #define CONSOLE_DEBUG to display queries,
+          new function db_zag_wrapup() for dmarc only,
+          modified stmt_run_n() for multiple rows,
+          added 3 public functions for dmarc queries,
+          for zfilter_db, replace comma with slash,
+          run adjust_rua() against test records.
+zdkimfilter: new params honored_report_interval and log_dkim_order_above,
+             check report interval, aka period, is 24h submultiple,
+             log if number of signing domains exceeds order,
+             adjust rua and ri before passing them to the database.
+filterlib: define live_children volatile.
+myadsp: fix dmarc record parsing,
+        new function adjust_ri() to check submultiples,
+        new function adjust_rua() to parse dmarc URI,
+        have write_dmarc_rec() use the new functions,
+        new function verify_dmarc_addr() for external recipients.
+odbx_example: add DMARC queries,
+              add odbx_example.sh with calls to zfilter.db.
+configure: back to version 1.5,
+           support silent rules (make V=0),
+           require zlib (lz),
+           check UUID support (for report id's).
+
+
+------------------------------------------------------------------------
+r120 | ale | 2015-03-19 18:18:38 +0100 (Thu, 19 Mar 2015) | 19 lines
+
+odbx_example: added some sources, as well as release notes,
+              set up working configuration, except reporting.
+spf_result_string: separated function into its own header.
+database: nxdomain variable removed (nx),
+          add variables prefix_len, dmarc_ri, dkim_order,
+          add "org", "dmarc", and "nx" auth_types,
+          always pass dmarc variables, even if "none",
+          macro MAX_DECIMAL_DIG for recurring numeric buffers,
+          fix use of u.f.sig_is_ok,
+          dkim_order tracked on the fly,
+          revamp the TEST_MAIN part so as to store test data.
+myadsp: NO_DNS_QUERY compile switch to link w/o resolver,
+        append a sentinel do dmarc_rua,
+        exported version of parse_dmarc().
+zdkimfilter: use best spf result if a domain has many,
+             log if spf "From:" differs from dkim "From:",
+             call srandom() on completing initialization.
+
+
+------------------------------------------------------------------------
+r119 | ale | 2015-03-12 19:03:30 +0100 (Thu, 12 Mar 2015) | 3 lines
+
+testsuite: finished most DMARC tests.
+zdkimfilter: log rejecting with reputation, but don't bother.
+
+------------------------------------------------------------------------
+r118 | ale | 2015-03-11 19:42:13 +0100 (Wed, 11 Mar 2015) | 6 lines
+
+database: one spf result per domain.
+zdkimfilter: added a method log for dmarc/adsp (verbose 4),
+             fix domain_flags() (only one is_from),
+             fix reading z.honor_dmarc.
+myadsp: fix get_dmarc() reading org_domain.
+
+------------------------------------------------------------------------
+r117 | ale | 2015-03-09 20:57:30 +0100 (Mon, 09 Mar 2015) | 17 lines
+
+myadsp: new function write_dmarc_rec() reassembles part of it,
+        support passing fo= tag,
+        pass found_at_org.
+database: add variables nxdomain, spf_result, dkim_result,
+          dmarc_record, dmarc_rua, dmarc_dkim, dkim_spf,
+          dmarc_reason, and dmarc_dispo; more than 32 total.
+          pass variables when significant.
+zdkimfilter: changed 554 to 550 for rejection,
+             sig_is_good() converted to return an enum,
+             write_file() policy args moved to vh,
+             set " (QUARANTINE)" comment to match action,
+             unauthenticated save scope according to presence of publicsuffix,
+             distinguish if dmarc pass is due to dkim and spf.
+
+
+
+
+------------------------------------------------------------------------
+r116 | ale | 2015-03-05 20:12:16 +0100 (Thu, 05 Mar 2015) | 12 lines
+
+testsuite: added x4 subdomain signature,
+           first DMARC test.
+docs: started documenting DMARC implementation.
+parm: added options min_key_bits, publicsuffix, honor_dmarc.
+database: fixed assertion for org_domain_variable.
+zdkimfilter: fixed domain_flags(),
+             fixed file_write() of dmarc=,
+             move policy check earlier in verify_message(),
+             treat alignment,
+             log memory failure from get_prescreen().
+myadsp: fixed fake DNS functions.
+
+------------------------------------------------------------------------
+r115 | ale | 2015-03-02 13:38:12 +0100 (Mon, 02 Mar 2015) | 21 lines
+
+zdkimfilter: revised verification and struct verify_parms,
+             some code from domain_sort() to new function domain_flags(),
+             get_prescreen() called for spf from verify_headers(),
+             new VBR-Info function mv2tv() avoids memory error bug,
+             new function spf_result_string() to use any spf values,
+             DEFAULT_NO_DB for configuration changes w/o openDBX.
+redact: included stdio.
+database: special flag to tweak saving of unauthenticated domains,
+          defined enumeration for SPF and DKIM results,
+          defined domain_val for permanent sort key (was sigval),
+          defined some dmarc flags.
+myadsp: defined dmarc_rec and functions to do DMARC queries,
+        do_txt_query() works for both queries.
+parm: added warning for multiple definitions, which cause leaks.
+testsuite: use AT_CHECK_NOESCAPE to expand $HAVE_NETTLE,
+           avoided multiple definitions,
+           adapted database output, which is slightly changed.
+configure: use version 1.6, in case 1.5 will have to be released,
+           added --tag=CC in libtool invocations.
+odbx_example: draft aggregate DMARC query.
+
+------------------------------------------------------------------------
+r114 | ale | 2015-02-23 20:00:48 +0100 (Mon, 23 Feb 2015) | 3 lines
+
+configure: add tag to libtool args.
+odbx_example: syntax for aggregate queries.
+
+------------------------------------------------------------------------
+r113 | ale | 2015-02-21 11:22:56 +0100 (Sat, 21 Feb 2015) | 4 lines
+
+zdkimfilter: fix reload_config so that it works witout opendbx.
+configure: fix HAVE_NETTLE to be 0/1, and pkg-config opendkim.
+myadsp: fix parse_adsp for cases where skip_fws returns NULL.
+
+------------------------------------------------------------------------
+r112 | ale | 2015-02-21 11:01:07 +0100 (Sat, 21 Feb 2015) | 2 lines
+
+No-dmarc branch starts at r108 of trunc
+
+------------------------------------------------------------------------
+r111 | ale | 2015-02-21 10:45:20 +0100 (Sat, 21 Feb 2015) | 2 lines
+
+Create branches dir
+
+------------------------------------------------------------------------
+r110 | ale | 2015-02-12 16:33:11 +0100 (Thu, 12 Feb 2015) | 8 lines
+
+publicsuffix: add new C source and header files.
+database: new function to set organizational domain.
+zdkimfilter: manage publicsuffix structure init and cleanup,
+             determine organizational domain during verification,
+             reset database if there are only incoming/outgoing queries in split mode.
+configure: require libidn2 and libunistring.
+
+
+------------------------------------------------------------------------
+r109 | ale | 2015-02-09 18:00:44 +0100 (Mon, 09 Feb 2015) | 7 lines
+
+database: added variable org_domain,
+          added query db_sql_domain_flags,
+          added function db_get_domain_flags.
+zdkimfilter: retrieve do_dmarc and do_adsp flags from dkim_domain.
+testsuite: verify equivalence of is_whitelisted and domain_flags.
+Makefile: use wildcard for release-notes.
+
+------------------------------------------------------------------------
+r108 | ale | 2015-02-04 20:41:01 +0100 (Wed, 04 Feb 2015) | 14 lines
+
+configure: version bump to 1.5,
+           remove tests for dkim_policy (ADSP) that libopendkim no longer has,
+           remove tests for reputation library as libdkimrep no longer exists,
+           explicit tests for libopendkim functions,
+           switch test for 220 from true/false to 1/0.
+testsuite: test for 220 accordingly.
+myadsp: add new source files for querying adsp.
+zdkimfilter: workaround for CNAME in KEYFAIL not needed for libopendkim
+	     2.10.1,
+             log message for permerrors if verbose >= 4,
+             on ADSP temperror, issue a temperror if would reject/drop,
+             use function-specific precompiler conditionals,
+filterlib: call setlinebuf(stderr) to avoid garbage in log files.
+
+
+------------------------------------------------------------------------
+r107 | ale | 2015-01-15 11:20:45 +0100 (Thu, 15 Jan 2015) | 2 lines
+
+zdkimfilter: workaround for OpenDKIM bug 219.
+
+------------------------------------------------------------------------
+r106 | ale | 2015-01-15 11:13:00 +0100 (Thu, 15 Jan 2015) | 2 lines
+
+zdkimfilter: added log lines for temporary failures.
+
+------------------------------------------------------------------------
+r105 | ale | 2015-01-08 16:43:01 +0100 (Thu, 08 Jan 2015) | 2 lines
+
+tag v1.4
+
+------------------------------------------------------------------------
+r104 | ale | 2015-01-08 16:42:23 +0100 (Thu, 08 Jan 2015) | 2 lines
+
+release notes.
+
+------------------------------------------------------------------------
+r103 | ale | 2015-01-08 16:30:42 +0100 (Thu, 08 Jan 2015) | 2 lines
+
+tag v1.4
+
+------------------------------------------------------------------------
+r102 | ale | 2015-01-08 16:30:01 +0100 (Thu, 08 Jan 2015) | 5 lines
+
+filterlib: never exit master process on select error, better error log.
+zdkimfilter: NULL reputation service.
+testsuite: set reputation_root for reputation tests.
+configure: version bumped to 1.4.
+
+------------------------------------------------------------------------
+r101 | ale | 2014-12-30 13:17:07 +0100 (Tue, 30 Dec 2014) | 2 lines
+
+tag v1.3
+
+------------------------------------------------------------------------
+r100 | ale | 2014-12-30 13:13:33 +0100 (Tue, 30 Dec 2014) | 3 lines
+
+bug fixes, thanks to Viktor Szepe: semicolon in zdkimfilter.c,
+and some clarification in zdkimfilter.conf
+
+------------------------------------------------------------------------
+r99 | ale | 2014-12-23 14:13:49 +0100 (Tue, 23 Dec 2014) | 4 lines
+
+myreputation: independent of libopendkim.
+zdkimfilter: log only basename of saved file
+md5: derived derived from the RSA Data Security, Inc. MD5 Message-Digest
+     Algorithm
+
+------------------------------------------------------------------------
+r98 | ale | 2014-12-20 13:59:29 +0100 (Sat, 20 Dec 2014) | 8 lines
+
+parm: added 6 parameters: action_header, header_action_is_reject,
+      dnswl_worthiness_pass, dnswl_invalid_ip, dnswl_octet_index,
+      whitelisted_pass.
+testsuite: added test for action_header.
+configure: hack to have dnswl invalid ip as integer, AC_LANG_SOURCE as
+	   required.
+doc: most new parameters are documented.link resend-with-preheader from
+     avfilter.
+myreputation: new source file.
+zdkimfilter: move reputation in its source, call it in dkim_sig_final, read
+	     policy.ip, save_file() and strcpy_normalize()
+
+------------------------------------------------------------------------
+r97 | ale | 2014-12-18 11:28:51 +0100 (Thu, 18 Dec 2014) | 4 lines
+
+database: new variable complaint_flag
+zdkimfilter: set complaint_flag on empty sender and From: postmaster
+docs: better zfilter_db man page
+
+------------------------------------------------------------------------
+r96 | ale | 2014-12-16 13:30:27 +0100 (Tue, 16 Dec 2014) | 3 lines
+
+zdkimfilter: fix pid file name, add split_verify option
+parm: split_verify to set single function (verify/sign).
+
+------------------------------------------------------------------------
+r95 | ale | 2014-12-13 11:06:13 +0100 (Sat, 13 Dec 2014) | 5 lines
+
+testsuite: drop message change
+zdkimfilter: new function reload_config.
+testsuite: test reload_config.
+param: structure aligned to 64bit boundary.
+
+------------------------------------------------------------------------
+r94 | ale | 2014-12-12 10:57:00 +0100 (Fri, 12 Dec 2014) | 2 lines
+
+filterlib: merge fixes from avfilter
+
+------------------------------------------------------------------------
+r93 | ale | 2014-12-11 13:14:09 +0100 (Thu, 11 Dec 2014) | 6 lines
+
+zdkimfilter: add two parameters, verify_one_domain and add_ztags.
+zdkimfilter: check db_ flags after signature verification.
+zfilter_db: list variables more clearly in the man page.
+filterlib: try and avoid some useless output.
+
+
+------------------------------------------------------------------------
+r92 | ale | 2014-12-03 18:24:32 +0100 (Wed, 03 Dec 2014) | 6 lines
+
+configure: added myinstall.sh for perms and owner.  Version bump to 1.3.
+conf.dist: removed non-essential options and separate pod from conf,
+           simplified installation by not copying conf.dist to conf,
+           better man page, independently of the conf file.
+conf2pod: removed, not needed any more.
+
+------------------------------------------------------------------------
+r91 | ale | 2014-11-23 12:36:52 +0100 (Sun, 23 Nov 2014) | 2 lines
+
+fix bug reported by Ilmar Kruis
+
+------------------------------------------------------------------------
+r90 | ale | 2014-10-27 20:33:58 +0100 (Mon, 27 Oct 2014) | 7 lines
+
+old stats stuff removed.
+zfilter_db.pod: not double insertions.
+filterlib: use pselect if available,
+           name listen socket after argv0,
+           better logging.
+
+
+------------------------------------------------------------------------
+r89 | ale | 2014-10-23 18:07:39 +0200 (Thu, 23 Oct 2014) | 3 lines
+
+filterlib: check read works even on 1st call.
+odbx_example: unique index by_dom on table domain.
+
+------------------------------------------------------------------------
+r88 | ale | 2013-06-24 16:44:59 +0200 (Mon, 24 Jun 2013) | 6 lines
+
+odbx_example: add a query to find authenticated
+              messages from a given domain.
+dkimsign.c: better bad-permission error messagezdkimfilter.conf man page:
+	    fix typo.
+
+
+------------------------------------------------------------------------
+r87 | ale | 2013-03-30 15:40:34 +0100 (Sat, 30 Mar 2013) | 2 lines
+
+correct tag for v1.2
+
+------------------------------------------------------------------------
+r86 | ale | 2013-03-30 15:39:40 +0100 (Sat, 30 Mar 2013) | 4 lines
+
+documentation: correct misspelled add_auth_pass.
+parm: move it right after redact_received_auth.
+testsuite: amend for the move.
+
+------------------------------------------------------------------------
+r85 | ale | 2013-03-30 15:17:36 +0100 (Sat, 30 Mar 2013) | 2 lines
+
+tag v1.2
+
+------------------------------------------------------------------------
+r84 | ale | 2013-03-30 15:14:22 +0100 (Sat, 30 Mar 2013) | 3 lines
+
+testsuite: expand signature verification to check unrename.
+doc: updated, release-notes added to tarball.
+
+------------------------------------------------------------------------
+r83 | ale | 2013-03-20 18:42:29 +0100 (Wed, 20 Mar 2013) | 2 lines
+
+release notes for v 1.2.
+
+------------------------------------------------------------------------
+r82 | ale | 2013-03-20 18:01:42 +0100 (Wed, 20 Mar 2013) | 2 lines
+
+testsuite: modified test to also check signing added A-R auth=pass.
+
+------------------------------------------------------------------------
+r81 | ale | 2013-03-20 17:23:20 +0100 (Wed, 20 Mar 2013) | 4 lines
+
+new parameter add_auth_pass to add an A-R field to outgoing messages.
+zdkimfilter: short inline functions my_dkim_header() and chomp_cr()
+             to avoid duplicating code.
+
+------------------------------------------------------------------------
+r80 | ale | 2013-03-20 11:33:44 +0100 (Wed, 20 Mar 2013) | 4 lines
+
+testsuite: check dnswl whitelisting.
+           check dnswl logging to the db.
+configured: version bumped to 1.2.
+
+------------------------------------------------------------------------
+r79 | ale | 2013-03-18 20:10:03 +0100 (Mon, 18 Mar 2013) | 3 lines
+
+database: skip unverified signatures in in_stmt_run.
+          That caused entries in msg_ref with no flags set in auth if report_all_sigs is false.
+
+------------------------------------------------------------------------
+r78 | ale | 2013-03-18 20:03:59 +0100 (Mon, 18 Mar 2013) | 6 lines
+
+zdkimfilter: added dnswl whitelisting for adsp; modified callback so as to
+	     whitelist based on count.
+             added dnswl_dps, and dnswl_count in verify_parms.
+             modified domain_sort() so as to insert the dnswl domain.
+             added logging for adsp whitelisting due to dnswl.
+database: added dnswl flag to auth_type_variable.
+
+------------------------------------------------------------------------
+r77 | ale | 2013-03-18 11:45:10 +0100 (Mon, 18 Mar 2013) | 2 lines
+
+util: Fix a_r_parse(): authserv-id's version and "@".
+
+------------------------------------------------------------------------
+r76 | ale | 2013-03-08 14:18:41 +0100 (Fri, 08 Mar 2013) | 3 lines
+
+util: test out of bound array
+conf: completed documentation
+
+------------------------------------------------------------------------
+r75 | ale | 2013-03-08 13:13:51 +0100 (Fri, 08 Mar 2013) | 6 lines
+
+Parameter dont_trust_a_r flipped to trust_a_r to avoid surprises.
+Added new parameter trusted_dnswl, defaulting to list.dnswl.org.
+util: modified a_r_parse so as always issue a last call.
+zdkimfilter: added function a_r_reader, used as a_r_parse callback.
+conf: documented new parameters.
+
+------------------------------------------------------------------------
+r74 | ale | 2013-03-07 17:42:28 +0100 (Thu, 07 Mar 2013) | 3 lines
+
+util: added function a_r_parse() to read ASCII a-r.updated copyright
+      notices and svn:ignore.
+
+------------------------------------------------------------------------
+r73 | ale | 2013-03-06 11:23:18 +0100 (Wed, 06 Mar 2013) | 2 lines
+
+Collect some utility functions in util.{c,h}.
+
+------------------------------------------------------------------------
+r72 | ale | 2013-03-06 10:56:00 +0100 (Wed, 06 Mar 2013) | 2 lines
+
+New parameter dont_trust_a_r, keep removing A-R as before.
+
+------------------------------------------------------------------------
+r71 | ale | 2012-12-18 19:15:46 +0100 (Tue, 18 Dec 2012) | 4 lines
+
+dkimsign:
+	Add a --sender option to allow specifying an envelope sender,
+	for db logging purposes.  Documentation updated too.
+
+------------------------------------------------------------------------
+r70 | ale | 2012-12-06 17:57:58 +0100 (Thu, 06 Dec 2012) | 2 lines
+
+fix dkimsign man page format.
+
+------------------------------------------------------------------------
+r69 | ale | 2012-12-05 17:44:22 +0100 (Wed, 05 Dec 2012) | 2 lines
+
+tag for version 1.1
+
+------------------------------------------------------------------------
+r68 | ale | 2012-12-05 17:43:07 +0100 (Wed, 05 Dec 2012) | 5 lines
+
+Added release notes for changes 1.0 - 1.1.
+configure: try to work even without opendkim.pc.
+zdkimfilter: redact-non-full warning only if verbose >= 4.
+
+
+------------------------------------------------------------------------
+r67 | ale | 2012-12-05 14:00:47 +0100 (Wed, 05 Dec 2012) | 13 lines
+
+testsuite:
+	tests for blocked user and some corner cases.
+dkimsign:
+	temporary ctlfile is not removed when testing.
+filterlib:
+	new function free_on_exit() to delay freeing filter-response.
+zdkimfilter:
+	new function some_dwa_cleanup() to cleanup dwa separately.
+	parse message header to collect data also if not signing.
+	fixed check in block_user().
+	syslog line on altering block list raised to LOG_CRIT.
+
+
+------------------------------------------------------------------------
+r66 | ale | 2012-12-04 12:53:02 +0100 (Tue, 04 Dec 2012) | 16 lines
+
+Jumbo commit, updated copyright notices on most files.
+dkim-mailparse: imported and modified to read multiple mailboxes.dkimsign:
+	new function copy_recipients(), using mailparse.
+	create_tmpfiles() modified to call it, and also read versobse.
+	modified argument processing in main().
+	added option --db-filter, builds a better ctlfile.
+	added option -t to get a tmp directory on the command line.
+zdkimfilter:
+	handled case of NULL dyn.domain.
+	fix parm_z_reputation_root, reported by Matthias Wimmer.
+redact:
+	fixed parm.h inclusion and nettleless redacted(), both reported by Matthias Wimmer.
+documentation, testsuite, examples updated too.
+
+
+------------------------------------------------------------------------
+r65 | ale | 2012-11-29 16:08:11 +0100 (Thu, 29 Nov 2012) | 14 lines
+
+version bump to 1.1.
+zdkimfilter: finished addition of blocked_user_list.
+             new function block_user() to update that file.
+             new function update_blocked_user_list() is the
+             core of check_blocked_user_list(), called internally.
+             added call to set client ip even for outgoing message.
+             check REMOTE_ADDR if no frommta info.
+database: arranged to retrieve two values from a query, so that
+          db_sql_select_user can return user_ref and message_ref.
+          ip_variable moved to common_variables.
+          added query db_sql_check_user.
+minor changes to suit.
+
+
+------------------------------------------------------------------------
+r64 | ale | 2012-11-24 13:05:26 +0100 (Sat, 24 Nov 2012) | 15 lines
+
+database: added new field rcpt_count for outgoing messages.
+filterlib: added new callback "on_fork".
+           added utility function fl_whence().
+           added function free_on_exit() for allocated responses.
+           split the read_fname() function into two parts, a new
+           process_read_fname() that parses one char at a time,
+           while the old block can read multiple bytes on entry.
+zdkimfilter: added new parameter blocked_user_list, a filename.
+             added code to reject posts from blocked authenticated
+             users, unless the only recipient is the postmaster of
+             the signing domain.
+             added support for rcpt_count.
+odbx_example: added query to select sent messages.
+
+
+------------------------------------------------------------------------
+r63 | ale | 2012-11-22 14:55:23 +0100 (Thu, 22 Nov 2012) | 11 lines
+
+filecopy: added file with filecopy() function.
+database: undefine the macro after use
+zdkimfilter: leave dyn allocated area as-is.
+filterlib: free some allocations before terminating.
+           don't close stdin.
+           check result of filecopy.
+dkimsign: hack to ease auto test.
+          bug fixes (alter malloced pointer, extra newline).
+testsuite: add tests for dkimsign.
+
+
+------------------------------------------------------------------------
+r62 | ale | 2012-11-21 18:06:54 +0100 (Wed, 21 Nov 2012) | 12 lines
+
+dkimsign: added option --filter to accept a msgfile on stdin.
+          function create_ctlfile() split into two new functions, my_mkstemp() and create_tempfiles().
+          temporary msgfile created if stdin is not a regular file.
+filterlib: added option --no-fork to simplify signing a message somewhat.
+           part of function fl_runchild() split into a new function do_the_real_work().
+           added flags in fl, no_fork and write_file.
+           new function fl_runstdio() sets up ctlfiles, stdin, stdout, and calls do_the_real_work() without forking.  called instead of fl_runtest(), it also copies stdin to stdout in case the message is not filtered (using the write_file flag).
+zdkimfilter: function filecopy() moved to its own header file, included.
+             removed unused hack not_sig_but_spf.
+Documentation updated.
+             
+
+------------------------------------------------------------------------
+r61 | ale | 2012-11-20 09:42:58 +0100 (Tue, 20 Nov 2012) | 3 lines
+
+dkimsign: if the domain is actually an address, just use the domain part.
+odbx_example: add some queries.
+
+------------------------------------------------------------------------
+r60 | ale | 2012-10-28 20:10:52 +0100 (Sun, 28 Oct 2012) | 3 lines
+
+tag for v1.0
+
+
+------------------------------------------------------------------------
+r59 | ale | 2012-10-28 20:09:58 +0100 (Sun, 28 Oct 2012) | 3 lines
+
+version 1.0 ready
+testsuite tweaks
+
+------------------------------------------------------------------------
+r58 | ale | 2012-10-28 17:24:23 +0100 (Sun, 28 Oct 2012) | 3 lines
+
+check compilation without OpenDBX
+
+
+------------------------------------------------------------------------
+r57 | ale | 2012-10-28 15:41:56 +0100 (Sun, 28 Oct 2012) | 9 lines
+
+database: add variables envelope_sender, from, and subject.
+zdkimfilter: no_reputation flipped to do_reputation.added zfilter_db
+	     documentation.
+zfilter_db: clean up options and test environment.
+
+added dkimsign and redact documentation
+database: added dummy function to compile without OpenDBX
+
+
+------------------------------------------------------------------------
+r56 | ale | 2012-10-22 09:40:34 +0200 (Mon, 22 Oct 2012) | 3 lines
+
+Fix passing bogus data after not signing an outgoing message.
+Tweaks for building man pages.
+
+------------------------------------------------------------------------
+r55 | ale | 2012-10-21 11:08:56 +0200 (Sun, 21 Oct 2012) | 3 lines
+
+Fixed passing IP address to the database.
+Tweaked distribution cleanup, and man page.
+
+------------------------------------------------------------------------
+r54 | ale | 2012-10-20 18:37:59 +0200 (Sat, 20 Oct 2012) | 2 lines
+
+tag v1.0b
+
+------------------------------------------------------------------------
+r53 | ale | 2012-10-20 18:35:09 +0200 (Sat, 20 Oct 2012) | 4 lines
+
+updated libopendkim, and added libdkimrep.
+worked out database layout.
+ready for beta testing...
+
+------------------------------------------------------------------------
+r52 | ale | 2012-10-18 20:02:05 +0200 (Thu, 18 Oct 2012) | 2 lines
+
+zfilter_db: Removed useless source.
+
+------------------------------------------------------------------------
+r51 | ale | 2012-10-18 20:01:06 +0200 (Thu, 18 Oct 2012) | 3 lines
+
+database: improved error messages and argument for instantiating queries.
+zfilter_db: This will be the amended debugging in database.c.
+
+------------------------------------------------------------------------
+r50 | ale | 2012-10-17 20:18:06 +0200 (Wed, 17 Oct 2012) | 5 lines
+
+dkimsign: Use configured tmp directory and default domain.
+parm: allow retrieving more than a single parameter (read_single_values()).
+testsuite: added cases for header.b and retrieving outgoing domains.
+zdkimfilter: Use database after signing.  Add --no-db option for not using
+	     database at all.
+
+------------------------------------------------------------------------
+r49 | ale | 2012-10-17 12:53:20 +0200 (Wed, 17 Oct 2012) | 4 lines
+
+zdkimfilter: Database calls for outgoing, signed messages.  Some
+	     refactoring.
+database: added separate functions for in and out.  Create
+	  database_statements.h.
+database_variables: added adsp_flags, message_status, vbr_mv, and
+		    vbr_response.
+
+------------------------------------------------------------------------
+r48 | ale | 2012-10-16 12:09:04 +0200 (Tue, 16 Oct 2012) | 5 lines
+
+zdkimfilter: add some cleanup and smooth corners.  Bugfixes.
+database: Dump variables during tests.	IP address.
+testsuite: add variable to invoke valgrind.
+conf2pod: derived from conf2man, easier and allows to get html too.
+
+------------------------------------------------------------------------
+r47 | ale | 2012-10-13 11:25:34 +0200 (Sat, 13 Oct 2012) | 2 lines
+
+zdkimfilter: removed domain_whitelist, which replaced spf and dkim
+	     whitelists.  This must dynamically use db_sql_whitelisted.
+
+------------------------------------------------------------------------
+r46 | ale | 2012-10-13 10:55:19 +0200 (Sat, 13 Oct 2012) | 10 lines
+
+parm: new source file, separated from zdkimfilter.
+database: new source file for OpenDBX-driven db I/O.
+zfilter_db: standalone utility for checking db settings.
+ip_to_hex: short function to properly insert IP numbers.
+conf2man: Perl utility to format parameter explanations.
+zdkimfilter.conf: removed stats_file and stats_wait.  NOTE:
+		  no_author_domain replaced with two parameters
+		  hono_author_domain and reject_on_nxdomain.  Added
+		  max_signatures.
+redact: short function to redact a string, used to obfuscate user's
+	login-ID in Received: header field.
+zdkimfilter: verify_message function changed to work based on domains,
+	     where each domain can have multiple signatures.
+
+
+------------------------------------------------------------------------
+r45 | ale | 2012-09-22 19:03:52 +0200 (Sat, 22 Sep 2012) | 7 lines
+
+zdkimfilter: vb_fgets moved to its own header file.  Added new parameter
+	     redact_received_auth.  Added new function to redact the user
+	     id.
+vb_fgets: new header file; it looks pretty usable that way.
+parm: new header file.
+redact: new C source and header files, function redacted() uses nettle.
+configure: added detection of libnettle.
+testsuite: check redaction.
+
+------------------------------------------------------------------------
+r44 | ale | 2012-09-19 10:51:55 +0200 (Wed, 19 Sep 2012) | 6 lines
+
+version: 1.0
+zdkimfilter: Removed parameter no_dwl.	Added parameter report_all_sigs. 
+	     Printing A-R moved to a new function.  Corrected bug in
+	     verify_header that prevented collecting VBR info.
+myvbr: added debug function to read DNS.
+testsuite: added tests for multiple signatures reporting.
+
+
+------------------------------------------------------------------------
+r43 | ale | 2012-09-17 18:16:24 +0200 (Mon, 17 Sep 2012) | 6 lines
+
+dkimsign: added new command to sign locally generated mail
+zdkimfilter: spf_whitelist and dkim_whitelist merged into domain_whitelist.
+	      DKIM takes precedence.
+myvbr: add functions for handling of VBR-Info; lookup according to
+       specification.
+zdkimfilter: A-R for vbr according to spec.  New parameter
+	     trusted_vouchers.
+testsuite: changed according to different log formats.
+
+------------------------------------------------------------------------
+r42 | ale | 2010-10-05 16:35:24 +0200 (Tue, 05 Oct 2010) | 2 lines
+
+tag v0.5
+
+------------------------------------------------------------------------
+r41 | ale | 2010-10-05 15:53:37 +0200 (Tue, 05 Oct 2010) | 2 lines
+
+Set text plain for etc/logrotate.example
+
+------------------------------------------------------------------------
+r40 | ale | 2010-10-04 19:39:38 +0200 (Mon, 04 Oct 2010) | 2 lines
+
+etc: added a logrotate.example to the dist, along with a patch to
+     opendkim-genstats
+
+------------------------------------------------------------------------
+r39 | ale | 2010-10-04 16:50:19 +0200 (Mon, 04 Oct 2010) | 7 lines
+
+zdkimfilter: added parameter no_dwl to skim querying dwl.spamhaus.org.
+	     Added code to do the query otherwise.
+testsuite: inserted version check to skip tests that would fail with older
+	   libopendkim versions.
+myvbr: new .c and .h sources for minimal vbr lookup, without checking.
+conf.dist: added stanzas for no_dwl and also stats_* parameters
+configure: added test for resolver lib.
+
+
+------------------------------------------------------------------------
+r38 | ale | 2010-10-01 16:28:06 +0200 (Fri, 01 Oct 2010) | 3 lines
+
+zdkimfilter: set header.from in dkim-adsp's A-R entry, if libopendkim is
+	     v2.2 or better.
+testsuite: set header.from as expected in results.  This way the test suite
+	   can only run when compiled against libopendkim 2.2 or better.
+
+------------------------------------------------------------------------
+r37 | ale | 2010-09-22 10:54:20 +0200 (Wed, 22 Sep 2010) | 4 lines
+
+zdkimfilter: log most of the frommta string, not just the IP address.
+zdkimstats: convert to OpenDKIM log format, by dropping extra fields in
+	    frommta (helo-name and looked-up reverse name.)
+testsuite: adjusted accordingly
+
+------------------------------------------------------------------------
+r36 | ale | 2010-09-11 18:32:32 +0200 (Sat, 11 Sep 2010) | 3 lines
+
+testsuite: modified some tests to also check stats writing.
+filterlib: fix bug that prevented "frommta" to be retrieved.
+
+------------------------------------------------------------------------
+r35 | ale | 2010-09-11 12:10:28 +0200 (Sat, 11 Sep 2010) | 2 lines
+
+Oops, version changed now.
+
+------------------------------------------------------------------------
+r34 | ale | 2010-09-11 11:58:41 +0200 (Sat, 11 Sep 2010) | 7 lines
+
+zdkimstats: added two standalone programs, -wait and -anon.  A new header,
+	    OpenDKIMstats.h has also been added.
+filterlib: fl_init_signal changed to operate in two different ways,
+	   according to an arg.  Signal handling has been adjusted to allow
+	   file locking interoperable with rotating the stats file.
+zdkimfilter: completed the stats writing function.
+zdkimfilter: added pid creation to allow signalling. Modify
+	     after_filter_stats to reopen the stats file if interrupted by
+	     SIGUSR1.
+zdkimfilter: slightly modified verification so as to collect data useful
+	     for stats, e.g. checking for a "Precedence: list" header
+	     field.
+version: set to 0.5
+
+------------------------------------------------------------------------
+r33 | ale | 2010-09-07 12:05:43 +0200 (Tue, 07 Sep 2010) | 16 lines
+
+filterlib: added function fl_set_after_filter so that a filter can set a
+	   function to be called after the response has been given to
+	   Courier; somewhat similar to atexit.
+filterlib: add frommta field ('f') to msg_info reat from ctlfile; it
+	   includes the sender's IP address.
+zdkimfilter: added functions and parameters to support writing a stats log;
+	     this includes:
+ * allocating a stats_info structure
+ * clean_stats and clean_stats_info_content
+ * stats_file and stats_wait
+ * count Received header fields
+ * keep C-T and C-T-E header fields
+ * set_client_ip
+ * after_filter_stats
+ * empty write_stats
+zdkimfilter: fixed bug that would cause erroneous calls to isalnum() in
+	     case of 8bit header fields.
+
+------------------------------------------------------------------------
+r32 | ale | 2010-09-06 17:51:36 +0200 (Mon, 06 Sep 2010) | 17 lines
+
+testsuite: added some tests to check key_choice_header, and minor changes
+	   to increase the percentage of code covered.
+conf.dist: added comments for key_choice_header; default_domain stanza
+	   moved to improve readability.
+conf.dist: removed 8k limit.
+zdkimfilter: rewritten parameter reading (parm_config()) to use vb_fgets. 
+	     That removes the 8k limit of logical lines.  Buggy behavior
+	     when no newline ends the parameter file has also been fixed.
+zdkimfilter: various small improvements:
+ * fix description of no_author_domain
+ * smaller initial buffer for debug builts
+ * check eof in vb_what
+ * check for malformed bodyless message (sign and verify)
+ * add possibility to ignore login id using dash ("-")
+ * several fixes for key_choice
+ * improve code readability for A-R discard (maybe_attack)
+
+------------------------------------------------------------------------
+r31 | ale | 2010-09-04 20:34:02 +0200 (Sat, 04 Sep 2010) | 3 lines
+
+zdkimfilter: functions sign_headers and verify_headers converted to use
+	     vb_fgets; fixed empty header behavior.
+
+------------------------------------------------------------------------
+r30 | ale | 2010-09-04 17:37:44 +0200 (Sat, 04 Sep 2010) | 3 lines
+
+testsuite: fixed existing tests for new parameter key_choice_header
+zdkimfilter: fixed compile time warnings
+
+------------------------------------------------------------------------
+r29 | ale | 2010-09-04 15:00:50 +0200 (Sat, 04 Sep 2010) | 4 lines
+
+zdkimfilter: added var_buf for reading header
+zdkimfilter: added choice headers for determining signing domain
+testuite: adjusted tests for 554 reply code
+
+------------------------------------------------------------------------
+r28 | ale | 2010-07-26 17:15:13 +0200 (Mon, 26 Jul 2010) | 2 lines
+
+zdkimfilter: Changed reply code for rejection: 550 to 554
+
+------------------------------------------------------------------------
+r27 | ale | 2010-07-16 19:11:06 +0200 (Fri, 16 Jul 2010) | 1 line
+
+tag v0.4
+------------------------------------------------------------------------
+r26 | ale | 2010-07-16 18:51:13 +0200 (Fri, 16 Jul 2010) | 4 lines
+
+conf.dist: change description of parameter no_author_domain
+conf.dist: set no_author_domain for new installation
+version: 0.4
+
+------------------------------------------------------------------------
+r25 | ale | 2010-07-16 17:35:29 +0200 (Fri, 16 Jul 2010) | 4 lines
+
+filterlib: fix bug for empty ctl lines
+testsuite: add explicit comparison of A-R field to show nxdomain where
+	   test3 is not used
+testsuite: add plain case test, and mark recipient test
+
+------------------------------------------------------------------------
+r24 | ale | 2010-07-16 15:49:00 +0200 (Fri, 16 Jul 2010) | 11 lines
+
+filterlib: re-enable possibility to drop messages
+zdkimfilter: fix ADSP behavior to be either disabled or
+ * nxdomain => reject
+ * failed "all" => reject
+ * failed "discardable" => drop
+zdkimfilter: change meaning of no_author_domain parameter
+filterlib: add an "exit+" command to batch-test mode
+testsuite: adjust tests that need no_author_domain
+testsuite: add one test for adsp=all
+testsuite: adjust for differences in remaining tests
+
+------------------------------------------------------------------------
+r23 | ale | 2010-07-05 13:53:50 +0200 (Mon, 05 Jul 2010) | 1 line
+
+Forgot to tag v0.3 at rev. 20
+------------------------------------------------------------------------
+r22 | ale | 2010-07-05 13:43:11 +0200 (Mon, 05 Jul 2010) | 1 line
+
+mime-type property to read conf online
+------------------------------------------------------------------------
+r21 | ale | 2010-04-30 11:40:58 +0200 (Fri, 30 Apr 2010) | 4 lines
+
+zdkimfilter: add a dkim_whitelist parameter for not rejecting messages
+	     having a good signature from specified domains
+testsuite: add some tests to check the above
+zdkimfilter.conf.dist: added the comment for dkim_whitelist
+
+------------------------------------------------------------------------
+r20 | ale | 2010-04-28 10:31:33 +0200 (Wed, 28 Apr 2010) | 8 lines
+
+zdkimfilter: check spf_whitelist also for adsp:discard=fail
+testsuite: added a test to check spf_whitelisting for adsp:discard=fail
+zdkimfilter: changed log line for adsp, from "adsp: type/result" to
+	     "adsp:type=result"
+zdkimfilter: in Authentication-Results, changed "x-dkim-adsp" to
+	     "dkim-adsp" according to RFC 5617
+testsuite: updated to reflect the above changes
+zdkimfilter.conf.dist: updated comments only, to reflect the above changes
+version: 0.3
+
+------------------------------------------------------------------------
+r19 | ale | 2010-03-23 18:23:12 +0100 (Tue, 23 Mar 2010) | 1 line
+
+Version 0.2
+------------------------------------------------------------------------
+r18 | ale | 2010-03-23 18:22:20 +0100 (Tue, 23 Mar 2010) | 1 line
+
+Forgot to tag at version 0.1
+------------------------------------------------------------------------
+r17 | ale | 2010-03-23 18:22:03 +0100 (Tue, 23 Mar 2010) | 2 lines
+
+Tags for tarballs
+
+------------------------------------------------------------------------
+r16 | ale | 2010-03-23 12:20:04 +0100 (Tue, 23 Mar 2010) | 3 lines
+
+testsuite: added two test cases of accepted non-existent From: domain:
+	   no_author_domain and spf_whitelist
+zdkimfilter: amended logging for whitelisted senders
+
+------------------------------------------------------------------------
+r15 | ale | 2010-03-22 19:53:24 +0100 (Mon, 22 Mar 2010) | 3 lines
+
+zdkimfilter: added parameter spf_whitelist, accept invalid author domain
+	     for them
+version: 0.2
+
+------------------------------------------------------------------------
+r14 | ale | 2010-03-03 17:55:27 +0100 (Wed, 03 Mar 2010) | 5 lines
+
+testsuite: added tests for adsp
+zdkimfilter: clarified log when dkim=pass, adsp=fail; log reject at 3
+zdkimfilter: support for policy batch-test
+conf.dist: log reject at verbose=3
+
+------------------------------------------------------------------------
+r13 | ale | 2010-03-02 20:57:21 +0100 (Tue, 02 Mar 2010) | 2 lines
+
+zdkimfilter: write relevant info at verbosity 3
+
+------------------------------------------------------------------------
+r12 | ale | 2010-03-01 20:14:34 +0100 (Mon, 01 Mar 2010) | 2 lines
+
+attempt to rationalize verbosity levels
+
+------------------------------------------------------------------------
+r11 | ale | 2010-03-01 14:57:48 +0100 (Mon, 01 Mar 2010) | 4 lines
+
+zdkimfilter: workaround for dkim_sig_getidentity bug
+zdkimfilter: removal of A-R fields on 2nd pass only (if they are signed may
+	     have misbehavior)generic package cleanup for release
+
+------------------------------------------------------------------------
+r10 | ale | 2010-02-28 18:14:35 +0100 (Sun, 28 Feb 2010) | 4 lines
+
+testsuite: added signing tests
+configure: check LDFLAGS for statically linked libopendkim
+zdkimfilter: tweak verbosity for non-linked keys
+
+------------------------------------------------------------------------
+r9 | ale | 2010-02-26 19:20:51 +0100 (Fri, 26 Feb 2010) | 4 lines
+
+zdkimfilter: smoothed output for batch tests, added KEYFILE
+filterlib: write 0 for pid if running batch tests
+testsuite: added tests to check author/sender signatures ordering
+
+------------------------------------------------------------------------
+r8 | ale | 2010-02-24 20:06:45 +0100 (Wed, 24 Feb 2010) | 2 lines
+
+added skeleton testsuite
+
+------------------------------------------------------------------------
+r7 | ale | 2010-02-24 19:12:27 +0100 (Wed, 24 Feb 2010) | 7 lines
+
+zdkimfilter: configuration parameters additions and tweaking
+zdkimfilter: allow extensions (.private .pem) in key files
+zdkimfilter: verify domain policy/author domain when no sig.
+zdkimfilter: better log messages
+conf.dist: documented better
+filterlib: allow tests in batchtest
+
+------------------------------------------------------------------------
+r6 | ale | 2010-02-22 19:30:06 +0100 (Mon, 22 Feb 2010) | 2 lines
+
+zdkimfilter: config file: flags no_author_domain and no_reputation reversed
+
+------------------------------------------------------------------------
+r5 | ale | 2010-02-22 19:11:47 +0100 (Mon, 22 Feb 2010) | 5 lines
+
+changes to ease alpha testing
+filterlib: allow passing ctlfiles and mailfiles (mixed)
+zdkimfilter: completed configuration parsingmiscellaneous fixes for message
+	     verification
+
+------------------------------------------------------------------------
+r4 | ale | 2010-02-17 18:36:01 +0100 (Wed, 17 Feb 2010) | 5 lines
+
+first draft, never tested
+filterlib: added code to handle write_fname
+etc: added configuration file skeleton
+zdkimfilter: more or less minimal verify or sign once development
+
+------------------------------------------------------------------------
+r3 | ale | 2010-02-10 19:26:46 +0100 (Wed, 10 Feb 2010) | 5 lines
+
+configure.ac: adapted from avfilter
+filterlib.c: modified to get authenticated sender
+zdkimfilter.c: 1-liner to include opendkim
+
+
+------------------------------------------------------------------------
+r2 | ale | 2010-02-10 13:39:30 +0100 (Wed, 10 Feb 2010) | 2 lines
+
+select latest filterlib source
+
+------------------------------------------------------------------------
+r1 | ale | 2010-02-03 17:23:32 +0100 (Wed, 03 Feb 2010) | 2 lines
+
+start repository
+
+------------------------------------------------------------------------
