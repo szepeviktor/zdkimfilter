@@ -1,10 +1,10 @@
 before_install:
   - echo "deb http://archive.ubuntu.com/ubuntu precise-backports main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
   - sudo apt-get update -qq
-  - sudo apt-get install -y --force-yes build-essential colormake pkg-config libtool courier-mta libopendkim-dev uuid-dev zlib1g-dev libunistring-dev libidn2-0-dev nettle-dev libopendbx1-dev
+  - sudo apt-get install -y --force-yes build-essential ccze colormake pkg-config libtool courier-mta libopendkim-dev uuid-dev zlib1g-dev libunistring-dev libidn2-0-dev nettle-dev libopendbx1-dev
 
 script:
-  - ./configure --enable-dkimsign-setuid
+  - ./configure --enable-dkimsign-setuid | ccze -m ansi
   - colormake
   - colormake check
   - sudo colormake install
