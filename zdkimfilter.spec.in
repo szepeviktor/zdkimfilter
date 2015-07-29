@@ -1,3 +1,5 @@
+# Build --with setuid to run dkimsign as the courier user.
+
 Summary:       DKIM filter for Courier-MTA
 Name:          zdkimfilter
 Version:       @PACKAGE_VERSION@
@@ -6,8 +8,8 @@ License:       GPLv3+ with some additional rights; see LICENSE
 Group:         Applications/Mail
 URL:           http://www.tana.it/sw/zdkimfilter/
 Source0:       http://www.tana.it/sw/zdkimfilter/%{name}-%{version}.tar.gz
-BuildRequires: courier, libopendkim-devel, opendbx-devel, nettle-devel
-BuildRequires: libidn2-devel, libunistring-devel, zlib-devel, uuid
+BuildRequires: courier, libopendkim-devel, opendbx-devel, nettle-devel, libidn2-devel
+BuildRequires: libunistring-devel, zlib-devel, uuid
 Requires:      courier, libopendkim, opendbx, nettle, libidn2
 Requires:      libunistring, zlib, uuid, publicsuffix-list
 
@@ -22,7 +24,7 @@ Requires:      libunistring, zlib, uuid, publicsuffix-list
 %build
 cconfig=$(rpm -ql courier |grep courier-config |sed 's#/courier-config##')
 export PATH="$cconfig:$PATH"
-%configure --prefix=/usr
+%configure --prefix=/usr %{?_with_setuid:--enable-dkimsign-setuid}
 make
 
 
@@ -58,13 +60,15 @@ cconfig=$(rpm -ql courier |grep courier-config)
 courieruser=$($cconfig |grep mailuser |sed 's/.*=//')
 couriergroup=$($cconfig |grep mailgroup |sed 's/.*=//')
 chown $courieruser:$couriergroup %{_bindir}/dkimsign
+%{?_with_setuid:chmod +s %{_bindir}/dkimsign}
 if [ $1 -eq 2 -a -f %{_sysconfdir}/courier/filters/zdkimfilter.conf.rpmnew ]; then
-chown $courieruser:$couriergroup %{_sysconfdir}/courier/filters/zdkimfilter.conf.rpmnew
+  chown $courieruser:$couriergroup %{_sysconfdir}/courier/filters/zdkimfilter.conf.rpmnew
 else
-chown $courieruser:$couriergroup %{_sysconfdir}/courier/filters/zdkimfilter.conf
+  chown $courieruser:$couriergroup %{_sysconfdir}/courier/filters/zdkimfilter.conf
 fi
 
 
 %changelog
 * Sat Jun 20 2015 Zenon Panoussis <oracle@provocation.net> 1.5
 - Initial packaging.
+

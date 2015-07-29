@@ -27,6 +27,7 @@ PKG_PROG_PKG_CONFIG
 # Need libtool to properly link static/dynamic inter-library dependencies,
 # as accessible through .la files.  We build no library, though.
 LT_INIT
+LT_OUTPUT
 
 # Need perl to build documentation
 AC_CHECK_PROG([PERL], [perl], [perl])
@@ -210,7 +211,7 @@ AC_CACHE_CHECK([if opendkim is at least 1.2.2], [av_cv_opendkim_version_ok],
 		SAVE_LIBS="$LIBS"
 		LIBS="$SAVE_LIBS -lopendkim"
 		save_ac_link="$ac_link"
-		ac_link="libtool --mode=link --tag=CC $ac_link"
+		ac_link="./libtool --mode=link --tag=CC $ac_link"
 		AC_RUN_IFELSE([AC_LANG_SOURCE([
 			#include <opendkim/dkim.h>
 			int main(){unsigned long v = dkim_libversion();
@@ -233,7 +234,7 @@ AC_CACHE_CHECK([opendkim 2.2.0 or better], [av_cv_opendkim_version_220],
 		SAVE_LIBS="$LIBS"
 		LIBS="$SAVE_LIBS -lopendkim"
 		save_ac_link="$ac_link"
-		ac_link="libtool --mode=link --tag=CC $ac_link"
+		ac_link="./libtool --mode=link --tag=CC $ac_link"
 		AC_RUN_IFELSE([AC_LANG_SOURCE([
 			#include <opendkim/dkim.h>
 			int main(){unsigned long v = dkim_libversion();
@@ -253,7 +254,7 @@ AC_CACHE_CHECK([opendkim 2.10.1 or better], [av_cv_opendkim_version_2A1],
 		SAVE_LIBS="$LIBS"
 		LIBS="$SAVE_LIBS -lopendkim"
 		save_ac_link="$ac_link"
-		ac_link="libtool --mode=link --tag=CC $ac_link"
+		ac_link="./libtool --mode=link --tag=CC $ac_link"
 		AC_RUN_IFELSE([AC_LANG_SOURCE([
 			#include <opendkim/dkim.h>
 			int main(){unsigned long v = dkim_libversion();
@@ -305,7 +306,7 @@ AC_MSG_CHECKING([flags for opendkim library])
 	SAVE_LIBS="$LIBS"
 	LIBS="$SAVE_LIBS $OPENDKIM_LIB"
 	save_ac_link="$ac_link"
-	ac_link="libtool --mode=link --tag=CC $ac_link"
+	ac_link="./libtool --mode=link --tag=CC $ac_link"
 	AC_LINK_IFELSE([AC_LANG_CALL([], [dkim_init])],
 		[av_cv_flags_library_opendkim="ok"])
 	ac_link="$save_ac_link"
@@ -323,7 +324,7 @@ CFLAGS="$OPENDKIM_CFLAGS $CFLAGS"
 SAVE_LIBS="$LIBS"
 LIBS="$SAVE_LIBS $OPENDKIM_LIB"
 save_ac_link="$ac_link"
-ac_link="libtool --mode=link --tag=CC $ac_link"
+ac_link="./libtool --mode=link --tag=CC $ac_link"
 AC_CHECK_FUNCS([dkim_get_sigsubstring dkim_getuser dkim_libversion])
 CFLAGS="$SAVE_CFLAGS"
 ac_link="$save_ac_link"
@@ -377,7 +378,7 @@ if $PKG_CONFIG --atleast-version=1.4.5 opendbx; then
 	SAVE_LIBS="$LIBS"
 	LIBS="$SAVE_LIBS $OPENDBX_LIB"
 	save_ac_link="$ac_link"
-	ac_link="libtool --mode=link --tag=CC $ac_link"
+	ac_link="./libtool --mode=link --tag=CC $ac_link"
 	AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <opendbx/api.h>
 	], [odbx_t *h;
 	odbx_init(&h, "", "", "");
