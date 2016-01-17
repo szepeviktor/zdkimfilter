@@ -3448,6 +3448,17 @@ static void verify_message(dkimfl_parm *parm)
 			break;
 		}
 
+/*
+	TODO: must check DKIM_STAT_CBREJECT, which is returned by dkim_sig_sort()
+	(DKIM_CBSTAT_REJECT).  In addition, if there are no domains in domain_head
+	and parm->z.reject_on_nxdomain is set, the message should also be rejected.
+	(The latter condition implies DKIM_STAT_SYNTAX for empty or missing From:)
+
+	Mail with no mailfrom and no From: triggers "Internal error, invalid stats"
+	in db_set_stats_info.  Why that kind of message has no Received-SPF:?
+	Anyway, dyn.stats should be cleared in that case.
+*/
+
 		case DKIM_STAT_SYNTAX:
 		case DKIM_STAT_NOKEY:
 		case DKIM_STAT_CANTVRFY:

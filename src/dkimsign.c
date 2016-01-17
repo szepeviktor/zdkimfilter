@@ -265,7 +265,7 @@ static int run_zdkimfilter(char *argv[], int do_what)
 						while (*p == ' ')
 							++p;
 
-						if (*p) (*do_report)(level, p);
+						if (*p) (*do_report)(level, "%s", p);
 						p = br + (br < last);     // +1 if not forced newline
 						assert(first <= p && p <= next);
 					}
@@ -336,13 +336,15 @@ static int run_zdkimfilter(char *argv[], int do_what)
 	}
 	else // child process
 	{
+		int rc, exp_rc;
+
 		if ((do_what & do_filter) == 0)
 		{
-			close(0);
+			close(exp_rc = 0);
 			if (do_what & do_config)
-				dup(io_pipe[0]);
+				rc = dup(io_pipe[0]);
 			else
-				open("/dev/null", O_RDONLY);
+				rc = open("/dev/null", O_RDONLY);
 		}
 
 		if (do_what & do_mail)
@@ -352,14 +354,18 @@ static int run_zdkimfilter(char *argv[], int do_what)
 				close(1);
 				open("/dev/null", O_WRONLY);
 			}
-			close(2);
-			dup(io_pipe[1]);
+			close(exp_rc = 2);
+			rc = dup(io_pipe[1]);
 		}
 		if (do_what & (do_config | do_mail))
 		{
 			close(io_pipe[0]);
 			close(io_pipe[1]);
 		}
+
+		if (rc != exp_rc)
+			(*do_report)(LOG_ERR, "dkimsign: dup error %d != %d: %s\n",
+				rc, exp_rc, strerror(errno));
 		if (do_what & do_syslog)
 			closelog();
 		execv(argv[0], argv);
