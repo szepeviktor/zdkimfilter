@@ -689,8 +689,16 @@ static int default_key_choice(dkimfl_parm *parm, int type)
 	if (type == '*' &&
 		(domain = strchr(parm->dyn.info.authsender, '@')) != NULL)
 			++domain;
-	else
-		domain = parm->z.default_domain; // is that how local domains work?
+	else  // is that how local domains work?
+		if ((domain = parm->z.default_domain) == NULL)
+		{
+			fl_report(type == '*'? LOG_CRIT: LOG_ERR,
+				"id=%s: no '%c' domain name for %s: configure default_domain",
+				parm->dyn.info.id,
+				type,
+				parm->dyn.info.authsender);
+			rc = -1;
+		}
 
 	if (domain &&
 		(rc = read_key(parm, domain)) == 0)

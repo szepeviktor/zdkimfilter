@@ -143,7 +143,7 @@ The query can return one to three integer values, in this order:
 
 =over
 
-=item I<domain is whitelisted>
+=item I<whitelisted>X<domain>
 
 A value of 1 or higher affects the order in which DKIM signatures verification
 is attempted.  A value of 2 or higher prevents a message from being rejected
@@ -151,15 +151,15 @@ or dropped due to DMARC policy or ADSP, if the domain is authenticated.
 
 Unless the B<domain> is aligned with B<org_domain>
 
-=item I<honor DMARC policy>
+=item I<add_dmarc>X<domain>
 
 Add to the global B<honor_dmarc> setting.  If DMARC is globally honored, a
 value of -1 disables it for this domain.  A value of 1 enables it for this
-message, even if DMARC is not globally set.
+message, even if DMARC is not globally enabled.
 
 Unless B<domain> is aligned with B<org_domain>, this result is discarded.
 
-=item I<honor ADSP policy>
+=item I<add_adsp>X<domain>
 
 Add to the global B<honor_author_domain> setting.  Like the previous item,
 this is added (with sign) to the global value.
@@ -198,7 +198,7 @@ outgoing, but the following twelve variables are available in either case:
 
 =over
 
-=item B<ino>, B<mtime>, and B<pid>
+=item B<ino>, B<mtime>, and B<pid>X<message_in message_out>
 
 These are the values used by Courier to identify a message, the inode, the date
 and the process-id.  These variables are given as hex string, but without
@@ -308,7 +308,7 @@ The message is rejected because of remote DMARC policy.
 
 =back
 
-=item B<dmarc_reason>
+=item B<dmarc_reason>X<message_in>
 
 Currently, zdkimfilter sets this value as follows:
 
@@ -329,7 +329,7 @@ exempts this message.
 
 =item I<trusted_forwarder>
 
-An authenticated domain is whitelisted (>= 2), is in DNSWL, or VBR.
+An authenticated domain is whitelisted (E<gt>= 2), is in DNSWL, or VBR.
 
 =item I<mailing_list>
 
@@ -436,27 +436,27 @@ Servers.
 
 =back
 
-=item B<dmarc_record>
+=item B<dmarc_rec>X<domain>
 
 A rewritten digest of the DMARC record, used for aggregate reports.  Targets
 and interval are moved to their own variables, so this digest shouldn't take
 more than 60 bytes, including the appended sentinel (see C<dmarc_rua> below).
 
-=item B<dmarc_ri>
+=item B<dmarc_ri>X<domain>
 
 A multiple of B<original_ri> that matches the B<honored_report_interval>.
 
-=item B<original_ri>
+=item B<original_ri>X<domain>
 
 The Report Interval requested by the domain.
 
-=item B<prefix_len>
+=item B<prefix_len>X<domain>
 
 The number of bytes that must be removed from the domain name in order to
 obtain the organizational domain name, as resulting from the Public Suffix
 List.
 
-=item B<dmarc_rua>
+=item B<dmarc_rua>X<domain>
 
 A rewritten subset of aggregate report targets.  Only C<mailto:> targets are
 considered, and stored as a list of mail addresses.
