@@ -1454,6 +1454,7 @@ static void sign_message(dkimfl_parm *parm)
 		}
 		else
 		{
+			// null_domain shouldn't happen after fixing default_key_choice()
 			static const char null_domain[] = "--domain misconfigured--";
 			static const char templ[] =
 				"550 BLOCKED: can send to <postmaster@%s> only.\n";

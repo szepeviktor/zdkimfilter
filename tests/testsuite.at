@@ -2071,6 +2071,7 @@ ZF_CONFIG(0, [
 blocked_user_list = bul.txt
 db_backend test
 db_sql_check_user user: not referenced: postmaster: naughty
+default_domain example.net
 ])
 AT_DATA([bul.txt], [someonelse@another.example is also naughty
 ])
@@ -2116,6 +2117,7 @@ AT_CLEANUP
 AT_SETUP([Reject blocked user missing domain])
 ZF_CONFIG(1, [
 blocked_user_list bul.txt
+default_domain example.net
 ])
 ZF_PRIVATEKEY([example.com])
 AT_DATA([mail], [ZF_MESSAGE])
@@ -2133,7 +2135,7 @@ ctl
 AT_CHECK(
 ZF_RUN,
 0,
-[550 BLOCKED: can send to <postmaster@--domain misconfigured--> only.
+[550 BLOCKED: can send to <postmaster@example.net> only.
 ],
 [])
 AT_CLEANUP

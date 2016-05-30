@@ -228,7 +228,7 @@ fi
 
 AC_CACHE_CHECK([opendkim 2.2.0 or better], [av_cv_opendkim_version_220],
 	[av_cv_opendkim_version_220=0
-	if test "$av_cv_opendkim_version" = "true" ; then
+	if test "$av_cv_opendkim_version" != "false" ; then
 		$PKG_CONFIG --atleast-version=2.2.0 opendkim && av_cv_opendkim_version_220=1
 	else
 		SAVE_LIBS="$LIBS"
@@ -577,6 +577,7 @@ AC_CONFIG_FILES([Makefile
                  etc/redact.pod
                  etc/zfilter_db.pod
                  etc/zaggregate.pod
+                 etc/odbx_example.pod
                  tests/atlocal
                  tests/Makefile
                 ])
