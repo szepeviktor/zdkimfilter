@@ -1,0 +1,358 @@
+=pod
+
+=head1 NAME
+
+odbx_example - zdkimfilter's database example
+
+=head1 SYNOPSIS
+
+B<mysql> -u zfilter E<lt> odbx_example.sql
+B<cat> odbx_example.conf E<gt>E<gt> F<@COURIER_SYSCONF_INSTALL@/filters/zdkimfilter.conf>
+B<edit> F<@COURIER_SYSCONF_INSTALL@/filters/zdkimfilter.conf>
+B<edit> odbx_example.sh
+B<source> odbx_example.sh
+ORG_EMAIL=foo@example.edu B<zaggregate> -vf odbx_example.conf
+
+=head1 DESCRIPTION
+
+The example database provides a working set up.  It makes several assumptions
+which may need arrangements, such as MySQL backend, local socket, and access
+without password granted on C<test_zfilter> to user C<zfilter>.
+
+
+=head1 INSTALLATION
+
+Example files serve as a guide, you may want to arrange and complete as needed.
+
+=over
+
+=item B<1.  Create MySQL database>
+
+For example, in an interactive, privileged mysql session:
+
+C<CREATE DATABASE IF NOT EXISTS test_zfilter;>
+
+C<GRANT SELECT, INSERT, UPDATE, EXECUTE, DELETE, DROP, CREATE, ALTER ROUTINE, CREATE ROUTINE ON test_zfilter.* TO 'zfilter'@'localhost'>
+
+
+And then:
+
+C<mysql -u zfilter E<lt> odbx_example.sql>
+
+To use IPv6, change field C<ip> in tables message_in and message_out.
+(see comments in odbx_example.sql)
+
+That C<sql> uses the test database.  You may want to create a permanent
+one when you're done testing.
+
+
+=item B<2.  Edit F<zdkimfilter.conf>>
+
+C<cat odbx_example.conf E<gt>E<gt> zdkimfilter.conf>
+
+Change DB-specific configuration items such as B<db_user> and B<db_password>.
+They are documented in L<zfilter_db(1)> rather than L<zdkimfilter.conf(5)>.
+
+=item B<3.  Set up DMARC aggregate reports>
+
+Reporting is an integral part of DMARC.
+Edit F<zaggregate-example.sh>, changing at least ORG_* settings, and save it
+in a place suitable to be executed daily.  The script calls dkimsign, so it
+needs permissions to read zdkim config file and private key(s).
+
+Please realize that the script consists of a single pipeline, albeit longish.
+The longest part of it is a printf template for the actual report.  Be careful
+with newlines.  If you work this script before step 2 above, you can use
+F<odbx_example.sh> to generate sample data for manually testing the script
+offline.
+
+See L<zaggregate(1)> for more information.
+
+=item B<4.  Schedule database clean up>
+
+Two queries starting with "C<DELETE r, m FROM...>" are given in F<odbx_example.sql>
+to delete old incoming and outgoing message data, respectively.  They need to
+be actually called by a cron script, in order to get rid of useless details.
+
+Tables I<domain> and I<user> are designed to grow indefinitely.  Use your wit
+to get worthwhile reports from that data.
+
+=back
+
+=head1 TABLES
+
+Hover or click on picture to get tables or fields descriptions.
+
+Each table has a numeric primary key called B<id>.  Foreign key fields are named
+after the referred table name, and store the id of the referred record.  For the
+sake of simplicity, the example declares no referential relationship and
+requires no referential integrity constraint.
+
+F<odbx_example.sql> creates the following tables:
+
+=over
+
+=item L<domain|/domain>X<domain>
+
+This is the focal data table.  A record is stored after each domain name
+authentication or attempt thereof.  In addition, if enabled, the administrative
+domain name (ADMD) is also stored.  The table structure is flat, ignoring the
+lure of fully normalizing it according to delegations.
+
+The example includes a few data fields, but does not yet support a decent
+statistical treatment.  This table is the only "precious" piece of collected
+data, in the sense that it may be worth to avoid purging records older than one
+week or month.
+
+
+=item L<msg_ref|/msg_ref> X<msg_ref>
+
+A cross-reference table between B<domain> and B<message_in>, which are linked
+by a many-to-many relationship.  Each record corresponds to a form of
+authentication of the given domain in the given message.
+
+=item L<message_in|/message_in> X<message_in>
+
+Incoming messages; that is, checked rather than signed by this filter.
+One record per message.
+
+=item L<msg_out_ref|/msg_out_ref> X<msg_out_ref>
+
+A cross-reference table between B<domain> and B<user>, through B<message_out>,
+which are linked by a many-to-many relationship.  Each record corresponds to a
+target domain of a given message submitted by an authenticated user.
+
+=item L<message_out|/message_out> X<message_out>
+
+Outgoing messages; that is, possibly signed by this filter.
+One record per message.
+
+=item L<user|/user> X<user>
+
+Local users.  Each record represents an authenticated user who submitted a
+message.  It may or may not be the same table used for user authentication;
+the example adds records as needed.  This table can be used to implement
+per-user daily limits on outgoing messages.
+
+=back
+
+=head1 FIELDS NOT DOCUMENTED ELSEWHERE
+
+Some fields are documented in L<zfilter_db>.  The other ones here.
+
+=over
+
+=item B<domain>X<domain>
+
+The full domain name, presumably in ASCII.
+
+=item B<id>X<domain msg_ref msg_out_ref message_in message_out user>
+
+This is an auto incremented numeric primary key.  It is used to unambiguously
+refer to records of this table.
+
+=item B<last_recv>X<domain>
+
+The actual time when an incoming message from this domain was filtered.
+
+Updated by stored procedure B<recv_from_domain>, it is used to select candidate
+DMARC record targets in B<db_sql_dmarc_agg_domain>.
+
+=item B<last_report>X<domain>
+
+The end-of-period of the last DMARC report sent to this domain.
+
+Updated by in B<db_sql_set_dmarc_agg>, it is used to select candidate
+DMARC record targets in B<db_sql_dmarc_agg_domain>.
+
+=item B<last_sent>X<domain>
+
+The actual time when an outgoing message to this domain was filtered.
+
+Updated by stored procedure B<sent_to_domain>.
+
+=item B<original_ri>X<domain>
+
+Updated by stored procedure B<recv_from_domain>.
+
+=item B<whitelisted>X<domain>
+
+This item is the first result from query B<db_sql_domain_flags>,
+see L<zfilter_db(1)/perdomai>.
+
+=item B<add_dmarc>X<domain>
+
+This item is the second result from query B<db_sql_domain_flags>,
+see L<zfilter_db(1)/perdomai>.
+
+=item B<add_adsp>X<domain>
+
+This item is the third result from query B<db_sql_domain_flags>,
+see L<zfilter_db(1)/perdomai>.
+
+=item B<recv>X<domain>
+
+Updated by stored procedure B<recv_from_domain>, it grows indefinitely.
+
+=item B<sent>X<domain>
+
+Updated by stored procedure B<sent_to_domain>, it grows indefinitely.
+
+=item B<since>X<domain>
+
+Set on record creation, this field is never modified.
+
+=item B<content_encoding>X<message_in>
+
+Set in B<db_sql_insert_message> after the value found in the incoming message.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<content_encoding>X<message_out>
+
+Set by stored procedure B<sent_message> after the value found in the outgoing message.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<content_type>X<message_in>
+
+Value of Content-Type truncated at the semicolon.
+
+Set in B<db_sql_insert_message>.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<content_type>X<message_out>
+
+Value of Content-Type truncated at the semicolon.
+
+Set by stored procedure B<sent_message>.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<message_id>X<message_in>
+
+String value of Message-Id.
+
+Set in B<db_sql_insert_message>.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<message_id>X<message_out>
+
+String value of Message-Id.
+
+Set by stored procedure B<sent_message>.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<mailing_list>X<message_in>
+
+1 or 0, according the presence of mailing list header fields.
+Set in B<db_sql_insert_message>.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<date>X<message_in>
+
+String value of header field Date:
+
+Set in B<db_sql_insert_message>.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<date>X<message_out>
+
+String value of header field Date:
+
+Set by stored procedure B<sent_message>.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<ino>X<message_in message_out>
+
+Inode number. See L<zfilter_db(1)/traitsan> 
+
+=item B<mtime>X<message_in message_out>
+
+Unix epoch. See L<zfilter_db(1)/traitsan> 
+
+=item B<pid>X<message_in message_out>
+
+Process id. See L<zfilter_db(1)/traitsan>
+
+=item B<envelope_sender>X<message_in>
+
+Envelope sender email address.  It is empty for bounce messages.
+It gets truncated when it is longer than the field length.
+
+Set in B<db_sql_insert_message>.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<envelope_sender>X<message_out>
+
+String value of header field Date:
+
+Set by stored procedure B<sent_message>.
+See L<zfilter_db(1)/traitsan>.
+
+=item B<dmarc_dispo dmarc_dkim dmarc_spf dmarc_reason>X<message_in>
+
+Set in B<db_sql_insert_message>, it is reported to domains accepting aggregate
+reports.
+
+=item B<score>X<message_in>
+
+It's there for content filters which can determine the
+spamminess of received messages.
+
+Neither set nor used by zdkim.
+
+=item B<rcpt_count>X<message_out>
+
+Set by stored procedure B<sent_message>, it is used in B<db_sql_check_user>
+to limit per user sending.  See L<zfilter_db(1)/storingo>.
+
+The default value in F<odbx_example.conf> is too high to cover the risk of a
+user's identity being stolen by spammers.  Blocking can be tailored on a per
+user basis, possibly allowing users to schedule exceptions using web forms.
+
+=item B<auth>X<msg_ref>
+
+For example, to count what combinations of relationships exist for 
+organizational domains only, one can query:
+
+   SELECT COUNT(*) as cnt, auth FROM msg_ref
+   WHERE FIND_IN_SET('org', auth)
+   GROUP BY auth ORDER BY cnt DESC;
+
+=item B<vbr>X<msg_ref>
+
+A flag indicating whether a vouch from the vestigial Spamhaus whitelist.
+Normally, the empty string.
+
+=item B<domain>X<msg_ref msg_out_ref>
+
+Matches C<domain.id> of the corresponding record.
+
+=item B<message_out>X<msg_out_ref>
+
+Matches C<message_out.id> of the corresponding record.
+
+=item B<message_in>X<msg_ref>
+
+Matches C<message_in.id> of the corresponding record.
+
+=item B<user>X<message_out>
+
+Matches C<user.id> of the corresponding record.
+
+=item B<addr>X<user>
+
+User's email address.
+Set by stored procedure B<sent_message> after variables
+B<local_part> and B<domain>.
+
+=item B<ip>X<message_in message_out>
+
+The IP number of the sending relay.  It is either read from C<Received:> or
+from C<REMOTE_ADDR>.  Since it is a binary field, you have to resort to a
+function in order to display it.  For example:
+
+C<SELECT COUNT(*) AS cnt, INET_NTOA(CONV(HEX(ip),16,10)) AS submit from message_out GROUP BY IP ORDER BY cnt DESC LIMIT 10;>
+
+=back
+
+=cut
+

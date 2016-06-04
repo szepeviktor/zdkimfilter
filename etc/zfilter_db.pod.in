@@ -149,8 +149,6 @@ A value of 1 or higher affects the order in which DKIM signatures verification
 is attempted.  A value of 2 or higher prevents a message from being rejected
 or dropped due to DMARC policy or ADSP, if the domain is authenticated.
 
-Unless the B<domain> is aligned with B<org_domain>
-
 =item I<add_dmarc>X<domain>
 
 Add to the global B<honor_dmarc> setting.  If DMARC is globally honored, a
@@ -198,16 +196,21 @@ outgoing, but the following twelve variables are available in either case:
 
 =over
 
-=item B<ino>, B<mtime>, and B<pid>X<message_in message_out>
+=item B<ino>, B<mtime>, and B<pid>
 
 These are the values used by Courier to identify a message, the inode, the date
 and the process-id.  These variables are given as hex string, but without
-the leading C<0x>.
+the leading C<0x>.  The following MySQL expression reconstructs the id value
+found on the last line of Courier's Received:
+
+   CONCAT_WS('.', LPAD(HEX(ino), 16, '0'), LPAD(HEX(mtime), 16, '0'), LPAD(HEX(pid), 8, '0'))
 
 =item B<from>, B<date>, B<message_id>, B<subject>, B<content_type>, and
 B<content_encoding>
 
-These are some of the header fields in the message.
+These are some of the header fields in the message.  Values are trimmed,
+Content-Type is truncated at the semicolon if any.  Case is preserved, since
+database systems are case insensitive.
 
 =item B<mailing_list>
 
@@ -241,9 +244,9 @@ and one for each domain related to that message.
 This is one of the three values: C<accept>, C<reject>, and C<drop>, which
 represent the message disposition as far as zdkimfilter knows.
 
-=item B<dmarc_dkim>
+=item B<dmarc_dkim>X<message_in>
 
-DMARC extension of ADSP, it is one of:
+DMARC's extension of ADSP, it is one of:
 
 =over
 
@@ -261,7 +264,7 @@ if no aligned signature or no DMARC record were found.
 
 =back
 
-=item B<dmarc_spf>
+=item B<dmarc_spf>X<message_in>
 
 DMARC view of SPF authentication, it is one of:
 
@@ -285,7 +288,7 @@ if no DMARC record was found.
 =back
 
 
-=item B<dmarc_dispo>
+=item B<dmarc_dispo>X<message_in>
 
 The message disposition, as far as DMARC is concerned.  It is not necessarily
 consistent with B<message_status>.  The value is one of:
@@ -358,11 +361,11 @@ the (unknown) status was not inferred, and possibly C<fail>.
 This variable is only set if an ADSP record was found.  Since v1.5, ADSP
 records are not always looked up.
 
-=item B<received_count>
+=item B<received_count>X<message_in>
 
 The number of C<Received:> header fields.
 
-=item B<signatures_count>
+=item B<signatures_count>X<message_in>
 
 The number of DKIM signatures.
 
@@ -380,12 +383,15 @@ of variables are specific to each of them:
 
 The domain name.
 
-=item B<auth_type>
+=item B<auth>X<msg_ref>
 
-The relationship(s) between the message and the domain.  The relationship can
-be spoofed if either B<publicsuffix>, B<save_from_anyway>, or both are enabled.
-One has to check specific results in that case.  Relationships are
-given as a comma separated list of the following tokens:
+Sometimes called auth_type, it is the relationship(s) between message and domain,
+as claimed by the use of a domain name in a message.  In case B<publicsuffix>
+and B<save_from_anyway> are both disabled --not a recommended setting-- only
+authenticated relationships are flagged.
+
+Relationship flags are expressed as a comma separated list of the following
+tokens:
 
 =over
 
@@ -426,7 +432,7 @@ and/or signers respectively.
 =item C<dnswl>
 
 The domain is whitelisted in the configured zone.  This result originates
-from the B<-allow> option of B<couriertcpd>.  See L<couriertcpd(1)>.
+from the B<-allow> option of B<couriertcpd>.  See L<couriertcpd(8)>.
 
 =item C<nx>
 
@@ -467,22 +473,27 @@ queries are usually faster than DNS ones, reserving too much room might degrade
 performance, so a compromise length that fits most domains could be preferred.
 
 
-=item B<dkim_result>
+=item B<dkim>X<msg_ref>
 
-The verification result, if the message contains a DKIM-Signature by the
-domain.
+Sometimes called dkim_result, it is the verification result, set to I<none>
+if a message contains no DKIM-Signature by the domain.
 
-=item B<dkim_order>
+=item B<dkim_order>X<msg_ref>
 
 The 1-based position of this domain's signature(s), preferred domains first.
 
-=item B<spf_result>
+Ordering is done before verifying signatures, and it is reported to domains
+which accept DMARC aggregate reports.
 
-The SPF result, if the domain appears in any of helo, mailfrom, or From:.
+=item B<spf>X<msg_ref>
 
-=item B<reputation>
+Sometimes called spf_result, it is the SPF result, if the domain appears in any
+of helo, mailfrom, or From:.  SPF results originate from Courier's BOFHSPFHELO
+and BOFHSPFMAILFROM.
 
-The integer that could be found if DKIM-reputation query were enabled.
+=item B<reputation>X<msg_ref>
+
+The integer that could be found if DKIM-reputation queries worked.
 
 =item B<vbr_mv>
 
@@ -563,7 +574,7 @@ additional ones.
 
 =over
 
-=item B<rcpt_count>
+=item B<rcpt_count>X<message_out>
 
 The number of envelope recipients that the message is to be sent to.
 
