@@ -499,7 +499,7 @@ AC_SUBST([NETTLE_LIB])
 
 # check libunistring and libidn2
 gl_LIBUNISTRING()
-if test "$HAVE_LIBUNISTRING" = "no"; then
+if test "$HAVE_LIBUNISTRING" != "yes"; then
 	AC_MSG_ERROR([missing libunistring])
 fi
 IDN2_LIB=""

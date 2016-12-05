@@ -1,0 +1,26 @@
+
+mkdir XYZ
+cd XYZ
+
+svn checkout http://www.tana.it/svn/zdkimfilter/trunk/ .
+
+unzip m4_redist.zip
+
+libtoolize
+
+aclocal
+
+autoheader
+
+touch NEWS README AUTHORS ChangeLog
+
+automake --add-missing
+
+autoreconf -si
+
+./configure
+make
+make check
+
+
+
