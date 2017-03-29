@@ -184,18 +184,9 @@ fig.save(args['--out'] + '.svg')
 
 
 ###########################################
-from perlpod import pod2html
+from perlpod import pod2html, pod2fields
 
-# look up X marks
-podmark = re.compile(r'[IBCLEFSXZ]<([^<>]*)>')
-def pod2fields(pod):
-	'''handle titles with encoded terms'''
-	fields = ''
-	for mo in podmark.finditer(pod):
-		if fields and mo.group(1):
-			fields += ' '
-		fields += mo.group(1)
-	return fields
+# pod2fields moved to perlpod and imported here (for avfilter)
 
 # read table and field descriptions
 def add_descr(anchor, descr):

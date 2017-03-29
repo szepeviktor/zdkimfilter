@@ -43,6 +43,23 @@ if (defined($ARGV[1]))
 	else {$snippet = slurp($ARGV[1]);}
 }
 
+my $version;
+
+if ($mode ne 'web')
+{
+	my $makefile;
+	open($makefile, "< ../Makefile") or die "Cannot read ../Makefile: $!";
+	while (<$makefile>)
+	{
+		if (/^PACKAGE_VERSION\s*=\s*([0-9.]*)/)
+		{
+			$version = $1;
+			last;
+		}
+	}
+	close($makefile);
+}
+
 my $title;
 my $outfile;
 
