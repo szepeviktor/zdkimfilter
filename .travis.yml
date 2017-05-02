@@ -12,7 +12,7 @@ before_install:
   - sudo dpkg -i ../libopendkim-dev_2.11*.deb ../libopendkim11_2.11*.deb
   - cd -
   # Debian packages for building zdkimfilter
-  - sudo apt-get install -y devscripts debhelper dh-autoreconf ccze colormake pkg-config libtool courier-mta uuid-dev zlib1g-dev libunistring-dev libidn2-0-dev nettle-dev libopendbx1-dev publicsuffix
+  - sudo apt-get install -y devscripts debhelper dh-autoreconf pkg-config libtool courier-mta uuid-dev zlib1g-dev libunistring-dev libidn2-0-dev nettle-dev libopendbx1-dev publicsuffix
 
 script:
   - dpkg-buildpackage -uc -us -B
