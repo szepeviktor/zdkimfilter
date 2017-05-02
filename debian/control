@@ -1,0 +1,14 @@
+Source: zdkimfilter
+Section: mail
+Priority: optional
+Maintainer: Viktor Szépe <viktor@szepe.net>
+Standards-Version: 3.9.6
+Homepage: https://github.com/szepeviktor/zdkimfilter
+Build-Depends: debhelper (>= 9), dh-autoreconf, libtool, unzip, courier-mta, libopendkim-dev (>= 2.11.0~),
+ publicsuffix, uuid-dev, nettle-dev, zlib1g-dev, libidn2-0-dev, libunistring-dev, libopendbx1-dev
+
+Package: zdkimfilter
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, courier-mta
+Description: "z" DKIM filter for Courier-MTA
+ using the OpenDKIM Project's library

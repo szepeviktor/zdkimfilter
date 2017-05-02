@@ -1,0 +1,20 @@
+#!/usr/bin/make -f
+
+DH_VERBOSE=1
+export DEB_BUILD_HARDENING=1
+
+# https://www.debian.org/doc/manuals/maint-guide/dreq.en.html#customrules
+%:
+	dh $@ --with autoreconf
+
+override_dh_autoreconf:
+	unzip m4_redist.zip
+	touch NEWS README AUTHORS ChangeLog
+	dh_autoreconf
+
+override_dh_auto_configure:
+	dh_auto_configure -- --enable-dkimsign-setuid
+
+override_dh_autoreconf_clean:
+	rm -rf m4 config.rpath NEWS README AUTHORS ChangeLog
+	dh_autoreconf_clean
