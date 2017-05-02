@@ -1,0 +1,27 @@
+FROM debian:stretch
+
+ENV LC_ALL C
+ENV DEBIAN_FRONTEND noninteractive
+
+RUN apt-get update && apt-get install -y \
+    subversion unzip build-essential courier-mta \
+    libtool-bin m4 gettext autoconf pkg-config publicsuffix \
+    libopendkim-dev uuid-dev zlib1g-dev libunistring-dev libidn2-0-dev nettle-dev libopendbx1-dev
+
+RUN mkdir /root/zdkimfilter
+
+WORKDIR /root/zdkimfilter
+
+RUN svn checkout "http://www.tana.it/svn/zdkimfilter/trunk/" . \
+    && unzip m4_redist.zip \
+    && libtoolize \
+    && aclocal \
+    && autoheader --verbose \
+    && touch NEWS README AUTHORS ChangeLog \
+    && automake --verbose --add-missing \
+    && autoreconf --verbose -si
+
+RUN ./configure --prefix=/usr --enable-dkimsign-setuid \
+    && make
+
+RUN make check

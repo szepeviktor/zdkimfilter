@@ -2,6 +2,9 @@ dist: trusty
 sudo: required
 language: c
 
+services:
+  - docker
+
 before_install:
   - sudo apt-get update -qq
   # Backport libopendkim-dev
@@ -16,6 +19,7 @@ before_install:
 
 script:
   - dpkg-buildpackage -uc -us -B
+  - docker build .
 
 after_success:
   - lintian --display-info --display-experimental --pedantic --show-overrides ../zdkimfilter*.deb
