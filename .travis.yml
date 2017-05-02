@@ -4,19 +4,18 @@ language: c
 
 before_install:
   - sudo apt-get update -qq
-  # libopendkim-dev (>= 2.11.0),
-  - sudo apt-get install -y --force-yes devscripts debhelper dh-autoreconf pkg-config libmilter-dev libdb-dev libunbound-dev libldap2-dev liblua5.1-0-dev autotools-dev libbsd-dev libopendbx1-dev libssl-dev dh-systemd libjansson-dev libsasl2-dev libmemcached-dev
+  # Backport libopendkim-dev
+  - sudo apt-get install -y devscripts debhelper dh-autoreconf pkg-config libmilter-dev libdb-dev libunbound-dev libldap2-dev liblua5.1-0-dev autotools-dev libbsd-dev libopendbx1-dev libssl-dev dh-systemd libjansson-dev libsasl2-dev libmemcached-dev
   - dget -ux "http://archive.ubuntu.com/ubuntu/pool/universe/o/opendkim/opendkim_2.11.0~alpha-9.dsc"
   - cd opendkim-2.11*/
   - dpkg-buildpackage -uc -us -B
   - sudo dpkg -i ../libopendkim-dev_2.11*.deb ../libopendkim11_2.11*.deb
   - cd -
-  - sudo apt-get install -y --force-yes devscripts debhelper dh-autoreconf ccze colormake pkg-config libtool courier-mta uuid-dev zlib1g-dev libunistring-dev libidn2-0-dev nettle-dev libopendbx1-dev publicsuffix
-  - dpkg-buildpackage -uc -us -B
-
+  # Debian packages for building zdkimfilter
+  - sudo apt-get install -y devscripts debhelper dh-autoreconf ccze colormake pkg-config libtool courier-mta uuid-dev zlib1g-dev libunistring-dev libidn2-0-dev nettle-dev libopendbx1-dev publicsuffix
 
 script:
-  - ./configure --enable-dkimsign-setuid | ccze -m ansi
-  - colormake
-  - colormake check
-  - sudo colormake install
+  - dpkg-buildpackage -uc -us -B
+
+after_success:
+  - lintian --display-info --display-experimental --pedantic --show-overrides ../zdkimfilter*.deb

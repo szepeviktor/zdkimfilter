@@ -1,2 +1,2 @@
 #!/usr/bin/dh-exec
-etc/zdkimfilter.conf.dist => /etc/courier/filters/zdkimfilter.conf
+etc/zdkimfilter.conf.dist etc/courier/filters/zdkimfilter.conf
