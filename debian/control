@@ -10,5 +10,11 @@ Build-Depends: debhelper (>= 9), dh-autoreconf, libtool, unzip, courier-mta, lib
 Package: zdkimfilter
 Architecture: amd64
 Depends: ${shlibs:Depends}, ${misc:Depends}, courier-mta
-Description: "z" DKIM filter for Courier-MTA
- using the OpenDKIM Project's library
+Description: DKIM filter for Courier-MTA.
+ This filter uses the OpenDKIM Project's library to sign messages from
+ authenticated users, or verify relayed messages and add an
+ Authentication-Results: header field if configured to do so. The source package
+ contains example scripts for building a database to save message details to.
+ Database details allow one to configure sending DMARC aggregate reports.
+ SPF results are imported from Courier processing. DMARC rejection (as well
+ as historic ADSP) can be enabled or disabled on a per-domain basis.
