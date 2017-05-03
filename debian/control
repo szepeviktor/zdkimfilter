@@ -10,7 +10,7 @@ Build-Depends: debhelper (>= 9), dh-autoreconf, libtool, unzip, courier-mta, lib
 Package: zdkimfilter
 Architecture: amd64
 Depends: ${shlibs:Depends}, ${misc:Depends}, courier-mta
-Description: DKIM filter for Courier-MTA.
+Description: DKIM filter for Courier-MTA
  This filter uses the OpenDKIM Project's library to sign messages from
  authenticated users, or verify relayed messages and add an
  Authentication-Results: header field if configured to do so. The source package
