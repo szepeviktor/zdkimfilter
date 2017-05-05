@@ -433,13 +433,7 @@ fi
 AC_MSG_RESULT([$RESOLVER_LIB])
 AC_SUBST([RESOLVER_LIB])
 
-
-ZLIB_CFLAGS=""
-AX_CHECK_ZLIB([ZLIB_LIB="-lz"
-if test "$ZLIB_HOME" != "/usr" -a "$ZLIB_HOME" != "/usr/local"; then
-	ZLIB_LIB="-L${ZLIB_HOME}/lib $ZLIB_LIB"
-	ZLIB_CFLAGS="-I${ZLIB_HOME}/include"
-fi])
+AX_CHECK_ZLIB
 AC_SUBST([ZLIB_LIB])
 AC_SUBST([ZLIB_CFLAGS])
 
