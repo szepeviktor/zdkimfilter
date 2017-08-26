@@ -21,7 +21,7 @@ if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 
 	## a config file in /usr/share/zdkimfilter
 	USRCONFIG=/usr/share/zdkimfilter/zdkimfilter.conf
-	cat /etc/courier/filters/zdkimfilter.conf > $USRCONFIG
+	cat /etc/courier/filters/zdkimfilter.conf.dist > $USRCONFIG
 
 	# there are less pitfalls with relaxed canonicalization
 	echo "header_canon_relaxed" >> $USRCONFIG
@@ -66,8 +66,10 @@ if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 	echo "db_opt_multi_statements" >> $USRCONFIG
 
 	# public suffix list
+	echo "" >> $USRCONFIG
 	echo "publicsuffix /usr/share/publicsuffix/effective_tld_names.dat" >> $USRCONFIG
 
+	echo "" >> $USRCONFIG
 	echo "# DB SQL" >> $USRCONFIG
 	echo "#" >> $USRCONFIG
 	cat /usr/share/zdkimfilter/db_sql.conf >> $USRCONFIG
@@ -119,11 +121,14 @@ if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 		## a DKIM signing key for the domain
 		# let size=1148 so that the whole string will be less than 256 bytes
 		# a string length believed to be supported by all DNS tools
-		opendkim-genkey -D /usr/share/zdkimfilter -s deb -d $org_domain -b 1148
-		mkdir -p /etc/courier/filters/keys
-		mv /usr/share/zdkimfilter/deb.private /etc/courier/filters/keys
-		ln -n -s -T deb.private "/etc/courier/filters/keys/$org_domain"
-		echo "Created DKIM signing key pair, public key in /usr/share/zdkimfilter/deb.txt"
+		if [ ! -f /etc/courier/filters/keys/deb.private ]; then
+			opendkim-genkey -D /usr/share/zdkimfilter -s deb -d $org_domain -b 1148
+			mkdir -p /etc/courier/filters/keys
+			rm -f "/etc/courier/filters/keys/$org_domain"
+			mv /usr/share/zdkimfilter/deb.private /etc/courier/filters/keys
+			ln -n -s -T deb.private "/etc/courier/filters/keys/$org_domain"
+			echo "Created DKIM signing key pair, public key in /usr/share/zdkimfilter/deb.txt"
+		fi
 
 		## a cron snippet to call dmarc_send
 		DMARCFILE=/etc/cron.d/zdkimfilter
