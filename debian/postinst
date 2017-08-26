@@ -1,0 +1,197 @@
+#! /bin/bash -e
+# postinst script for zdkimfilter
+# (use bash for arithmetic expantion)
+
+. /usr/share/debconf/confmodule
+. /usr/share/dbconfig-common/dpkg/postinst.mysql
+
+db_version 2.0
+dbc_go zdkimfilter "$@"
+
+# /etc/courier is Courier's sysconfdir;  how to check?
+CONFIGFILE=/etc/courier/filters/zdkimfilter.conf
+
+if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
+
+	## Prepare a config file in /usr/share/zdkimfilter,
+	## a script to trim database entries,
+	## a script to send DMARC reports,
+	## a DKIM signing key for the domain, and
+	## a cron snippet to call dmarc_send.
+
+	## a config file in /usr/share/zdkimfilter
+	USRCONFIG=/usr/share/zdkimfilter/zdkimfilter.conf
+	cat /etc/courier/filters/zdkimfilter.conf > $USRCONFIG
+
+	# there are less pitfalls with relaxed canonicalization
+	echo "header_canon_relaxed" >> $USRCONFIG
+	echo "body_canon_relaxed" >> $USRCONFIG
+	echo "" >> $USRCONFIG
+	echo "# DB" >> $USRCONFIG
+	echo "#" >> $USRCONFIG
+
+	# DB access, and prepare mysql args
+	echo "db_backend mysql" >> $USRCONFIG
+	chown daemon:daemon $USRCONFIG
+	chmod u=rw,go= $USRCONFIG
+
+	if [ -z "$dbc_dbserver" ]; then
+		dbc_dbserver=127.0.0.1
+		mysql_args=""
+	elif [ -s "$dbc_dbserver" ]; then
+		# FIXME: does dbconfig support this? (OpenDBX does)
+		mysql_args="--socket=$dbc_dbserver"
+	else
+		mysql_args="--host=$dbc_dbserver"
+	fi
+	echo "db_host $dbc_dbserver" >> $USRCONFIG
+
+	if [ -n "$dbc_dbport" ]; then
+		echo "db_port $dbc_dbport" >> $USRCONFIG
+		mysql_args="$mysql_args --port=$dbc_dbport"
+	fi
+
+	echo "db_user $dbc_dbuser" >> $USRCONFIG
+	mysql_args="$mysql_args --user=$dbc_dbuser"
+
+	if [ -n "$dbc_dbpass" ]; then
+		echo "db_password $dbc_dbpass" >> $USRCONFIG
+		mysql_args="$mysql_args --password=$dbc_dbpass"
+	fi
+
+	echo "db_database $dbc_dbname" >> $USRCONFIG
+	mysql_args="$mysql_args $dbc_dbname"
+
+	# db_opt_multi_statements seems to be needed because of db_sql_insert_message
+	echo "db_opt_multi_statements" >> $USRCONFIG
+
+	# public suffix list
+	echo "publicsuffix /usr/share/publicsuffix/effective_tld_names.dat" >> $USRCONFIG
+
+	echo "# DB SQL" >> $USRCONFIG
+	echo "#" >> $USRCONFIG
+	cat /usr/share/zdkimfilter/db_sql.conf >> $USRCONFIG
+
+	ucf --debconf-ok $USRCONFIG $CONFIGFILE
+	ucfr zdkimfilter $CONFIGFILE
+
+	## a script to trim database entries
+	DELOLDSCRIPT=/etc/cron.daily/zdkimfilter
+	echo "#! /bin/sh" > $DELOLDSCRIPT
+	chown root:root $DELOLDSCRIPT
+	chmod u=rw,go= $DELOLDSCRIPT
+
+	echo "# delete old messages (not domains) from the database" >> $DELOLDSCRIPT
+	echo "# incoming" >> $DELOLDSCRIPT
+	echo "mysql $mysql_args <<EOQUERY" >> $DELOLDSCRIPT
+	echo " DELETE r, m FROM msg_ref AS r, message_in AS m" >> $DELOLDSCRIPT
+	echo " WHERE r.message_in = m.id AND" >> $DELOLDSCRIPT
+	echo " m.mtime < UNIX_TIMESTAMP(NOW() - INTERVAL 1 MONTH);" >> $DELOLDSCRIPT
+	echo "EOQUERY" >> $DELOLDSCRIPT
+	echo "" >> $DELOLDSCRIPT
+	echo "# outgoing" >> $DELOLDSCRIPT
+	echo "mysql $mysql_args <<EOQUERY" >> $DELOLDSCRIPT
+	echo " DELETE r, m FROM msg_out_ref AS r, message_out AS m" >> $DELOLDSCRIPT
+	echo " WHERE r.message_out = m.id AND" >> $DELOLDSCRIPT
+	echo " m.mtime < UNIX_TIMESTAMP(NOW() - INTERVAL 1 MONTH);" >> $DELOLDSCRIPT
+	echo "EOQUERY" >> $DELOLDSCRIPT
+
+	chmod u=rx,go= $DELOLDSCRIPT
+
+	## a script to send DMARC reports
+	DMARC_SEND=/usr/share/zdkimfilter/dmarc_send
+
+	if [ -s /etc/courier/defaultdomain ]; then
+		org_domain=$(</etc/courier/defaultdomain)
+	elif [ -s /etc/courier/dsnfrom ]; then
+		org_domain=$(sed -nr 's/[^@]*@([^>]*).*/\1/p' /etc/courier/dsnfrom)
+	fi
+
+	if [ -z "$org_domain" ]; then
+		chmod a-x $DMARC_SEND
+	else
+		name=$(echo "$org_domain" | tr "a-z" "A-Z")
+		sed -ri -e "s/example\.com/$org_domain/" \
+			-e "s/This is an example/$name/" $DMARC_SEND
+		chown daemon:daemon $DMARC_SEND
+		chmod a+x $DMARC_SEND
+
+		## a DKIM signing key for the domain
+		# let size=1148 so that the whole string will be less than 256 bytes
+		# a string length believed to be supported by all DNS tools
+		opendkim-genkey -D /usr/share/zdkimfilter -s deb -d $org_domain -b 1148
+		mkdir -p /etc/courier/filters/keys
+		mv /usr/share/zdkimfilter/deb.private /etc/courier/filters/keys
+		ln -n -s -T deb.private "/etc/courier/filters/keys/$org_domain"
+		echo "Created DKIM signing key pair, public key in /usr/share/zdkimfilter/deb.txt"
+
+		## a cron snippet to call dmarc_send
+		DMARCFILE=/etc/cron.d/zdkimfilter
+		echo "# crontab fragment to send DMARC aggregate reports" > $DMARCFILE
+		echo "# send reports once a day, somewhere after midnight UTC" >> $DMARCFILE
+		echo "# if sending more often, set honored_report_interval in" >> $DMARCFILE
+		echo "# $CONFIGFILE" >> $DMARCFILE
+		echo "#" >> $DMARCFILE
+
+		# compute a suitable time for a cron job after midnight UCT
+		# check DST and use largest offset
+		summer=$(date --date '2017/07/10' +%z |sed -rn 's/([-+])0*([0-9]*)/\1\2/p')
+		winter=$(date --date '2017/01/10' +%z |sed -rn 's/([-+])0*([0-9]*)/\1\2/p')
+		typeset -i summer winter after hour minute
+		if test $summer -gt $winter ; then
+			after=$summer
+		else
+			after=$winter
+		fi
+
+		# map [-1200, +1200] to [0, 2400]
+		hour=$(($after/100))
+		minute=$(($after%100))
+		if test $after -lt 0 ; then
+			let $((hour+=24)) || true
+			if test $minute -lt 0 ; then
+				let $((minute+=60)) || true
+				let $((hour-=1)) || true
+			fi
+		fi
+
+		# add some 15~45 minutes 
+		let RANDOM=$(($(date +%s)%32767)) || true
+		let minute+=$((15+$RANDOM%32767*30/32767)) || true
+		if test $minute -ge 60 ; then
+			let $((minute-=60)) || true
+			let $((hour+=1)) || true
+			if test $hour -ge 24; then
+				hour=0
+			fi
+		fi
+
+		echo "$minute $hour * * * daemon test ! -x $DMARC_SEND || $DMARC_SEND" >> $DMARCFILE
+		echo "Installed $DELOLDSCRIPT and $DMARCFILE"
+	fi
+fi
+
+# It would seem to be a neat idea to enable filtering, since we're installing one.
+# Is there a Debian policy about this?
+if [ ! -e /etc/courier/enablefiltering ]; then
+	echo "esmtp" > /etc/courier/enablefiltering
+	chown daemon:daemon /etc/courier/enablefiltering
+	echo "Mail filtering enabled"
+fi
+
+# if we stopped filters, then restart them, otherwise run zdkimfilter anew
+if [ -e /etc/courier/filters/active/zdkimfilter ]; then
+	courierfilter start
+	echo "Courier filter started"
+else
+	filterctl start zdkimfilter
+	echo "Zdkimfilter enabled"
+fi
+
+# dh_installdeb will replace this with shell code automatically
+# generated by other debhelper scripts.
+
+#DEBHELPER#
+
+exit 0
+

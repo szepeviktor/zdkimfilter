@@ -18,3 +18,16 @@ override_dh_auto_configure:
 override_dh_autoreconf_clean:
 	rm -rf m4 config.rpath NEWS README AUTHORS ChangeLog
 	dh_autoreconf_clean
+
+override_dh_auto_install:
+	$(MAKE) DESTDIR=$(PWD)/debian/zdkimfilter install
+	mkdir -p $(PWD)/debian/zdkimfilter/usr/share/dbconfig-common/data/zdkimfilter/install
+	sed -nr '/^DROP TABLE IF EXISTS domain;/,/^delimiter ;/p' \
+		odbx_example.sql > $(PWD)/debian/zdkimfilter/usr/share/dbconfig-common/data/zdkimfilter/install/mysql
+	mkdir -p $(PWD)/debian/zdkimfilter/usr/share/zdkimfilter
+	sed -nr '/^db_sql_whitelisted/,/^db_sql_set_dmarc_agg/p' \
+		odbx_example.conf > $(PWD)/debian/zdkimfilter/usr/share/zdkimfilter/db_sql.conf
+	sed -r '/^Bcc:/d' \
+		zaggregate-example.sh > $(PWD)/debian/zdkimfilter/usr/share/zdkimfilter/dmarc_send
+
+
