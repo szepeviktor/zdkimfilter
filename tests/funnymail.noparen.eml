@@ -1,0 +1,77 @@
+Received: from lists.example.net by courier.example with ESMTP
+Received: from somemail.vrt.sourcefire.example {localhost {127.0.0.1}}
+	by lists.example.net {Postfix} with ESMTP id 74347187ED2;
+	Wed, 14 Jun 2017 02:09:04 -0400 {EDT}
+Delivered-To: mail-users@lists.example.net
+Received: from example.com {example.com {162.249.6.101}}
+ {using TLSv1 with cipher AES256-SHA {256/256 bits}}
+ {No client certificate requested}
+ by lists.example.net {Postfix} with ESMTPS id B2CFB187E7E
+ for <mail-users@lists.example.net>; Wed, 14 Jun 2017 02:09:01 -0400 {EDT}
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed; d=example.com; 
+ s=140579;
+ h=To:Date:Message-Id:Subject:Mime-Version:Content-Type:From:Sender
+ :Reply-To:Cc:Content-Transfer-Encoding:Content-ID:Content-Description:
+ Resent-Date:Resent-From:Resent-Sender:Resent-To:Resent-Cc:Resent-Message-ID:
+ In-Reply-To:References:List-Id:List-Help:List-Unsubscribe:List-Subscribe:
+ List-Post:List-Owner:List-Archive;
+ bh=oWRDus0Gbh3ookhxtDD1+o1sAPsgYIlbeRYXhGxuiu8=; b=piCAbiK+0KjD3ltclBHL3Hzo+f
+ YWLSd0lwVRR/akUB0V0XhBkybdsOezcOjUepV+yiTNQ/YZZlI/b1rJACosigO6SeWiJEg5NcWDXXp
+ uQot7Es42t/fjoLSbQ4bNUhsioz+9cyLgzYzoF1uz3Ysq6JHheBy1jEWVdwRqjahCrwc=;
+Received: from {41.212.67.12} {helo={192.168.100.14}}
+ by example.com with esmtpsa {TLS1.2:ECDHE_RSA_AES_256_GCM_SHA384:256}
+ {Exim 4.89} {envelope-from <sender@example.com>} id 1dL1U0-0007KI-HK
+ for mail-users@lists.example.net; Wed, 14 Jun 2017 09:08:57 +0300
+From: Test Message <sender@example.com>
+Mime-Version: 1.0 {Mac OS X Mail 10.3 \{3273\}}
+Message-Id: <4FBA90D1-85A0-490A-B139-34CBDDEC1BAD@example.com>
+Date: Wed, 14 Jun 2017 09:08:43 +0300
+To: mail-users@lists.example.net
+X-Mailer: Apple Mail {2.3273}
+X-Spam-Score: 0.8 {/}
+X-Spam-Report: Spam detection software, running on the system "example.com",
+ has NOT identified this incoming email as spam.  The original
+ message has been attached to this so you can view it or label
+ similar future email.  If you have any questions, see
+ the administrator of that system for details.
+ 
+ Content preview:  Good Morning too all! I'm having an issue whith this
+   zdkimfilter breaking header lines which contain only spaces.
+ 
+ Content analysis details:   {0.8 points, 5.0 required}
+ 
+  pts rule name              description
+ ---- ---------------------- --------------------------------------------------
+  1.0 SURBL_BLOCKED          ADMINISTRATOR NOTICE: The query to SURBL was blocked.
+                             See
+                             http://wiki.apache.org/spamassassin/DnsBlocklists#dnsbl-block
+                              for more information.
+                             {URIs: example.com}
+  0.0 URIBL_BLOCKED          ADMINISTRATOR NOTICE: The query to URIBL was blocked.
+                             See
+                             http://wiki.apache.org/spamassassin/DnsBlocklists#dnsbl-block
+                              for more information.
+                             {URIs: example.com}
+ -1.0 ALL_TRUSTED            Passed through trusted hosts only via SMTP
+  0.0 HTML_MESSAGE           BODY: HTML included in message
+  0.8 HTML_IMAGE_RATIO_02    BODY: HTML has a low ratio of text to image area
+  0.0 HTML_IMAGE_ONLY_32     BODY: HTML: images with 2800-3200 bytes of words
+X-Content-Filtered-By: Mailman/MimeDel 2.1.20
+Subject: {mail-users} Header lines containing only spaces
+X-BeenThere: mail-users@lists.example.net
+X-Mailman-Version: 2.1.20
+Precedence: list
+List-Id: Mail users ML <mail-users.lists.example.net>
+List-Unsubscribe: <http://lists.example.net/cgi-bin/mailman/options/mail-users>, 
+ <mailto:mail-users-request@lists.example.net?subject=unsubscribe>
+List-Archive: <http://lists.example.net/pipermail/mail-users/>
+List-Post: <mailto:mail-users@lists.example.net>
+List-Help: <mailto:mail-users-request@lists.example.net?subject=help>
+List-Subscribe: <http://lists.example.net/cgi-bin/mailman/listinfo/mail-users>, 
+ <mailto:mail-users-request@lists.example.net?subject=subscribe>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: base64
+
+R29vZCBNb3JuaW5nIHRvbyBhbGwhIEknbSBoYXZpbmcgYW4gaXNzdWUgd2hpdGggdGhpcwp6ZGtp
+bWZpbHRlciBicmVha2luZyBoZWFkZXIgbGluZXMgd2hpY2ggY29udGFpbiBvbmx5IHNwYWNlcy4K
+

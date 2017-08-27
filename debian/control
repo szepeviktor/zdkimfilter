@@ -4,12 +4,13 @@ Priority: optional
 Maintainer: Viktor Szépe <viktor@szepe.net>
 Standards-Version: 3.9.6
 Homepage: https://github.com/szepeviktor/zdkimfilter
-Build-Depends: debhelper (>= 9), dh-autoreconf, libtool, unzip, courier-mta, libopendkim-dev (>= 2.11.0~),
- publicsuffix, uuid-dev, nettle-dev, zlib1g-dev, libidn2-0-dev, libunistring-dev, libopendbx1-dev
+Build-Depends: debhelper (>= 9), dh-autoreconf, libtool, unzip, courier-mta, libopendkim-dev,
+ uuid-dev, nettle-dev, zlib1g-dev, libidn2-0-dev, libunistring-dev, libopendbx1-dev
 
 Package: zdkimfilter
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends}, courier-mta
+Depends: ${shlibs:Depends}, ${misc:Depends}, courier-mta, ucf (>= 0.28),
+ publicsuffix, libopendbx1-mysql | dbconfig-no-thanks, dbconfig-mysql | dbconfig-no-thanks
 Description: DKIM filter for Courier-MTA
  This filter uses the OpenDKIM Project's library to sign messages from
  authenticated users, or verify relayed messages and add an

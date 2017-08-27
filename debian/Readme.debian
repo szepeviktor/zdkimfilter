@@ -1,0 +1,31 @@
+Debian zdkimfilter installation:
+
+Scripts and templates are created in /usr/share/zdkimfilter/.
+
+The publick key in file deb.txt should be published in the DNS, otherwise
+nobody will be able to verify DKIM signatures produced with the private key.
+The private key is in /etc/courier/filters/keys/deb.private.  It should be
+"rotated" regularly.
+
+This debian package complements the odbx examples in the upstream package
+with settings from dbconfig-common for mysql.  A database may have been
+created that way.
+
+DB configuration summary:
+
+The first set of DB configuration items, db_backend, db_host, db_port, db_user,
+db_password, db_database comes from dbconfig; (db_timeout is ignored).
+
+You may want to adjust OpenDBX options by tweaking the second set of
+configuration items, db_opt_tls, db_opt_compress, db_opt_mode, and
+db_opt_paged_results; (db_opt_multi_statements seems to be needed because
+db_sql_insert_message actually consists of two statements, an INSERT
+followed by a SELECT).
+
+The third set, db_sql_*, is merged from odbx_example.conf.
+
+Upon database installation, besides the files configured as mentioned above
+--visible via ``ucfq zdkimfilter''-- two zdkimfilter files are created in
+/etc/cron.d and /etc/cron.daily, for sending DMARC reports and purging old
+message references respectively.
+
