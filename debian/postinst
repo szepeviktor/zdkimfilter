@@ -21,7 +21,7 @@ if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 
 	## a config file in /usr/share/zdkimfilter
 	USRCONFIG=/usr/share/zdkimfilter/zdkimfilter.conf
-	cat /etc/courier/filters/zdkimfilter.conf.dist > $USRCONFIG
+	cat /usr/share/zdkimfilter/zdkimfilter.conf.orig.dist > $USRCONFIG
 
 	# there are less pitfalls with relaxed canonicalization
 	echo "header_canon_relaxed" >> $USRCONFIG

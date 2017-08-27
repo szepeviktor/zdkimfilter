@@ -29,5 +29,7 @@ override_dh_auto_install:
 		odbx_example.conf > $(PWD)/debian/zdkimfilter/usr/share/zdkimfilter/db_sql.conf
 	sed -r '/^Bcc:/d' \
 		zaggregate-example.sh > $(PWD)/debian/zdkimfilter/usr/share/zdkimfilter/dmarc_send
+	mv $(PWD)/debian/zdkimfilter/etc/courier/filters/zdkimfilter.conf.dist \
+		$(PWD)/debian/zdkimfilter/usr/share/zdkimfilter/zdkimfilter.conf.orig.dist
 
 
