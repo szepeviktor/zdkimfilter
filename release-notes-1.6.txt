@@ -1,0 +1,45 @@
+
+New feature:
+===========
+The RELAYCLIENT environment variable can be set to "@domain.name" to
+cause zdkimfilter to use that as the signing domain name.  Note that
+the variable will be reset in case the remote client authenticates,
+thereby turning to normal signing behavior.
+
+
+New configuration parameter:
+===========================
+let_relayclient_alone (bool)
+Disables the new feature, as it conflicts with a seldom used Courier
+feature (similar to percent relay).
+
+
+Database changes:
+================
+Tweak the db_sql_check_user query into using per-user limits.  The query
+is in odbx_example.conf,  It compares the sum of recipients (rcpt_count)
+in the last 24 hours against a fixed value of 10000, which you might
+have lowered.
+
+First, add a per user field to compare against. for example:
+
+ALTER TABLE user \
+  ADD COLUMN rcpt_max_perday MEDIUMINT UNSIGNED NOT NULL DEFAULT 10000;
+
+Next, alter the query in your zdkimfilter.conf so as to compare to
+another subquery instead of the fixed value.  The subquery is:
+
+(SELECT rcpt_max_perday FROM user WHERE id = $(user_ref))
+
+If you set RELAYCLIENT=@domain.name in some smtpaccess file, recipients
+will be counted against postmaster@domain.name.  So that user may need
+a higher limit than the default.
+
+
+Bug fixes and other changes:
+===========================
+An empty line in message header used to be treated badly.
+
+Nettle version 3 support.
+
+Added debian directory

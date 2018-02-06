@@ -126,8 +126,17 @@ size_t frombase64(unsigned char *dest, size_t destlen, char *src, size_t len)
 
 	struct base64_decode_ctx ctx;
 	base64_decode_init(&ctx);
+
+#if HAVE_NETTLE_V3
+	// Fri Apr 26 13:43:57 2013, commit 86fdb2ce31177028de997b98cc71b5027cf0bc1c
+	// Use size_t rather than unsigned for base16, base64, nettle_bufer and sexp related functions.
+	size_t l = len;
+	base64_decode_update(&ctx, &l, dest, len, src);
+#else
 	unsigned l = len;
 	base64_decode_update(&ctx, &l, dest, len, (unsigned char*)src);
+#endif
+
 	int rc = base64_decode_final(&ctx);
 	return rc? l: 0;
 }

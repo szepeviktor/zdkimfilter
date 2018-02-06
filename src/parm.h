@@ -2,7 +2,7 @@
 * parm.h - written by ale in milano on 21sep2012
 * parameter file parsing
 
-Copyright (C) 2012-2014 Alessandro Vesely
+Copyright (C) 2012-2017 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -34,8 +34,11 @@ static char const default_config_file[] =
 	COURIER_SYSCONF_INSTALL "/filters/zdkimfilter.conf";
 
 /*
-* each option has to be defined in three places: in one of the structures below,
-* in the conf[] array in parm.c, and in one of the pod.in
+* each option has to be defined in four places:
+* 1.  in one of the structures below,
+* 2.  in the conf[] array in parm.c,
+* 3.  in one of the items in zdkimfilter.conf.pod.in, and
+* 4.  in the ZF_DEFAULT_PARM_TMP macro in testsuite.at
 */
 typedef struct parm_t
 {
@@ -65,11 +68,11 @@ typedef struct parm_t
 	int max_signatures;
 	int dnswl_invalid_ip;
 	int honored_report_interval;
+
 	int log_dkim_order_above;
-
 	int dnswl_octet_index;
-	int min_key_bits;
 
+	int min_key_bits;
 	char trust_a_r;
 	char add_a_r_anyway;
 	char add_auth_pass;
@@ -83,15 +86,15 @@ typedef struct parm_t
 	char honor_dmarc;
 	char reject_on_nxdomain;
 	char do_reputation;
-	char all_mode;
 
+	char all_mode;
 	char sign_rsa_sha1;
 	char header_canon_relaxed;
 	char body_canon_relaxed;
 	char save_from_anyway;
 	char add_ztags;
 	char header_action_is_reject;
-	char not_used[1];
+	char let_relayclient_alone;
 } parm_t;
 
 typedef struct db_parm_t

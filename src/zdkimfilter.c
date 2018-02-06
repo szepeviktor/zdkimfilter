@@ -185,12 +185,14 @@ typedef struct per_message_parm
 	char *domain;
 	char *authserv_id;
 	char *action_header;
+	char *auth_or_relay; // either info.authsender or info.relayclient
 	stats_info *stats;
 	var_buf vb;
 	fl_msg_info info;
 	int rtc;
 	char db_connected;
 	char special; // never block outgoing messages to postmaster@domain only.
+	char undo_percent_relay;
 } per_message_parm;
 
 typedef enum split_filter
@@ -687,7 +689,7 @@ static int default_key_choice(dkimfl_parm *parm, int type)
 	int rc = 0;
 	char *domain;
 	if (type == '*' &&
-		(domain = strchr(parm->dyn.info.authsender, '@')) != NULL)
+		(domain = strchr(parm->dyn.auth_or_relay, '@')) != NULL)
 			++domain;
 	else  // is that how local domains work?
 		if ((domain = parm->z.default_domain) == NULL)
@@ -696,7 +698,7 @@ static int default_key_choice(dkimfl_parm *parm, int type)
 				"id=%s: no '%c' domain name for %s: configure default_domain",
 				parm->dyn.info.id,
 				type,
-				parm->dyn.info.authsender);
+				parm->dyn.auth_or_relay);
 			rc = -1;
 		}
 
@@ -787,7 +789,7 @@ static int read_key_choice(dkimfl_parm *parm)
 					parm->dyn.selector = NULL;
 					parm->dyn.domain = NULL;
 				}
-				choice[i].header = NULL;				
+				choice[i].header = NULL;
 				if (--keep <= 0)
 					break;
 			}
@@ -820,7 +822,7 @@ static int read_key_choice(dkimfl_parm *parm)
 				break;
 			}
 
-			int const next = eol > p? fgetc(fp): '\n';
+			int const next = eol >= p? fgetc(fp): '\n';
 			int const cont = next != EOF && next != '\n';
 			char *const start = vb->buf;
 			if (cont && isspace(next)) // wrapped
@@ -1129,7 +1131,7 @@ static int sign_headers(dkimfl_parm *parm, DKIM *dkim, replacement **repl)
 			return parm->dyn.rtc = -1;
 		}
 
-		int const next = eol > p? fgetc(fp): '\n';
+		int const next = eol >= p? fgetc(fp): '\n';
 		int const cont = next != EOF && next != '\n';
 		char *const start = vb->buf;
 		keep = eol - start;
@@ -1383,7 +1385,7 @@ static void recipient_s_domains(dkimfl_parm *parm)
 static inline int user_is_blocked(dkimfl_parm *parm)
 {
 	return parm->user_blocked =
-		search_list(&parm->blocklist, parm->dyn.info.authsender);
+		search_list(&parm->blocklist, parm->dyn.auth_or_relay);
 }
 
 static inline int is_postmaster(char const *from)
@@ -1449,7 +1451,7 @@ static void sign_message(dkimfl_parm *parm)
 				fl_report(LOG_INFO,
 					"id=%s: allowing blocked user %s to send to postmaster@%s",
 					parm->dyn.info.id,
-					parm->dyn.info.authsender,
+					parm->dyn.auth_or_relay,
 					parm->dyn.domain);
 		}
 		else
@@ -1478,7 +1480,7 @@ static void sign_message(dkimfl_parm *parm)
 					"id=%s: %s user %s from sending",
 					parm->dyn.info.id,
 					parm->dyn.rtc == 2? "blocked": "MEMORY FAULT trying to block",
-					parm->dyn.info.authsender);
+					parm->dyn.auth_or_relay);
 			if (parm->dyn.domain == null_domain)
 				parm->dyn.domain = NULL;
 		}
@@ -1490,7 +1492,7 @@ static void sign_message(dkimfl_parm *parm)
 			fl_report(LOG_INFO,
 				"id=%s: not signing for %s: no %s",
 				parm->dyn.info.id,
-				parm->dyn.info.authsender,
+				parm->dyn.auth_or_relay,
 				parm->dyn.domain? "key": "domain");
 
 		// add to db even if not signed
@@ -1517,7 +1519,7 @@ static void sign_message(dkimfl_parm *parm)
 			fl_report(LOG_INFO,
 				"id=%s: signing for %s with domain %s, selector %s",
 				parm->dyn.info.id,
-				parm->dyn.info.authsender,
+				parm->dyn.auth_or_relay,
 				parm->dyn.domain,
 				selector);
 		memset(parm->dyn.key, 0, strlen(parm->dyn.key));
@@ -1775,11 +1777,13 @@ static int check_db_connected(dkimfl_parm *parm)
 	parm->dyn.db_connected = 1;
 
 	char *s = NULL;
-	if ((s = parm->dyn.info.authsender) != NULL) // outgoing
+	if ((s = parm->dyn.auth_or_relay) != NULL) // outgoing
 	{
 		char *dom = strchr(s, '@');
 		if (dom)
 			*dom = 0;
+		if (*s == 0) // no local part
+			s = "postmaster";
 		db_set_authenticated_user(dwa, s, dom? dom + 1: NULL);
 		if (dom)
 			*dom = '@';
@@ -2545,7 +2549,10 @@ static int verify_headers(verify_parms *vh)
 			return parm->dyn.rtc = -1;
 		}
 
-		int const next = eol > p? fgetc(fp): '\n';
+		// Reading algorithm: the next char is read ahead,
+		// thus the value to keep in the buffer is positive
+		// except after reading the very first line.
+		int const next = eol >= p? fgetc(fp): '\n';
 		int const cont = next != EOF && next != '\n';
 		char *const start = vb->buf;
 		if (cont && isspace(next)) // wrapped
@@ -4222,7 +4229,7 @@ static void block_user(dkimfl_parm *parm, char *reason)
 	assert(parm);
 	assert(reason);
 	assert(!parm->user_blocked);
-	assert(parm->dyn.info.authsender);
+	assert(parm->dyn.auth_or_relay);
 
 	time_t now = time(0); // approx. query time, for list entry
 
@@ -4235,7 +4242,7 @@ static void block_user(dkimfl_parm *parm, char *reason)
 	int rtc;
 	if (fname == NULL ||
 		(rtc = update_blocked_user_list(parm)) < 0 ||
-		rtc > 0 && search_list(&parm->blocklist, parm->dyn.info.authsender) != 0)
+		rtc > 0 && search_list(&parm->blocklist, parm->dyn.auth_or_relay) != 0)
 			return;
 
 	/*
@@ -4272,7 +4279,7 @@ static void block_user(dkimfl_parm *parm, char *reason)
 					struct tm tm;
 					localtime_r(&now, &tm);
 					fprintf(fp, "%s on %04d-%02d-%02dT%02d:%02d:%02d %s\n",
-						parm->dyn.info.authsender,
+						parm->dyn.auth_or_relay,
 						tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 						tm.tm_hour, tm.tm_min, tm.tm_sec,
 						reason);						
@@ -4291,7 +4298,7 @@ static void block_user(dkimfl_parm *parm, char *reason)
 						if (parm->z.verbose >= 1)
 							fl_report(LOG_CRIT, "id=%s: user %s added to %s: %s",
 								parm->dyn.info.id,
-								parm->dyn.info.authsender,
+								parm->dyn.auth_or_relay,
 								fname,
 								reason);
 					}
@@ -4390,12 +4397,31 @@ static void dkimfilter(fl_parm *fl)
 
 	if (parm->dyn.info.is_relayclient)
 	{
-		if (parm->split != split_verify_only &&
-			parm->dyn.info.authsender)
+		if (parm->split != split_verify_only)
 		{
-			if (parm->use_dwa_after_sign)
-				enable_dwa(parm);
-			sign_message(parm);
+			/*
+			* We only consider RELAYCLIENT=@signer.example.com
+			* After SMTP Authentication, RELAYCLIENT is set to an empty
+			* value, so we don't need to undo percent relay in that case.
+			*/
+			if (parm->dyn.info.authsender)
+				parm->dyn.auth_or_relay = parm->dyn.info.authsender;
+			else if (!parm->z.let_relayclient_alone &&
+				parm->dyn.info.relayclient[0] == '@' &&
+				parm->dyn.info.relayclient[1] != 0)
+			{
+				parm->dyn.auth_or_relay = parm->dyn.info.relayclient;
+				parm->dyn.undo_percent_relay = 1;
+			}
+
+			if (parm->dyn.auth_or_relay)
+			{
+				if (parm->use_dwa_after_sign)
+					enable_dwa(parm);
+				sign_message(parm);
+				if (parm->dyn.undo_percent_relay)
+					fl_undo_percent_relay(fl, parm->dyn.info.relayclient);
+			}
 		}
 	}
 	else if (parm->split != split_sign_only)

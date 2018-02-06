@@ -5,6 +5,7 @@ m4_pattern_allow([m4_ifblank])
 m4_pattern_allow([m4_ifnblank])
 #m4#_pattern_allow([m4_join])
 
+
 # config file, accept extra lines as a parameter
 m4_define([ZF_CONFIG],
 [cat >zftest.conf <<'_ZEOF'
@@ -221,6 +222,7 @@ body_canon_relaxed       = N (Y/N, N for simple)
 sign_rsa_sha1            = N (Y/N, N for rsa-sha256)
 key_choice_header        = NULL (key choice header)
 default_domain           = m4_default([$1], [NULL]) (dns)
+let_relayclient_alone    = N (Y/N, Y rewrite rcpts)
 selector                 = NULL (global)
 sign_hfields             = NULL (space-separated, no colon)
 skip_hfields             = NULL (space-separated, no colon)
@@ -3217,6 +3219,31 @@ Subject: Test address wrapping
 ], [])
 AT_CLEANUP
 
+
+# bug: break header if lines contain only spaces
+AT_SETUP([Header with empty lines])
+AT_SKIP_IF([test "$BASE64" != "base64"]) 
+ZF_CONFIG(0)
+AT_DATA([mail64], [m4_include([funnymail.noparen.eml.b64])])
+AT_DATA([head], [Authentication-Results: courier.example;
+  dkim=permerror header.i=@example.com
+])
+# build the resulting mail for later compare
+[$BASE64 -d mail64 > mail]
+[cat head mail > mail2]
+AT_DATA([ctl], [ssender@example.com
+Mfunnymsg
+usmtp
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(ZF_RUN, 0, [250 Ok.
+], [])
+AT_CHECK([diff -u mail2 mail], 0, [], [])
+AT_CLEANUP
+
 # no real DNS query here...
 dnl AT_SETUP([Real DNS queries: vouch, reputation])
 dnl AT_CHECK(
@@ -3235,3 +3262,80 @@ dnl ],
 dnl [])
 dnl AT_CLEANUP
 dnl 
+
+
+AT_SETUP([Undo percent relay basic])
+AT_DATA([dist_test], [m4_include([undo_percent_relay.ctlfile.txt])])
+[sed -n 1,20p dist_test > ctl1]
+[sed -n 21,40p dist_test > ctl2]
+[sed -n 41,60p dist_test > ctl3]
+[sed -n 61,80p dist_test > ctl4]
+[sed -n 81,100p dist_test > ctl5]
+[sed -n 101,120p dist_test > chk1]
+[sed -n 121,140p dist_test > chk2]
+[sed -n 141,160p dist_test > chk3]
+[sed -n 161,180p dist_test > chk4]
+[sed -n 181,200p dist_test > chk5]
+AT_CHECK([TESTundo_percent_relay ctl1 ctl2 ctl3], 0, [], [])
+AT_CHECK([diff -u ctl1 chk1], 0, [], [])
+AT_CHECK([diff -u ctl2 chk2], 0, [], [])
+AT_CHECK([diff -u ctl3 chk3], 0, [], [])
+AT_CHECK([TESTundo_percent_relay ctl4 ctl5], 0, [], [])
+AT_CHECK([diff -u ctl4 chk4], 0, [], [])
+AT_CHECK([diff -u ctl5 chk5], 0, [], [])
+AT_CLEANUP
+
+
+#
+AT_SETUP([Sign with RELAYCLIENT])
+ZF_CONFIG(6)
+ZF_PRIVATEKEY([author.example])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+ORELAYCLIENT=@author.example
+s
+rrecipient%target.domain.example@author.example
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for @author.example with domain author.example, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+AT_CHECK([sed -n /^r/p ctl], 0, [rrecipient@target.domain.example
+], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Prevent signing with let_relayclient_alone])
+ZF_CONFIG(6, [let_relayclient_alone
+])
+ZF_PRIVATEKEY([author.example])
+AT_DATA([mail], [ZF_MESSAGE])
+AT_DATA([ctl], [Msignmsg
+uauthsmtp
+ORELAYCLIENT=@author.example
+s
+rrecipient%target.domain.example@author.example
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 not filtered.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: response: 250 not filtered.
+])
+AT_CHECK([sed -n /^r/p ctl], 0, [rrecipient%target.domain.example@author.example
+], [])
+AT_CLEANUP

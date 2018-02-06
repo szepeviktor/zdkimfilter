@@ -5,10 +5,16 @@ export DEB_BUILD_HARDENING=1
 
 # https://www.debian.org/doc/manuals/maint-guide/dreq.en.html#customrules
 %:
-	dh $@ --with autoreconf
+	if test -f m4_redist.zip; then \
+		dh $@ --with autoreconf; \
+	else \
+		dh $@; \
+	fi
 
 override_dh_autoreconf:
-	unzip m4_redist.zip
+	if test -f m4_redist.zip; then \
+		unzip m4_redist.zip; \
+	fi
 	touch NEWS README AUTHORS ChangeLog
 	dh_autoreconf
 

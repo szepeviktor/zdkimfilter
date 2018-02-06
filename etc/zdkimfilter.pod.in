@@ -11,23 +11,41 @@ filterctl (C<start> | C<stop>) B<zdkimfilter>
 
 @COURIER_FILTER_INSTALL@/B<zdkimfilter> I<OPTION>
 
-The second form can be used for scripting or testing.  See OPTIONS below.
+The second form is used for scripting or testing.  See OPTIONS below.
 
 
 =head1 DESCRIPTION
 
 zdkimfilter is a global filter, in the sense that it works for all users.
 It works in either signing or verifying mode, based on whether the sender
-is authenticated with user-id and password.
+has relaying privileges.
+
+A DKIM signature on a message associates a domain with the message, thereby
+allowing domain owners to claim some responsibility for the messages.
 
 =head2 Signing
 
-If the sender is authenticated, zdkimfilter signs the message on behalf of a
-I<domain>.  By default, the domain name is determined after the user-id, if it
-contains an C<@>.  Alternatively, one can define a I<default_domain>.  Finally,
-the domain name can be obtained from a suitable header field of the message,
-such as C<From:>.  Use the I<key_choice_header> configuration option to specify
-that.
+The signing domain can be inferred in two ways, either by SMTP
+authentication or by setting a non-empty RELAYCLIENT variable.  In both cases,
+Courier grants relaying privileges.
+
+For SMTP authentication, the domain name is determined after the user id, if it
+contains an C<@>.  Alternatively, one can define a I<default_domain>.
+
+For non-empty RELAYCLIENT variable, typically set in smtpaccess files,
+zdkimfilter signs only if the value of RELAYCLIENT starts with C<@>.  In
+that case, the domain name is the rest of the string.  The local part of
+the user id is set to "postmaster" (e.g. for I<db_sql_check_user>).
+B<CAUTION>: this setting may conflict with Courier appending the
+value of RELAYCLIENT to message recipient(s).  That is meant to force
+the message through local delivery, possibly using percentrelay.  The
+filter removes the appended values as long as it is installed.  To prevent
+that behavior set I<let_relayclient_alone>.  At any rate, when a client
+uses SMTP authentication, any RELAYCLIENT content is reset.
+
+In either case, the domain name can be obtained from a suitable header
+field of the message, such as C<From:>.  Use the I<key_choice_header>
+configuration option to specify that.
 
 The domain name is then looked up in the I<domain_keys> directory.  It should
 be a soft link to the actual key.  The basename of the linked-to file contains
@@ -212,8 +230,8 @@ writes LOG_INFO if verbosity is 2 or higher.
 
 =head1 BUGS
 
-Please report bugs to the author.  Command-line options above should allow to
-reproduce any misbehavior in a controlled fashion.
+Please report bugs to the author.  Command-line options above should allow one
+to reproduce any misbehavior in a controlled fashion.
 
 =head1 FILES
 

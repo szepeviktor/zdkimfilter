@@ -163,9 +163,11 @@ Dash refers to the I<default_domain>.
 =item  B<*>
 
 Star refers to the user domain, if any, or the I<default_domain>.  The user
-domain is found in the authenticated user id, if it contains a C<@>.  The
-authenticated user id is determined by the relevant authentication module (it
-may or may not equal the id that an authenticated user typed).
+domain is the domain of the user id, if it contains an C<@>.  The user id,
+in turn, is either the authenticated user id as set by Courier's SMTPAUTH
+after calling the relevant authentication module, or the content of the
+RELAYCLIENT environment variable as set, for example in I<smtpaccess> files
+if no SMTPAUTH takes place.
 
 =back
 
@@ -183,7 +185,7 @@ key_choice_header = from -
 
 then if a key and possibly a selector are defined for the domain in the From: 
 header field, then they are used for signing, otherwise the default domain 
-is used, irrespectively of the authenticated user id.
+is used, irrespectively of the user id.
 
 If the array is empty, the default, the user domain is used.  That is, the
 filter behaves as if:
@@ -198,8 +200,23 @@ Z<>
 
 =item B<default_domain> string
 
-It is used if no domain can be derived from authenticated user id or dash 
-(C<->) specified in the previous option.  Empty by default. 
+It is used if no domain can be derived from the previous option, for
+example if it has a dash (C<->) or the user id has no at-sign (C<@>).
+It is empty by default.
+
+
+=item B<let_relayclient_alone> bool
+
+If user is not authenticated, but has relay privileges and the content
+of the RELAYCLIENT environment variable is an at (C<@>) followed by a
+domain name, then zdkimfilter uses the domain name to sign the message,
+and then rewrites recipient addresses removing such trailing string and
+replacing the last percent (C<%>), if any, with an at (<@>).  This
+behavior is new in version 1.6.  It can be disabled by setting this
+parameter.
+
+It is not necessary to set this parameter for typical C<allow,RELAYCLIENT>
+settings where C<RELAYCLIENT> is empty or doesn't start with an at (<@>).
 
 
 =item B<selector> string
@@ -372,10 +389,10 @@ A-R.  This option may prevent such behavior.
 
 =item B<save_from_anyway> bool
 
-Use the From: header field even if it's not authenticated.  This allows to 
-insert more messages and domains in the database.  This setting is overridden
-by B<publicsuffix>, which implies even more domains can be stored although
-unauthenticated.
+Save the From: header field even if it's not authenticated.  If true, this
+can result in more incoming messages and domains being inserted in the database.
+This setting is overridden by B<publicsuffix>, which implies even more domains
+can be stored although unauthenticated.
 
 =item B<add_a_r_anyway> bool
 
@@ -504,7 +521,7 @@ saved there, if set.  Saved messages are named after the content of the header.
 
 The message content is preceded by a C<pre-header>; that is, a part of the
 envelope separated by an empty line.  The part of the envelope consists of a
-possibly empty sender followed by the recipients.  The pre-header allows to
+possibly empty sender followed by the recipients.  The pre-header allows one to
 recover the message from quarantine in case of false positives; see the scripts
 F<etc/resend-with-preheader.*> in the tarball.
 

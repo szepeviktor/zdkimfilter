@@ -34,7 +34,7 @@ zaggregate_SOURCES = zaggregate.c database.c ip_to_hex.c parm.c myadsp.c cstring
 zaggregate_CPPFLAGS = @ZLIB_CFLAGS@ -DTEST_ZAG
 zaggregate_LDADD = @OPENDBX_LIB@ @RESOLVER_LIB@ @ZLIB_LIB@ @UUID_LIB@
 
-check_PROGRAMS = TESTmyvbr TESTutil TESTmyrep TESTmyadsp TESTpublicsuffix
+check_PROGRAMS = TESTmyvbr TESTutil TESTmyrep TESTmyadsp TESTpublicsuffix TESTundo_percent_relay
 TESTmyvbr_SOURCES = myvbr.c
 TESTmyvbr_CPPFLAGS = -DTEST_MAIN
 TESTmyvbr_LDADD = @RESOLVER_LIB@
@@ -49,4 +49,6 @@ TESTmyadsp_LDADD = @RESOLVER_LIB@
 TESTpublicsuffix_SOURCES = publicsuffix.c
 TESTpublicsuffix_CPPFLAGS = -DTEST_MAIN
 TESTpublicsuffix_LDADD = @IDN2_LIB@ @LIBUNISTRING@
+TESTundo_percent_relay_SOURCES = filterlib.c
+TESTundo_percent_relay_CPPFLAGS = -DTEST_UNDO_PERCENT
 

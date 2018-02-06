@@ -11,7 +11,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010-2015 Alessandro Vesely
+Copyright (C) 2010-2017 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -525,6 +525,18 @@ static int msg_info_cb(char *s, void *arg)
 			info->id = strdup(s);
 			break;
 
+		case 'O':
+		{
+			static char const relayclient[] = "RELAYCLIENT";
+			char *eq = strchr(s, '=');
+			if (eq && eq - s == sizeof relayclient - 1 &&
+				strncmp(s, relayclient, sizeof relayclient - 1) == 0)
+					info->relayclient = strdup(s + sizeof relayclient);
+			else
+				return 0; // don't count other environment variables
+			break;
+		}
+
 		case 'i':
 			info->authsender = strdup(s);
 			break;
@@ -535,10 +547,10 @@ static int msg_info_cb(char *s, void *arg)
 
 		default:
 			assert(0);
-			break;
+			return 0;
 	}
 	
-	return ++info->count == 4;
+	return ++info->count == 5;
 }
 
 int fl_get_msg_info(fl_parm *fl, fl_msg_info *info)
@@ -548,10 +560,10 @@ int fl_get_msg_info(fl_parm *fl, fl_msg_info *info)
 */
 {
 	memset(info, 0, sizeof *info);
-	read_ctlfile(fl, "uMif", &msg_info_cb, info);
+	read_ctlfile(fl, "uMOif", &msg_info_cb, info);
 	if (fl->info_to_free == NULL)
 		fl->info_to_free = info;
-	return info->count != 4;
+	return info->count != 5;
 }
 
 /* enumerate recipients */
@@ -690,19 +702,6 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 		{
 			int i;
 			int const count = count_recipients(fp, &msgid);
-#if COURIERSUBMIT_WANTS_UGLY_HACK
-			/*
-			** the ugly hack: since submit writes various records
-			** ("8", "U", "V", "w", "E", "p" "W" and "A") _after_
-			** running global filters, we have to estimate enough
-			** space so that it won't overwrite our faked delivery
-			**
-			** we put 254, about 32 bytes per record is enough and
-			** we still allowing any unlikely old-fashioned fgets
-			** with 256 bytes of buffer
-			*/
-			fprintf(fp, "%254s\n", "");
-#endif
 
 			for (i = 0; i < count && !ferror(fp); ++i)
 				fprintf(fp, "I%d R 250 Dropped.\nS%d %ld\n",
@@ -753,6 +752,180 @@ int fl_drop_message(fl_parm*fl, char const *reason)
 	free(msgid);
 	return rtc;
 }
+
+/* ----- undo percent relay ----- */
+int fl_undo_percent_relay(fl_parm*fl, char const *atdom)
+{
+	assert(fl);
+	assert(atdom);
+
+	ctl_fname_chain *fl_cfc = fl->cfc;
+	off_t bufsize = 0;
+	size_t const atdom_l = strlen(atdom);
+	int rtc = 0;
+
+	while (fl_cfc)
+	{
+		struct stat st;
+		ctl_fname_chain *cfc = cfc_shift(&fl_cfc);
+		if (stat(cfc->fname, &st) == 0 && bufsize < st.st_size)
+			bufsize = st.st_size;
+	}
+
+	if (bufsize > 0 && atdom_l > 0)
+	{
+		char *buf = malloc(bufsize + 1);
+		if (buf)
+		{
+			fl_cfc = fl->cfc;
+			while (fl_cfc)
+			{
+				ctl_fname_chain *cfc = cfc_shift(&fl_cfc);
+				FILE *fp = fopen(cfc->fname, "r");
+				if (fp)
+				{
+					off_t fsize = fread(buf, 1, bufsize, fp);
+					buf[fsize] = 0;
+
+					char *in = buf, *out = buf;
+					int ch, begin = 1;
+					while ((ch = *(unsigned char *)in++) != 0)
+					{
+						if (begin && ch == 'r') // recipient
+						{
+							char *eol = strchr(in, '\n'), *at;
+							if (eol && (size_t)(eol - in) >= atdom_l &&
+								strncmp(at = eol - atdom_l, atdom, atdom_l) == 0)
+							{
+								if (fl->verbose >= 8)
+									fl_report(LOG_DEBUG,
+										"change recipient %.*s",
+										(int)(eol - in), in);
+								*out++ = 'r';
+								char *perc = NULL;
+								while (in < at &&
+									(ch = *(unsigned char *)in++) != 0)
+								{
+									if (ch == '%')
+										perc = out;
+									*out++ = ch;
+								}
+								if (perc)
+									*perc = '@';
+								in = eol;
+								continue;
+							}
+							else if (eol)
+							{
+								if (fl->verbose >= 1) // unexpected event
+								{
+									if (eol > in)
+										fl_report(LOG_DEBUG,
+											"let alone recipient %.*s",
+											(int)(eol - in - 1), in + 1);
+									else
+										fl_report(LOG_DEBUG,
+											"empty recipient");
+								}
+							}
+							else
+							{
+								fl_report(LOG_CRIT,
+									"unterminated line in ctlfile %s: %.10s...",
+									cfc->fname, in);
+								rtc = 1;
+							}
+						}
+						*out++ = ch;
+						begin = ch == '\n';
+					}
+					/*
+					* freopen's mode is as in fopen, and "w" is as open's
+					* flags O_WRONLY|O_CREAT|O_TRUNC, where O_CREAT has
+					* no effect since the file exists --that is, the
+					* inode number stays the same.
+					*/
+					if ((fp = freopen(NULL, "w", fp)) == NULL ||
+						fwrite(buf, out - buf, 1, fp) != 1 ||
+						fclose(fp))
+					{
+						fl_report(LOG_CRIT, "error on ctlfile %s: %s",
+							cfc->fname, strerror(errno));
+						rtc = 1;
+					}
+				}
+			}
+			free(buf);
+		}
+		else
+			bufsize = 0;
+	}
+
+	if (bufsize == 0)
+	{
+		fl_report(LOG_CRIT, "memory or ctlfile error: %s", strerror(errno));
+		rtc = 1;
+	}
+
+	return rtc;
+}
+
+#if defined TEST_UNDO_PERCENT
+// gcc -W -Wall -O0 -g -DZDKIMFILTER_DEBUG -DTEST_UNDO_PERCENT -o tt filterlib.c
+
+void set_check_inode(int argc, char *const argv[], ino_t *inode, int check)
+{
+	for (int i = 1; i < argc; ++i)
+	{
+		struct stat st;
+		if (stat(argv[i], &st) != 0)
+			st.st_ino = 0;
+		if (check == 0)
+			inode[i] = st.st_ino;
+		else if (inode[i] != st.st_ino)
+		{
+			fl_report(LOG_CRIT, "Arg %d, %s, had inode %ld, now %ld\n",
+				i, argv[i], (long) inode[i], (long) st.st_ino);
+		}
+	}
+}
+
+int main(int argc, char *argv[])
+{
+	ino_t inode[argc];
+	set_check_inode(argc, argv, inode, 0);
+
+	fl_parm fl;
+	memset(&fl, 0, sizeof fl);
+	fl.verbose = argc == 2? 8: 0;  // 2 or more ctl files -> no output
+	sig_verbose = 0;
+
+	fl.argv0 = THE_FILTER;
+	fl.all_mode = 1;
+
+	for (int i = 1; i < argc; ++i)
+	{
+		if (cfc_unshift(&fl.cfc, argv[i], strlen(argv[i])))
+		{
+			fl_report(LOG_ALERT, "MEMORY FAULT");
+			return 1;
+		}
+	}
+
+	fl_msg_info info;
+	memset(&info, 0, sizeof info);
+	fl_get_msg_info(&fl, &info); // leak memory
+
+	char *atdom = info.relayclient? info.relayclient: "";
+	int rtc = fl_undo_percent_relay(&fl, atdom);
+	set_check_inode(argc, argv, inode, 1);
+
+	if (fl.verbose)
+		printf("%d from \"%s\"\n", rtc, atdom);
+	return rtc;
+}
+#endif //defined TEST_UNDO_PERCENT
+
 
 /* ----- core filter functions ----- */
 typedef struct process_fname
@@ -1080,6 +1253,7 @@ static void do_the_real_work(fl_parm* fl)
 		free(fl->info_to_free->id);
 		free(fl->info_to_free->authsender);
 		free(fl->info_to_free->frommta);
+		free(fl->info_to_free->relayclient);
 	}
 }
 
@@ -1381,7 +1555,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 		while (!feof(stdin) && fl_keep_running())
 		{
 			char cmdbuf[1024];
-			unsigned char *s, *es = NULL;
+			char *s, *es = NULL;
 			
 			if (sleep_arg == 0)
 			{
@@ -1407,7 +1581,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 				if (s)
 				{
 					es = s + strlen(s);
-					while (--es >= s && isspace(*es))
+					while (--es >= s && isspace(*(unsigned char*)es))
 						*es = 0;
 					++es;
 					if (strncmp(s, "exit", 4) == 0)
@@ -1451,7 +1625,7 @@ static int fl_run_batchtest(fl_init_parm const*fn, fl_parm *fl)
 					run_sig_function(fn, fl, SIGUSR2);
 				else if (strcmp(s, "sighup") == 0)
 					run_sig_function(fn, fl, SIGHUP);
-				else if (strncmp(s, "test", 4) == 0 && isdigit(s[4]))
+				else if (strncmp(s, "test", 4) == 0 && isdigit((unsigned char)s[4]))
 				{
 					fl_callback handler;
 					switch (s[4])
@@ -1541,7 +1715,11 @@ static int fl_init_socket(fl_parm *fl)
 		alldir[] = ALLFILTERSOCKETDIR;
 	size_t len = strlen(name) + 2 + sizeof alldir;
 	typedef int compiletime_assert_alldir_is_longer
-		[sizeof alldir >= sizeof dir? 1: -1];
+		[sizeof alldir >= sizeof dir? 1: -1]
+#if __GNUC__
+		__attribute__((unused))
+#endif
+	;
 
 	char *sockname = malloc(len),
 		*tmpsockname = malloc(len),
@@ -1801,7 +1979,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		sigprocmask(SIG_SETMASK, &fl.allowset, NULL);
 	}
 
-	if ((fl.testing == 0 && fl.verbose >= 3 || fl.verbose >= 8) &&
+	if (((fl.testing == 0 && fl.verbose >= 3) || fl.verbose >= 8) &&
 		live_children == 0)
 			fl_report(LOG_INFO, "exiting");
 

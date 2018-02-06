@@ -5,7 +5,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2010-2014 Alessandro Vesely
+Copyright (C) 2010-2017 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -65,7 +65,7 @@ typedef enum fl_whence_value
 
 typedef struct fl_msg_info
 {
-	char *id, *authsender, *frommta; //freed by caller
+	char *id, *authsender, *frommta, *relayclient; //freed by caller
 	int is_relayclient;
 	int count;
 } fl_msg_info;
@@ -104,6 +104,8 @@ __attribute__ ((format(printf, 2, 3)))
 #endif
 void fl_report(int, char const*, ...);
 fl_callback fl_set_after_filter(fl_parm *, fl_callback);
+int fl_undo_percent_relay(fl_parm *, char const *);
+
 
 #define FILTERLIB_H_INCLUDED 1
 #endif

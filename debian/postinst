@@ -8,6 +8,11 @@
 db_version 2.0
 dbc_go zdkimfilter "$@"
 
+# mail user and group (should use courier-config?)
+mailuser=$(stat --printf=%U /usr/bin/mailq)
+mailgroup=$(stat --printf=%G /usr/bin/mailq)
+
+
 # /etc/courier is Courier's sysconfdir;  how to check?
 CONFIGFILE=/etc/courier/filters/zdkimfilter.conf
 
@@ -32,7 +37,7 @@ if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 
 	# DB access, and prepare mysql args
 	echo "db_backend mysql" >> $USRCONFIG
-	chown daemon:daemon $USRCONFIG
+	chown $mailuser:$mailgroup $USRCONFIG
 	chmod u=rw,go= $USRCONFIG
 
 	if [ -z "$dbc_dbserver" ]; then
@@ -115,7 +120,7 @@ if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 		name=$(echo "$org_domain" | tr "a-z" "A-Z")
 		sed -ri -e "s/example\.com/$org_domain/" \
 			-e "s/This is an example/$name/" $DMARC_SEND
-		chown daemon:daemon $DMARC_SEND
+		chown $mailuser:$mailgroup $DMARC_SEND
 		chmod a+x $DMARC_SEND
 
 		## a DKIM signing key for the domain
@@ -126,6 +131,7 @@ if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 			mkdir -p /etc/courier/filters/keys
 			rm -f "/etc/courier/filters/keys/$org_domain"
 			mv /usr/share/zdkimfilter/deb.private /etc/courier/filters/keys
+			chown $mailuser:$mailgroup /etc/courier/filters/keys/deb.private
 			ln -n -s -T deb.private "/etc/courier/filters/keys/$org_domain"
 			echo "Created DKIM signing key pair, public key in /usr/share/zdkimfilter/deb.txt"
 		fi
@@ -180,7 +186,7 @@ fi
 # Is there a Debian policy about this?
 if [ ! -e /etc/courier/enablefiltering ]; then
 	echo "esmtp" > /etc/courier/enablefiltering
-	chown daemon:daemon /etc/courier/enablefiltering
+	chown $mailuser:$mailgroup /etc/courier/enablefiltering
 	echo "Mail filtering enabled"
 fi
 

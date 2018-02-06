@@ -89,7 +89,6 @@ DROP TABLE IF EXISTS user;
 CREATE TABLE user (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   addr VARCHAR(63) NOT NULL,
-  rcpt_max_perday MEDIUMINT UNSIGNED NOT NULL DEFAULT 10000,
   INDEX by_addr(addr(16))
 )
 ENGINE = MyISAM
@@ -199,7 +198,7 @@ END //
 
 
 # Called by db_sql_select_user:
-# Insert/update user, insert message_out
+# Insert/update user, insert message_out'
 #
 DROP PROCEDURE IF EXISTS sent_message //
 CREATE PROCEDURE sent_message (

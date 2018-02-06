@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT([zdkimfilter for courier],[1.5],[vesely@tana.it],[zdkimfilter])
+AC_INIT([zdkimfilter for courier],[1.6],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -145,16 +145,9 @@ AC_ARG_WITH([courier-version],
 	]])
 AC_MSG_RESULT([${courier_version}${how_do_i_know}])
 
-# set COURIERSUBMIT_WANTS_UGLY_HACK based on Courier version
-# version 57.1 fixes that, but the hack won't hurt anyway so I check 58
-# this change also allows to change the message
-AC_MSG_CHECKING([if courier version is less than 58])
-	COURIERSUBMIT_WANTS_UGLY_HACK='yes'
-	test $courier_version -ge 58 && COURIERSUBMIT_WANTS_UGLY_HACK='no'
-AC_MSG_RESULT([$COURIERSUBMIT_WANTS_UGLY_HACK])
-if test "$COURIERSUBMIT_WANTS_UGLY_HACK" = "yes"; then
-	AC_DEFINE(COURIERSUBMIT_WANTS_UGLY_HACK, 1,
-		[Define if courier allows writing messages])
+# this was COURIERSUBMIT_WANTS_UGLY_HACK (until zdkimfilter 1.4)
+# Courier version 57.1 fixes that, I check 58
+if test $courier_version -lt 58; then
 	AC_MSG_ERROR([too old courier version])
 fi
 
@@ -497,6 +490,25 @@ else
 fi
 AC_SUBST([NETTLE_LIB])
 
+# Check if nettle version is after April 2013
+HAVE_NETTLE_V3=""
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <stdint.h>
+#include <nettle/base64.h>
+], [struct base64_decode_ctx ctx;
+size_t dst_length;
+uint8_t dst;
+size_t src_length;
+char src;
+return base64_decode_update(&ctx, &l, dest, len, src);
+])], [HAVE_NETTLE_V3="1"])
+AC_SUBST([HAVE_NETTLE_V3])
+if test "$HAVE_NETTLE" = "1"; then
+	AC_MSG_RESULT([yes])
+	AC_DEFINE(HAVE_NETTLE_V3, 1, [Define if using nettle v3])
+else
+	AC_MSG_RESULT([nope])
+fi
+
 # check libunistring and libidn2
 gl_LIBUNISTRING()
 if test "$HAVE_LIBUNISTRING" != "yes"; then
@@ -559,6 +571,10 @@ AC_DEFINE_UNQUOTED([HAVE_LIBOPENDKIM_2A1], [$av_cv_opendkim_version_2A1], [OpenD
 # LN_S used in tests/aclocal.in
 AC_PROG_LN_S
 
+# base64 used in tests (mailfile)
+AC_CHECK_PROG([BASE64], [base64], [base64])
+AC_SUBST([BASE64])
+
 # make tests/atconfig
 AC_CONFIG_TESTDIR([tests], [src])
 
@@ -580,5 +596,6 @@ AC_CONFIG_FILES([Makefile
                  etc/odbx_example.pod
                  tests/atlocal
                  tests/Makefile
+                 debian/Makefile
                 ])
 AC_OUTPUT

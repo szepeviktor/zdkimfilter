@@ -1,0 +1,200 @@
+# This is not a real ctlfile, it only serves to test that function
+# fl_undo_percent_relay() replaces recipient addresses (lines starting
+# with 'r') from:
+#     local-part%target.domain@RELAYCLIENT
+# to:
+#     local-part@target.domain
+#
+# The file is split at 20, 40, 60, 80, 100, 120, 140, 160, 180
+# the 2nd half (line no > 100) is the expected output
+
+s
+fdns; localhost (softdnserr [::ffff:127.0.0.1])
+t
+M00000000003C7562.000000005A2C265F.00005518
+rlocal-part%target.domain@example.com
+N
+ORELAYCLIENT=@example.com
+OTCPREMOTEIP=::ffff:127.0.0.1
+uauthsmtp
+
+r
+r@short
+r@stillshort
+r@same-length
+r@example.com
+r@example.com.
+ru@short
+ru@stillshort
+ru@same-length
+ru@example.com
+ru@example.com.
+ru%@short
+ru%@stillshort
+ru%@same-length
+ru%@example.com
+ru%@example.com.
+ru%a@short
+ru%a@stillshort
+ru%a@same-length
+ru%a@example.com
+ru%a@example.com.
+ru%%@short
+ru%%@stillshort
+ru%%@same-length
+ru%%@example.com
+ru%%@example.com.
+ru%a%b@short
+ru%a%b@stillshort
+ru%a%b@same-length
+ru%a%b@example.com
+ru%a%b@example.com.
+
+
+
+
+
+
+
+
+
+# no ORELAYCLIENT
+s
+fdns; localhost (softdnserr [::ffff:127.0.0.1])
+t
+M00000000003C7562.000000005A2C265F.00005518
+rlocal-part%target.domain@example.com
+
+r
+r@short
+r@stillshort
+r@same-length
+r@example.com
+r@example.com.
+ru@short
+ru@stillshort
+ru@same-length
+ru@example.com
+ru@example.com.
+ru%@short
+ru%@stillshort
+ru%@same-length
+ru%@example.com
+ru%@example.com.
+ru%a@short
+ru%a@stillshort
+ru%a@same-length
+ru%a@example.com
+ru%a@example.com.
+ru%%@short
+ru%%@stillshort
+ru%%@same-length
+ru%%@example.com
+ru%%@example.com.
+ru%a%b@short
+ru%a%b@stillshort
+ru%a%b@same-length
+ru%a%b@example.com
+ru%a%b@example.com.
+
+
+# This is not a real ctlfile, it only serves to test that function
+# fl_undo_percent_relay() replaces recipient addresses (lines starting
+# with 'r') from:
+#     local-part%target.domain@RELAYCLIENT
+# to:
+#     local-part@target.domain
+#
+# The file is split at 20, 40, 60, 80, 100, 120, 140, 160, 180
+# the 2nd half (line no > 100) is the expected output
+
+s
+fdns; localhost (softdnserr [::ffff:127.0.0.1])
+t
+M00000000003C7562.000000005A2C265F.00005518
+rlocal-part@target.domain
+N
+ORELAYCLIENT=@example.com
+OTCPREMOTEIP=::ffff:127.0.0.1
+uauthsmtp
+
+r
+r@short
+r@stillshort
+r@same-length
+r
+r@example.com.
+ru@short
+ru@stillshort
+ru@same-length
+ru
+ru@example.com.
+ru%@short
+ru%@stillshort
+ru%@same-length
+ru@
+ru%@example.com.
+ru%a@short
+ru%a@stillshort
+ru%a@same-length
+ru@a
+ru%a@example.com.
+ru%%@short
+ru%%@stillshort
+ru%%@same-length
+ru%@
+ru%%@example.com.
+ru%a%b@short
+ru%a%b@stillshort
+ru%a%b@same-length
+ru%a@b
+ru%a%b@example.com.
+
+
+
+
+
+
+
+
+
+# no ORELAYCLIENT
+s
+fdns; localhost (softdnserr [::ffff:127.0.0.1])
+t
+M00000000003C7562.000000005A2C265F.00005518
+rlocal-part%target.domain@example.com
+
+r
+r@short
+r@stillshort
+r@same-length
+r@example.com
+r@example.com.
+ru@short
+ru@stillshort
+ru@same-length
+ru@example.com
+ru@example.com.
+ru%@short
+ru%@stillshort
+ru%@same-length
+ru%@example.com
+ru%@example.com.
+ru%a@short
+ru%a@stillshort
+ru%a@same-length
+ru%a@example.com
+ru%a@example.com.
+ru%%@short
+ru%%@stillshort
+ru%%@same-length
+ru%%@example.com
+ru%%@example.com.
+ru%a%b@short
+ru%a%b@stillshort
+ru%a%b@same-length
+ru%a%b@example.com
+ru%a%b@example.com.
+
+

@@ -245,6 +245,7 @@ static config_conf const conf[] =
 	CONFIG(parm_t, sign_rsa_sha1, "Y/N, N for rsa-sha256", assign_char),
 	CONFIG(parm_t, key_choice_header, "key choice header", assign_array),
 	CONFIG(parm_t, default_domain, "dns", assign_ptr), // used by dkimsign.c
+	CONFIG(parm_t, let_relayclient_alone, "Y/N, Y rewrite rcpts", assign_char),
 	CONFIG(parm_t, selector, "global", assign_ptr),
 	CONFIG(parm_t, sign_hfields, "space-separated, no colon", assign_array),
 	CONFIG(parm_t, skip_hfields, "space-separated, no colon", assign_array),
