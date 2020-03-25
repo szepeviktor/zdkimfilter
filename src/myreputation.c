@@ -134,7 +134,7 @@ do_reputation_query(char const *user, char const *domain,
 	*p++ = '.';
 	p = md5_string(p, signer);
 	*p++ = '.';
-	strcat(p, rep_root);
+	strcpy(p, rep_root);
 
 #if defined TEST_MAIN
 	if (isatty(fileno(stdout)))
@@ -272,9 +272,12 @@ do_get_reputation(DKIM* dkim, DKIM_SIGINFO* sig, char *root, int *rep)
 {
 #if defined DKIM_REPUTATION_ROOT
 	// my query
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 	return do_reputation_query(dkim_getuser(dkim),
 		dkim_getdomain(dkim),
 		dkim_sig_getdomain(sig), root, rep);
+#pragma GCC diagnostic pop
 
 #elif defined DKIM_REP_ROOT
 	// older query (2010)
@@ -336,8 +339,11 @@ fake_reputation_query(DKIM* dkim, DKIM_SIGINFO* sig, char *root, int *rep)
 //  fromdomain   sigdomain   rep
 {
 	assert(dkim);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 	char const *fromdomain = dkim_getdomain(dkim);
 	char const *sigdomain = sig? (char const*)dkim_sig_getdomain(sig): fromdomain;
+#pragma GCC diagnostic pop
 
 	if (fromdomain == NULL || sigdomain == NULL)
 		return -1;

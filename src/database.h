@@ -2,7 +2,7 @@
 * database.h - written by ale in milano on 25sep2012
 * read/write via odbx
 
-Copyright (C) 2012-2015 Alessandro Vesely
+Copyright (C) 2012-2019 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -53,6 +53,7 @@ typedef struct dmarc_agg_record
 int db_run_dmarc_agg_domain(db_work_area*, time_t, time_t, db_query_cb, void*);
 int db_run_dmarc_agg_record(db_work_area*, dmarc_agg_record*, db_query_cb, void*);
 int db_set_dmarc_agg(db_work_area*, dmarc_agg_record*);
+int db_check_dmarc_rcpt(db_work_area*, char const*);
 #if defined TEST_ZAG
 void set_database_verbose(int v, int d);
 #endif
@@ -61,12 +62,12 @@ void set_database_verbose(int v, int d);
 int db_connect(db_work_area *dwa);
 int db_is_whitelisted(db_work_area* dwa, char /*const*/ *domain);
 int db_get_domain_flags(db_work_area* dwa, char *domain,
-	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled);
+	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled, int *count);
 char *db_check_user(db_work_area* dwa);
 
 void db_set_authenticated_user(db_work_area *dwa,
 	char const *local_part, char const *domain);
-void db_set_client_ip(db_work_area *dwa, char const *ip);
+void db_set_client_ip(db_work_area *dwa, char const *ip, char const *iprev);
 void db_set_org_domain(db_work_area *dwa, char *org_domain);
 
 typedef enum spf_result
@@ -106,44 +107,52 @@ static inline char *get_dkim_result(dkim_result r)
 	}
 }
 
+typedef struct signature_prescreen
+{
+	int dkim_order;
+	dkim_result dkim;
+	char name[];
+} signature_prescreen;
+
 typedef struct domain_prescreen
 {
 	int sigval;       // multiple uses: index, verified sigs
 	int nsigs;        // total number of signatures
 	int start_ndx;    // first index in libopendkim's array of sigs
-	int first_good;   // relative ndx (0 <= fg < nsigs)) of first verified sig
+	int first_good;   // relative ndx (0 <= fg < nsigs) of first verified sig
 	int whitelisted;  // value retrieved from db
 	union flags_as_an_int_or_bitfields
 	{
-		struct flags_as_bitfields            // (quoted db_ flag name)
+		struct flags_as_bitfields               // (quoted db_ flag name)
 		{
-			unsigned int sig_is_ok:1;         // dkim authenticated ("dkim")
-			unsigned int spf_pass:1;          // spf authenticated
+			unsigned int sig_is_ok:1;           // dkim authenticated ("dkim")
+			unsigned int spf_pass:1;            // spf authenticated
 			unsigned int has_vbr:1;
 			unsigned int vbr_is_trusted:1;
-			unsigned int vbr_is_ok:1;         // verified trusted vbr ("vbr")
-			unsigned int is_trusted:1;        // whitelisted > 2
-			unsigned int is_whitelisted:1;    // whitelisted > 1
-			unsigned int is_known:1;          // whitelisted > 0
-			unsigned int is_from:1;           // dkim author_domain ("author")
-			unsigned int is_org_domain:1;     // org domain of From: ("org")
-			unsigned int is_aligned:1;        // dmarc alignment ("aligned")
-			unsigned int is_dmarc:1;          // dmarc policy publisher (record)
-			unsigned int is_dnswl:1;          // domain of dnswl address ("dnswl")
-			unsigned int is_mfrom:1;          // spf ("spf")
-			unsigned int is_helo:1;           // spf_helo ("spf_helo")
-			unsigned int is_spf_from:1;       // can it differ from is_from?
-			unsigned int is_reputed:1;        // ("rep")
-			unsigned int is_reputed_signer:1; // ("rep_s")
+			unsigned int vbr_is_ok:1;           // verified trusted vbr ("vbr")
+			unsigned int is_trusted:1;          // whitelisted > 2
+			unsigned int is_whitelisted:1;      // whitelisted > 1
+			unsigned int is_known:1;            // whitelisted > 0
+			unsigned int shoot_on_sight:1;      // whitelisted < 0
+			unsigned int is_from:1;             // dkim author_domain ("author")
+			unsigned int is_org_domain:1;       // org domain of From: ("org")
+			unsigned int is_super_org_domain:1; // public suffix domain
+			unsigned int is_aligned:1;          // dmarc alignment ("aligned")
+			unsigned int is_dmarc:1;            // dmarc policy publisher (record)
+			unsigned int is_dnswl:1;            // domain of dnswl address ("dnswl")
+			unsigned int is_mfrom:1;            // spf ("spf")
+			unsigned int is_helo:1;             // spf_helo ("spf_helo")
+			unsigned int is_spf_from:1;         // can it differ from is_from?
+			unsigned int is_reputed:1;          // ("rep")
+			unsigned int is_reputed_signer:1;   // ("rep_s")
 		} f;
 		unsigned int all;
 	} u;
 	char *vbr_mv;                  // trusted voucher (in parm->z) or NULL
 	struct domain_prescreen *next; // ordered by name reverse
+	signature_prescreen **sig;     // array of nsig pointers (only incoming)
 	int reputation;                // if is_reputed*
-	size_t dkim_order;
 	spf_result spf;                // helo, mfrom, or from
-	dkim_result dkim;
 	uint8_t dnswl_value;
 	uint16_t domain_val;           // sort key
 	char name[];
@@ -159,6 +168,13 @@ typedef enum dmarc_reason
 	dmarc_reason_local_policy,
 	dmarc_reason_other
 } dmarc_reason;
+
+typedef enum dmarc_dispo
+{
+	dmarc_dispo_none, // delivered
+	dmarc_dispo_quarantine,
+	dmarc_dispo_reject
+} dmarc_dispo;
 
 typedef struct stats_info
 {

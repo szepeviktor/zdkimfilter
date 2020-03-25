@@ -131,11 +131,13 @@ size_t frombase64(unsigned char *dest, size_t destlen, char *src, size_t len)
 	// Fri Apr 26 13:43:57 2013, commit 86fdb2ce31177028de997b98cc71b5027cf0bc1c
 	// Use size_t rather than unsigned for base16, base64, nettle_bufer and sexp related functions.
 	size_t l = len;
-	base64_decode_update(&ctx, &l, dest, len, src);
 #else
 	unsigned l = len;
-	base64_decode_update(&ctx, &l, dest, len, (unsigned char*)src);
 #endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
+	base64_decode_update(&ctx, &l, dest, len, src);
+#pragma GCC diagnostic pop
 
 	int rc = base64_decode_final(&ctx);
 	return rc? l: 0;
@@ -170,7 +172,10 @@ static char *my_expand(unsigned char *in, size_t len)
 	while (p > &tr[0] && *p == '@')
 		*p-- = 0;
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 	return strdup(&tr[0]);
+#pragma GCC diagnostic pop
 }
 
 static char *unredacted(char const *key, char const*txt)
@@ -189,7 +194,10 @@ static char *unredacted(char const *key, char const*txt)
 		klen = ARCFOUR_MIN_KEY_SIZE;
 
 	struct arcfour_ctx ctx;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 	arcfour_set_key(&ctx, klen, key);
+#pragma GCC diagnostic pop
 
 	char buf[512], buf2[512];
 	strcpy(buf2, txt);
@@ -200,7 +208,9 @@ static char *unredacted(char const *key, char const*txt)
 			tlen - (is_compressed - &buf2[0]));
 		--tlen;
 	}
-	
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 	size_t sz = frombase64(buf, sizeof buf, buf2, tlen);
 	if (sz == 0)
 	{
@@ -213,6 +223,7 @@ static char *unredacted(char const *key, char const*txt)
 	clear[sz] = 0;
 
 	char *orig = is_compressed? my_expand(clear, sz): strdup(clear);
+#pragma GCC diagnostic pop
 	if (orig == NULL)
 		fprintf(stderr, "cannot expand \"%s\"\n", txt);
 
@@ -251,14 +262,20 @@ char *redacted(char const *key, char const*txt)
 		klen = ARCFOUR_MIN_KEY_SIZE;
 
 	struct arcfour_ctx ctx;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 	arcfour_set_key(&ctx, klen, key);
+#pragma GCC diagnostic pop
 
 	unsigned char clear[512];
 	size_t sz = my_compress(clear, sizeof clear, txt);
 	int const is_compressed = sz != 0;
 	if (!is_compressed)
 	{
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 		strcpy(clear, txt);
+#pragma GCC diagnostic pop
 		sz = tlen;
 	}
 
@@ -276,7 +293,10 @@ char *redacted(char const *key, char const*txt)
 		memmove(&buf2[l2 + 1], &buf2[l2], length - l2 + 1);
 		buf2[l2] = '@';
 	}
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 	return strdup(buf2);
+#pragma GCC diagnostic pop
 }
 #else
 char *redacted(char const *key, char const*txt)

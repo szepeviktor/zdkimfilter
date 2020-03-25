@@ -93,7 +93,7 @@ struct filter_lib_struct
 	void *parm;
 
 	char const *resp;
-	void *free_on_exit[2];
+	void *free_on_exit[3];
 	int in, out;
 	char *data_fname, *write_fname;
 	FILE *data_fp, *write_fp;
@@ -531,7 +531,10 @@ static int msg_info_cb(char *s, void *arg)
 			char *eq = strchr(s, '=');
 			if (eq && eq - s == sizeof relayclient - 1 &&
 				strncmp(s, relayclient, sizeof relayclient - 1) == 0)
-					info->relayclient = strdup(s + sizeof relayclient);
+			{
+				info->relayclient = strdup(s + sizeof relayclient);
+				info->is_relayclient = 1;
+			}
 			else
 				return 0; // don't count other environment variables
 			break;
@@ -822,7 +825,7 @@ int fl_undo_percent_relay(fl_parm*fl, char const *atdom)
 									if (eol > in)
 										fl_report(LOG_DEBUG,
 											"let alone recipient %.*s",
-											(int)(eol - in - 1), in + 1);
+											(int)(eol - in), in);
 									else
 										fl_report(LOG_DEBUG,
 											"empty recipient");
@@ -1756,6 +1759,8 @@ static int fl_init_socket(fl_parm *fl)
 				close(listensock);
 				listensock = -1;
 			}
+			unlink(tmpsockname);
+			unlink(sockname);
 		}
 		else if (unlink(othername) && errno != ENOENT)
 			fl_report(LOG_ERR, "unlink(%s) failed: %s",
@@ -1780,7 +1785,6 @@ static void lf_init_completed(int sockfd)
 static int is_courierfilter(int verbose)
 {
 	int rtc = 1;
-#if defined(COURIERFILTER_SETS_FD3)
 	struct stat stat;
 	if (fstat(3, &stat) != 0)
 	{
@@ -1813,9 +1817,6 @@ static int is_courierfilter(int verbose)
 
 	if (rtc == 0)
 		fprintf(stderr, THE_FILTER ": bad fd3: invalid call\n");
-#else
-	(void)verbose;
-#endif // COURIERFILTER_SETS_FD3
 	return rtc;
 }
 
@@ -1878,6 +1879,8 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		{
 			fl.batch_test = fl.testing = 1;
 			fl_init_signal(&fl);
+			if (fn->init_complete)
+				(*fn->init_complete)(&fl, 1);
 			if (fn->on_fork)
 				(*fn->on_fork)(&fl);
 			rtc = fl_run_batchtest(fn, &fl);
@@ -1909,21 +1912,18 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		if (fl.verbose >= 3)
 			fl_report(LOG_INFO, "running");
 		setsid();
-		/*
-		int rtc = setpgrp();
-
-		if (rtc)
-			fprintf(stderr, THE_FILTER ": cannot set process group\n");
-		*/
 
 		fl_init_signal(&fl);
 		listensock = fl_init_socket(&fl);
 
 		if (listensock < 0)
+		{
+			close(3);
 			return 1;
+		}
 
 		if (fn->init_complete)
-			(*fn->init_complete)(&fl);
+			rtc = (*fn->init_complete)(&fl, 0);
 
 		lf_init_completed(listensock);
 
@@ -1934,7 +1934,7 @@ int fl_main(fl_init_parm const*fn, void *parm,
 		* main loop
 		*/
 		sigprocmask(SIG_BLOCK, &fl.blockmask, &fl.allowset);
-		for (;;)
+		while (rtc == 0)
 		{
 			int fd;
 			int const sig = signal_hangup;

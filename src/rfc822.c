@@ -552,6 +552,7 @@ static void rfc822_prname_int(const struct rfc822addr *addrs,
 static void rfc822_print_common_nameaddr_cntlen(char c, void *p)
 {
 	++ *(size_t *)p;
+	(void)c;
 }
 
 static void rfc822_print_common_nameaddr_saveaddr(char c, void *p)

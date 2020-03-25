@@ -6,24 +6,12 @@
 **    All rights reserved.
 */
 
-#ifndef _DKIM_MAILPARSE_H_
-#define _DKIM_MAILPARSE_H_
+#ifndef _MY_MAILPARSE_H_
+#define _MY_MAILPARSE_H_
 
-#ifdef __STDC__
-# ifndef __P
-#  define __P(x)  x
-# endif /* ! __P */
-#else /* __STDC__ */
-# ifndef __P
-#  define __P(x)  ()
-# endif /* ! __P */
-#endif /* __STDC__ */
 
 /* prototypes */
-extern int dkim_mail_parse __P((unsigned char *line, unsigned char **user_out,
-                                unsigned char **domain_out));
-extern int dkim_mail_parse_c __P((unsigned char *line, unsigned char **user_out,
-                                unsigned char **domain_out,
-                                unsigned char **cont));
-extern void dkim_mail_parse_init __P((void));
-#endif /* ! _DKIM_MAILPARSE_H_ */
+extern int my_mail_parse(char *line, char **user_out, char **domain_out);
+extern int my_mail_parse_c(char *line, char **user_out, char **domain_out, char **cont);
+extern void my_mail_parse_init __P((void));
+#endif /* ! _MY_MAILPARSE_H_ */

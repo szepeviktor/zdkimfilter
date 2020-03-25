@@ -31,6 +31,8 @@ exit
 m4_define([ZF_RUN], [$VALGRIND_AND_OPTS zdkimfilter -f zftest.conf --batch-test <batch])
 
 # keyfile loaded with test2
+m4_define([ZF_BAREKEYFILE], [AT_DATA([KEYFILE], [$1])])
+
 m4_define([ZF_KEYFILE], [AT_DATA([KEYFILE],
 [x1._domainkey.author.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
 x2._domainkey.sender.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCz8gES8szE0tPe1NgAENU7BoVZHZRhWiPs6MdCCIYJ06RoV9vmAXlXzcHK/IM7fSHVQKYvf1E7dUwQIwCUe5S+qdkB0KxtmzCCBqjqcju8b6EEJb5e6HiMHjErS+33fNtS8qYCQNt1Xl5Ga94o1oXeZxroYSjeps8z82j/JQsPswIDAQAB
@@ -243,6 +245,7 @@ verify_one_domain        = N (Y/N)
 max_signatures           = 128 (int)
 log_dkim_order_above     = 0 (int)
 publicsuffix             = NULL (filename)
+psddmarc                 = NULL (filename)
 honored_report_interval  = 86400 (seconds)
 honor_dmarc              = N (Y/N)
 honor_author_domain      = N (Y/N)
@@ -465,11 +468,12 @@ ZF_CONFIG([m4_default([$3], [3])], [db_backend test
 db_sql_insert_msg_ref dummy
 $2])])
 
+# ZF_CTLBATCH 1. dkim, 2. spf,  3. iprev
 m4_define([ZF_CTLBATCH],
 [AT_DATA([ctl], [sbounces@server.example
 Mverifymsg
 usmtp
-[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+m4_join([], [fdns; [192.0.2.254] (], m4_ifblank([$3], [server.example ]), [[192.0.2.1])])
 ])
 ZF_POLICYFILE
 ZF_BATCH([test2
@@ -598,11 +602,26 @@ m4_define([ZF_REQUIRE_OPENDBX], [AT_CHECK([$HAVE_OPENDBX || exit 77])])
 AT_SETUP([Verify the IP address passed to database])
 ZF_KEYCONFIG
 AT_DATA([mail], [ZF_MESSAGE_NOSPF(ZF_SIGAUTHOR)])
+ZF_CTLBATCH([pass (id=@author.example, stat=0)], [nospf], [noiprev])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'ip: c0000201' database_dump, 0,
+[ip: c0000201
+],[])
+AT_CLEANUP
+
+AT_SETUP([Verify the IP address and iprev])
+ZF_KEYCONFIG
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(ZF_SIGAUTHOR)])
 ZF_CTLBATCH([pass (id=@author.example, stat=0)], [nospf])
 ZF_REQUIRE_OPENDBX
 AT_CHECK(
 grep 'ip: c0000201' database_dump, 0,
 [ip: c0000201
+],[])
+AT_CHECK(
+grep 'iprev: server.example' database_dump, 0,
+[iprev: server.example
 ],[])
 AT_CLEANUP
 
@@ -671,7 +690,21 @@ ZF_RUN,
 0,
 [550 Invalid author domain
 ],
-[INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, no VBR and no whitelist
+[INFO:zdkimfilter[[0]]:id=fraudmsg: reject! invalid domain author.example
+])
+
+# same with shoot on sight
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_insert_msg_ref dummy
+db_sql_whitelisted author.example:-1
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 Invalid author domain
+],
+[INFO:zdkimfilter[[0]]:id=fraudmsg: reject! invalid domain author.example
 ])
 AT_CLEANUP
 
@@ -707,6 +740,7 @@ AT_SETUP([Whitelisted sender, non-existent From: domain])
 ZF_CONFIG(3, [reject_on_nxdomain
 db_backend test
 db_sql_whitelisted sender.example:2
+whitelisted_pass 2
 ])
 AT_DATA([mail], [ZF_MESSAGE])
 AT_DATA([ctl], [Musenetmsg
@@ -723,7 +757,8 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: SPF)
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! sender.example is whitelisted (2) (auth: SPF)
 ])
 ZF_REQUIRE_22
 AT_CHECK(
@@ -737,13 +772,32 @@ head -n 3 mail, 0,
 ZF_CONFIG(3, [reject_on_nxdomain
 db_backend test
 db_sql_domain_flags sender.example:2
+whitelisted_pass 2
 ])
 AT_CHECK(
 ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: SPF)
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! sender.example is whitelisted (2) (auth: SPF)
+INFO:zdkimfilter[[0]]:id=usenetmsg: removing Authentication-Results from test.example
+])
+
+# same with shoot on sight
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_domain_flags sender.example:2
+whitelisted_pass 2
+db_sql_whitelisted author.example:-1
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! sender.example is whitelisted (2) (auth: SPF)
 INFO:zdkimfilter[[0]]:id=usenetmsg: removing Authentication-Results from test.example
 ])
 AT_CLEANUP
@@ -753,6 +807,7 @@ AT_SETUP([Whitelisted signer, non-existent From: domain])
 ZF_CONFIG(3, [reject_on_nxdomain
 db_backend test
 db_sql_whitelisted sender.example:2
+whitelisted_pass 2
 ])
 ZF_REQUIRE_OPENDBX
 ZF_KEYFILE
@@ -771,7 +826,8 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: DKIM)
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! sender.example is whitelisted (2) (auth: DKIM)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
 ])
 ZF_REQUIRE_22
@@ -781,6 +837,23 @@ head -n 3 mail, 0,
   dkim=pass (whitelisted) header.i=@sender.example;
   dkim-adsp=nxdomain header.from=user@author.example
 ], [])
+
+# same with shoot on sight
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_whitelisted sender.example:2 author.example:-1
+whitelisted_pass 2
+])
+AT_DATA([mail], [ZF_MESSAGE_NOSPF(, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! sender.example is whitelisted (2) (auth: DKIM)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
+])
 AT_CLEANUP
 
 #
@@ -789,6 +862,7 @@ ZF_CONFIG(3, [reject_on_nxdomain
 verify_one_domain
 db_backend test
 db_sql_whitelisted other.example:2 sender.example:2
+whitelisted_pass 2
 ])
 ZF_REQUIRE_OPENDBX
 ZF_KEYFILE
@@ -807,7 +881,8 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: DKIM)
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! sender.example is whitelisted (2) (auth: DKIM)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
 ])
 ZF_REQUIRE_22
@@ -824,13 +899,33 @@ ZF_CONFIG(3, [reject_on_nxdomain
 verify_one_domain
 db_backend test
 db_sql_domain_flags other.example:2 sender.example:2
+whitelisted_pass 2
 ])
 AT_CHECK(
 ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: DKIM)
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! sender.example is whitelisted (2) (auth: DKIM)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
+INFO:zdkimfilter[[0]]:id=usenetmsg: removing Authentication-Results from test.example
+])
+
+# same with shoot on sight
+ZF_CONFIG(3, [reject_on_nxdomain
+verify_one_domain
+db_backend test
+db_sql_domain_flags other.example:2 sender.example:2 author,example:-1
+whitelisted_pass 2
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! sender.example is whitelisted (2) (auth: DKIM)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
 INFO:zdkimfilter[[0]]:id=usenetmsg: removing Authentication-Results from test.example
 ])
@@ -841,6 +936,7 @@ AT_SETUP([Dkim whitelisting with SPF-validated signer])
 ZF_CONFIG(3, [reject_on_nxdomain
 db_backend test
 db_sql_whitelisted other.example:2
+whitelisted_pass 2
 ])
 ZF_REQUIRE_OPENDBX
 ZF_KEYFILE
@@ -859,10 +955,35 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but other.example is whitelisted (auth: DKIM)
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! other.example is whitelisted (2) (auth: DKIM)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@other.example, stat=0) adsp=nxdomain rep=0
 ])
 ZF_REQUIRE_22
+AT_CHECK(
+head -n 4 mail, 0,
+[Authentication-Results: test.example;
+  spf=pass smtp.mailfrom=sender.example;
+  dkim=pass (whitelisted) header.i=@other.example;
+  dkim-adsp=nxdomain header.from=user@author.example
+], [])
+
+# same with shoot on sight
+ZF_CONFIG(3, [reject_on_nxdomain
+db_backend test
+db_sql_whitelisted other.example:2 author.example:-1
+whitelisted_pass 2
+])
+AT_DATA([mail], [ZF_MESSAGE(, ZF_SIGSENDER, ZF_SIGOTHER)])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! other.example is whitelisted (2) (auth: DKIM)
+INFO:zdkimfilter[[0]]:id=usenetmsg: verified: spf=pass, dkim=pass (id=@other.example, stat=0) adsp=nxdomain rep=0
+])
 AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
@@ -893,7 +1014,7 @@ ZF_RUN,
 0,
 [550 Invalid author domain
 ],
-[INFO:zdkimfilter[[0]]:id=fraudmsg: invalid domain author.example, no VBR and no whitelist
+[INFO:zdkimfilter[[0]]:id=fraudmsg: reject! invalid domain author.example
 ])
 ZF_REQUIRE_OPENDBX
 AT_CHECK(
@@ -902,6 +1023,28 @@ grep 'domain: author.example' database_dump, 0,
 domain: author.example
 domain: author.example
 ],[])
+
+# same with shoot on sight instead
+ZF_CONFIG(3, [reject_on_nxdomain
+save_from_anyway
+db_backend test
+db_sql_whitelisted author.example:-1
+db_sql_select_domain dummy
+AT_CHECK(
+ZF_RUN,
+0,
+[550 Invalid author domain
+],
+[INFO:zdkimfilter[[0]]:id=fraudmsg: reject! invalid domain author.example
+])
+ZF_REQUIRE_OPENDBX
+AT_CHECK(
+grep 'domain: author.example' database_dump, 0,
+[domain: author.example
+domain: author.example
+domain: author.example
+],[])
+])
 AT_CLEANUP
 
 #
@@ -1049,19 +1192,20 @@ ZF_RUN,
 0,
 [050 Message dropped.
 ],
-[INFO:zdkimfilter[[0]]:id=policymsg: adsp=discardable policy: author.example, no VBR and no whitelist
-INFO:zdkimfilter[[0]]:drop msg,id=policymsg: adsp=discard
+[INFO:zdkimfilter[[0]]:id=policymsg: drop! ADSP policy=discardable for author.example
+INFO:zdkimfilter[[0]]:drop msg,id=policymsg: ADSP discardable
 ])
 AT_CLEANUP
 
 #
-AT_SETUP([Whitelisted sender, failed policy: discard])
+AT_SETUP([Whitelisted sender, failed policy: accept])
 ZF_KEYFILE([_adsp._domainkey.author.example dkim=discardable
 author.example X
 ])
 ZF_CONFIG(3, [honor_author_domain
 db_backend test
 db_sql_whitelisted sender.example:2
+whitelisted_pass 2
 ])
 ZF_REQUIRE_OPENDBX
 AT_DATA([mail], [ZF_MESSAGE(ZF_FAILAUTHOR)])
@@ -1078,7 +1222,8 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=policymsg: adsp=discardable policy: author.example, but sender.example is whitelisted (auth: SPF)
+[INFO:zdkimfilter[[0]]:id=policymsg: drop! ADSP policy=discardable for author.example
+INFO:zdkimfilter[[0]]:id=policymsg: drop->deliver!! sender.example is whitelisted (2) (auth: SPF)
 INFO:zdkimfilter[[0]]:id=policymsg: verified: spf=pass, dkim=fail (id=@author.example, signature verification failed, stat=1) adsp:discardable=discard rep=0
 ])
 ZF_REQUIRE_22
@@ -1400,12 +1545,14 @@ ctl
 AT_CHECK(
 ZF_RUN,
 0,
-[250 not filtered.
+[250 Ok.
 ],
 [])
 AT_CHECK(
-[head -n 1 mail], 0,
-[Received: from server.example by test.example with ESMTP
+[head -n 3 mail], 0,
+[Authentication-Results: test.example;
+  dkim-adsp=nxdomain
+Received: from server.example by test.example with ESMTP
 ], [])
 AT_CHECK([cat database_dump], 0, [], [])
 AT_CLEANUP
@@ -1740,8 +1887,17 @@ AT_CHECK(
 grep 'vbr_mv: ' database_dump, 0,
 [vbr_mv: -- not given --
 vbr_mv: sender-cert.example
+vbr_mv: sender-cert.example
 vbr_mv: -- not given --
 vbr_mv: -- not given --
+],[])
+AT_CHECK(
+grep 'dkim_selector: ' database_dump, 0,
+[dkim_selector: -- not given --
+dkim_selector: x2
+dkim_selector: x2
+dkim_selector: x3
+dkim_selector: x1
 ],[])
 AT_CLEANUP
 
@@ -2253,6 +2409,7 @@ AT_CLEANUP
 AT_SETUP([DNSWL sender, non-existent From: domain])
 ZF_CONFIG(3, [reject_on_nxdomain
 trust_a_r
+dnswl_worthiness_pass 0
 ])
 ZF_KEYFILE
 AT_DATA([mail], [ZF_MESSAGE_NOSPF(, ZF_SIGSENDER, ZF_SIGOTHER, ZF_DNSWL)])
@@ -2270,7 +2427,8 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=usenetmsg: invalid domain author.example, but I found 1 DNSWL record(s) --sender.example
+[INFO:zdkimfilter[[0]]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[[0]]:id=usenetmsg: reject->deliver!! sender.example is in dnswl (0)
 INFO:zdkimfilter[[0]]:id=usenetmsg: verified: dkim=pass (id=@sender.example, stat=0) adsp=nxdomain rep=0
 ])
 ZF_REQUIRE_22
@@ -2350,7 +2508,8 @@ AT_CHECK(
 ZF_RUN,
 0,
 [],
-[INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+[INFO:zdkimfilter[[0]]:zdkimfilter configured to verify only
+INFO:zdkimfilter[[0]]:New config file read from zftest.conf
 INFO:zdkimfilter[[0]]:zdkimfilter configured to verify only
 ])
 ZF_CONFIG(3, [split_verify dkimfilter
@@ -2359,7 +2518,8 @@ AT_CHECK(
 ZF_RUN,
 0,
 [],
-[INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+[INFO:zdkimfilter[[0]]:zdkimfilter configured to sign only
+INFO:zdkimfilter[[0]]:New config file read from zftest.conf
 INFO:zdkimfilter[[0]]:zdkimfilter configured to sign only
 ])
 AT_CLEANUP
@@ -2448,7 +2608,7 @@ AT_CLEANUP
 # results, rather than going down to verify file contents.
 #
 
-# message with frop-me header, dnswl, spf, author signature, other sig
+# message with drop-me header, dnswl, spf, author signature, other sig
 # params: policy.ip, no sigs
 m4_define([ZF_DNSWL_MESSAGE], m4_join([],
 [Received: from server.example by test.example with ESMTP
@@ -2488,6 +2648,23 @@ ZF_RUN,
 [050 Message dropped.
 ],
 [CRIT:zdkimfilter[[0]]:Zone list.dnswl.org lookup has invalid IP 127.0.0.255
+INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
+])
+
+# same with shoot on sight
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted author.example:-1
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[CRIT:zdkimfilter[[0]]:Zone list.dnswl.org lookup has invalid IP 127.0.0.255
+INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
 INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
 ])
 AT_CLEANUP
@@ -2516,8 +2693,58 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is in dnswl (1)
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! sender.example is in dnswl (1)
 INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+
+# same with shoot on sight
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted author.example:-1
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.1])])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! sender.example is in dnswl (1)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+AT_SETUP([Still dropped if shot worth sender])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted sender.example:-1
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.1])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
 ])
 AT_CLEANUP
 
@@ -2543,7 +2770,25 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is in dnswl (1)
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! sender.example is in dnswl (1)
+])
+
+# same with shoot on sight author
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted author.example:-1
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.1], [nosigs])])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! sender.example is in dnswl (1)
 ])
 AT_CLEANUP
 
@@ -2574,7 +2819,25 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is whitelisted (3)
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! author.example is whitelisted (3) (auth: DKIM)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+
+# same with shoot on sight
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted author.example:3 sender.example:-1
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! author.example is whitelisted (3) (auth: DKIM)
 INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
 ])
 AT_CLEANUP
@@ -2586,6 +2849,7 @@ ZF_CONFIG(3, [action_header drop-me
 trust_a_r
 db_backend test
 db_sql_whitelisted sender.example:3
+whitelisted_pass 2
 ])
 AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0], [nosigs])])
 AT_DATA([ctl], [sbounces@server.example
@@ -2602,7 +2866,25 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is whitelisted (3)
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! sender.example is whitelisted (3) (auth: SPF)
+])
+
+# same with shoot on sight
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted sender.example:3 author.example:-1
+whitelisted_pass 2
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0], [nosigs])])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! sender.example is whitelisted (3) (auth: SPF)
 ])
 AT_CLEANUP
 
@@ -2633,7 +2915,25 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but sender.example is whitelisted (3)
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! sender.example is whitelisted (3) (auth: SPF)
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+
+# same with shoot on sight
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+db_backend test
+db_sql_whitelisted sender.example:3 author.example:-1
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! sender.example is whitelisted (3) (auth: SPF)
 INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
 ])
 AT_CLEANUP
@@ -2666,8 +2966,45 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is vouched (author-cert.example)
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! author.example is vouched by author-cert.example (auth: DKIM)
 INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+])
+AT_CLEANUP
+
+
+AT_SETUP([Still dropped if shoot on sight voucher])
+ZF_KEYFILE
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+trusted_vouchers author-cert.example
+db_backend test
+db_sql_whitelisted sender.example:-1 author.example:-1
+])
+AT_DATA([VBRFILE], [author.example._vouch.author-cert.example all
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
 ])
 AT_CLEANUP
 
@@ -2700,8 +3037,45 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is in al.dkim-reputation.org (-100)
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! author.example is in al.dkim-reputation.org (-100)
 INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=-100
+])
+AT_CLEANUP
+
+AT_SETUP([Still dropped if shot reputed author])
+ZF_REQUIRE_OPENDBX
+ZF_KEYFILE
+ZF_CONFIG(3, [action_header drop-me
+do_reputation
+reputation_pass -50
+reputation_root al.dkim-reputation.org
+db_backend test
+db_sql_whitelisted author.example:-1
+])
+AT_DATA([REPFILE], [author.example author.example -100
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
 ])
 AT_CLEANUP
 
@@ -2734,8 +3108,45 @@ ZF_RUN,
 0,
 [250 Ok.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: drop-me: file name, but author.example is in al.dkim-reputation.org (-100)
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: drop->deliver!! author.example is in al.dkim-reputation.org (-100)
 INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=-100
+])
+AT_CLEANUP
+
+AT_SETUP([Still dropped if shot reputed other])
+ZF_KEYFILE
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(3, [action_header drop-me
+do_reputation
+reputation_pass -50
+reputation_root al.dkim-reputation.org
+db_backend test
+db_sql_whitelisted other.example:-1
+])
+AT_DATA([REPFILE], [author.example other.example -100
+])
+AT_DATA([mail], [ZF_DNSWL_MESSAGE([127.0.2.0])])
+AT_DATA([ctl], [sbounces@server.example
+Mverifymsg
+usmtp
+[fdns; [192.0.2.254] (server.example [192.0.2.1])]
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+test4
+mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
 ])
 AT_CLEANUP
 
@@ -2763,7 +3174,24 @@ ZF_RUN,
 0,
 [550 drop-me.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: 550 drop-me (was: file name)
+[INFO:zdkimfilter[[0]]:id=verifymsg: reject! drop-me: file name
+])
+
+# same with shoot on sight
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+dnswl_worthiness_pass 4
+header_action_is_reject
+db_backend test
+db_sql_whitelisted sender.example:-1 author.example:-1 other.example:-1
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[550 drop-me.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: reject! drop-me: file name
 ])
 AT_CLEANUP
 
@@ -2794,29 +3222,59 @@ ZF_RUN,
 0,
 [050 Message dropped.
 ],
-[INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
 INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
 ])
 [tail -n +9 zdrop-file_name* > no-preheader
 ]
 AT_CHECK(cmp mail no-preheader, 0, [], [])
+
+# same with shoot on sight
+ZF_REQUIRE_OPENDBX
+ZF_CONFIG(3, [action_header drop-me
+trust_a_r
+dnswl_worthiness_pass 4
+save_drop .
+db_backend test
+db_sql_whitelisted sender.example:-1 author.example:-1 other.example:-1
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[050 Message dropped.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: spf=pass, dkim=pass (id=@author.example, stat=0) rep=0
+INFO:zdkimfilter[[0]]:drop msg,id=verifymsg: drop-me
+])
 AT_CLEANUP
 
 #
 # DMARC
 #
-m4_define([ZF_CTLBATCHDMARC],
+
+m4_define([ZF_VERIFYCTL],
 [AT_DATA([ctl], [sbounces@server.example
 Mverifymsg
 usmtp
 [fdns; [192.0.2.254] (server.example [192.0.2.1])]
-])
-ZF_BATCH([sighup
-test2
+])])
+
+# [1-pre]
+m4_define([ZF_BATCH24],
+[ZF_BATCH([m4_default([$1], [])]
+[test2
 test4
 mail
 ctl
 
+])])
+
+# [1-exit msg], 2-log
+m4_define([ZF_CTLBATCHDMARC],
+[ZF_VERIFYCTL
+ZF_BATCH24([sighup
 ])
 AT_CHECK(
 ZF_RUN,
@@ -2824,6 +3282,7 @@ ZF_RUN,
 [m4_default([$1], [250 Ok.])][
 ],
 [INFO:zdkimfilter[[0]]:New config file read from zftest.conf
+INFO:zdkimfilter[[0]]:publicsuffix not changed
 $2])])
 
 # 1=domain, 2=p/sp..
@@ -2846,6 +3305,10 @@ AT_DATA([publicsuffix], [example
 m4_define([ZF_LOG],
 [INFO:zdkimfilter[[0]]:id=verifymsg: $1
 ])
+
+m4_define([ZF_LOG2], [ZF_LOG([$1])][ZF_LOG([$2])])
+
+m4_define([ZF_LOG3], [ZF_LOG2([$1],[$2])][ZF_LOG([$3])])
 
 m4_define([ZF_VLOG], [ZF_LOG([verified: $1 rep=0])])
 
@@ -2881,7 +3344,7 @@ AT_SETUP([DMARC failed quarantine honored])
 ZF_KEYFILE([ZF_DMARC([author.example], [p=quarantine])])
 ZF_CONFDMARC([honor_dmarc])
 AT_DATA([mail], [ZF_MESSAGE])
-ZF_CTLBATCHDMARC([], [ZF_LOG([dmarc=quarantine policy for author.example, no VBR and no whitelist])])
+ZF_CTLBATCHDMARC([], [ZF_LOG([quarantine! DMARC policy=quarantine for author.example])])
 AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;
@@ -2908,7 +3371,15 @@ ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([honor_dmarc])
 AT_DATA([mail], [ZF_MESSAGE])
 ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
-	[ZF_LOG([dmarc=reject policy for author.example, no VBR and no whitelist])])
+	[ZF_LOG([reject! DMARC policy=reject for author.example])])
+AT_CLEANUP
+
+AT_SETUP([DMARC failed reject pct=0])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject; pct=0])])
+ZF_CONFDMARC([honor_dmarc])
+AT_DATA([mail], [ZF_MESSAGE])
+ZF_CTLBATCHDMARC([250 Ok.],
+	[ZF_LOG([author.example dmarc=fail, but toss >= 0%])])
 AT_CLEANUP
 
 AT_SETUP([DMARC failed reject honored from database])
@@ -2917,7 +3388,7 @@ ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([db_sql_domain_flags author.example:0:1:1])
 AT_DATA([mail], [ZF_MESSAGE])
 ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
-	[ZF_LOG([dmarc=reject policy for author.example, no VBR and no whitelist])])
+	[ZF_LOG([reject! DMARC policy=reject for author.example])])
 AT_CLEANUP
 
 AT_SETUP([DMARC failed subdomain honored from database])
@@ -2926,7 +3397,7 @@ ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([db_sql_domain_flags author.example:0:1:1])
 AT_DATA([mail], [ZF_MESSAGE_AUTH([], [user@subdomain.author.example])])
 ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
-	[ZF_LOG([dmarc=reject policy for subdomain.author.example, no VBR and no whitelist])])
+	[ZF_LOG([reject! DMARC policy=reject for subdomain.author.example])])
 AT_CLEANUP
 
 AT_SETUP([DMARC reject not honored if whitelisted])
@@ -2937,7 +3408,8 @@ db_sql_whitelisted sender.example:3
 ])
 AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([HELO], [sender.example])])])
 ZF_CTLBATCHDMARC([],
-	[ZF_LOG([dmarc=reject policy for author.example, but sender.example is whitelisted (auth: SPF)])])
+	[ZF_LOG2([reject! DMARC policy=reject for author.example],
+		[reject->deliver!! sender.example is whitelisted (3) (auth: SPF)])])
 AT_CHECK(
 head -n 3 mail, 0,
 [Authentication-Results: test.example;
@@ -2950,10 +3422,12 @@ AT_SETUP([DMARC reject not honored if dnswl'd])
 ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([honor_dmarc
 trust_a_r
+dnswl_worthiness_pass 0
 ])
 AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_DNSWL)])
 ZF_CTLBATCHDMARC([],
-	[ZF_LOG([dmarc=reject policy for author.example, but I found 1 DNSWL record(s) --sender.example])])
+	[ZF_LOG2([reject! DMARC policy=reject for author.example],
+		[reject->deliver!! sender.example is in dnswl (0)])])
 AT_CHECK(
 head -n 2 mail, 0,
 [Authentication-Results: test.example;
@@ -2970,7 +3444,8 @@ AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [sender.example])])])
 AT_DATA([VBRFILE], [sender.example._vouch.sender-cert.example all
 ])
 ZF_CTLBATCHDMARC([],
-	[ZF_LOG([dmarc=reject policy for author.example, but sender.example is VBR vouched by sender-cert.example (auth: SPF)])])
+	[ZF_LOG2([reject! DMARC policy=reject for author.example],
+		[reject->deliver!! sender.example is vouched by sender-cert.example (auth: SPF)])])
 AT_CHECK(
 head -n 4 mail, 0,
 [Authentication-Results: test.example;
@@ -2980,7 +3455,7 @@ head -n 4 mail, 0,
 ], [])
 AT_CLEANUP
 
-AT_SETUP([DMARC reject honored even if reputed])
+AT_SETUP([DMARC reject not honored if reputed])
 ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([honor_dmarc
 do_reputation
@@ -2990,8 +3465,10 @@ reputation_root al.dkim-reputation.org
 AT_DATA([REPFILE], [author.example other.example -100
 ])
 AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGOTHER)])
-ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
-	[ZF_LOG([dmarc=reject policy for author.example, even if author.example is in al.dkim-reputation.org (-100)])])
+ZF_CTLBATCHDMARC([250 Ok.],
+	[ZF_LOG3([reject! DMARC policy=reject for author.example],
+		[reject->deliver!! author.example is in al.dkim-reputation.org (-100)],
+		[verified: dkim=pass (id=@other.example, stat=0) dmarc:reject=fail rep=-100])])
 AT_CLEANUP
 
 AT_SETUP([DMARC pass signed by subdomain])
@@ -3007,6 +3484,14 @@ head -n 3 mail, 0,
 ], [])
 AT_CLEANUP
 
+AT_SETUP([DMARC reject signed by subdomain shot])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc
+db_sql_whitelisted subdomain.author.example:-1])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGAUTHOR_BYSUB, [user@author.example])])
+ZF_CTLBATCHDMARC([550 Rejected for policy reasons (blacklisted).], [ZF_LOG([reject! shoot on sight])])
+AT_CLEANUP
+
 AT_SETUP([DMARC pass SPF HELO by subdomain])
 ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([honor_dmarc])
@@ -3018,6 +3503,14 @@ head -n 3 mail, 0,
   spf=pass smtp.helo=subdomain.author.example;
   dmarc=pass header.from=author.example
 ], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC reject SPF HELO by subdomain shot])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc
+db_sql_whitelisted subdomain.author.example:-1])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([HELO], [subdomain.author.example])], [user@author.example])])
+ZF_CTLBATCHDMARC([550 Rejected for policy reasons (blacklisted).], [ZF_LOG([reject! shoot on sight])])
 AT_CLEANUP
 
 AT_SETUP([DMARC pass SPF MAILFROM by subdomain])
@@ -3033,6 +3526,14 @@ head -n 3 mail, 0,
 ], [])
 AT_CLEANUP
 
+AT_SETUP([DMARC reject SPF MAILFROM by subdomain shot])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc
+db_sql_whitelisted subdomain.author.example:-1])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [subdomain.author.example])], [user@author.example])])
+ZF_CTLBATCHDMARC([550 Rejected for policy reasons (blacklisted).], [ZF_LOG([reject! shoot on sight])])
+AT_CLEANUP
+
 AT_SETUP([DMARC pass SPF FROM (non standard) by subdomain])
 ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
 ZF_CONFDMARC([honor_dmarc])
@@ -3043,6 +3544,15 @@ head -n 2 mail, 0,
 [Authentication-Results: test.example;
   dmarc=pass header.from=author.example
 ], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC reject SPF FROM by subdomain shot])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc
+db_sql_whitelisted subdomain.author.example:-1])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([FROM], [subdomain.author.example])], [user@author.example])])
+ZF_CTLBATCHDMARC([550 Rejected for policy reasons (blacklisted).],
+	[ZF_LOG2([reject! shoot on sight], [author.example pass only because BOFHSPFFROM])])
 AT_CLEANUP
 
 AT_SETUP([DMARC subdomain signed by domain])
@@ -3056,6 +3566,32 @@ head -n 3 mail, 0,
   dkim=pass header.i=@author.example;
   dmarc=pass header.from=subdomain.author.example
 ], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain shot signed by domain])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])][ZF_DOMAIN([subdomain.author.example])])
+ZF_CONFDMARC([honor_dmarc
+db_sql_whitelisted subdomain.author.example:-1])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGSUB_BYAUTHOR, [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([550 Rejected for policy reasons (blacklisted).], [ZF_LOG([reject! shoot on sight])])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain shot signed by domain white])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])][ZF_DOMAIN([subdomain.author.example])])
+ZF_CONFDMARC([honor_dmarc
+db_sql_whitelisted author.example:3 subdomain.author.example:-1])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGSUB_BYAUTHOR, [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([], [ZF_LOG3([reject! shoot on sight],
+	[reject->deliver!! author.example is whitelisted (3) (auth: DKIM)],
+	[verified: dkim=pass (id=@author.example, stat=0) dmarc:reject=pass rep=0])])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain white signed by domain shot])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])][ZF_DOMAIN([subdomain.author.example])])
+ZF_CONFDMARC([honor_dmarc
+db_sql_whitelisted author.example:-1 subdomain.author.example:3])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGSUB_BYAUTHOR, [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([550 Rejected for policy reasons (blacklisted).], [ZF_LOG([reject! shoot on sight])])
 AT_CLEANUP
 
 AT_SETUP([DMARC subdomain SPF HELO by domain])
@@ -3084,6 +3620,14 @@ head -n 3 mail, 0,
 ], [])
 AT_CLEANUP
 
+AT_SETUP([DMARC subdomain SPF MAILFROM by domain shot])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])])
+ZF_CONFDMARC([honor_dmarc
+db_sql_whitelisted author.example:-1])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([ZF_SPFPASS([MAILFROM], [author.example])], [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([550 Rejected for policy reasons (blacklisted).], [ZF_LOG([reject! shoot on sight])])
+AT_CLEANUP
+
 AT_SETUP([DMARC sub SPF FROM (non standard) by domain])
 ZF_KEYFILE([ZF_DMARC([subdomain.author.example], [p=reject])])
 ZF_CONFDMARC([honor_dmarc])
@@ -3107,6 +3651,14 @@ head -n 3 mail, 0,
   dkim=pass header.i=@subdomain.author.example;
   dmarc=pass header.from=subdomain.author.example
 ], [])
+AT_CLEANUP
+
+AT_SETUP([DMARC subdomain signed, domain shot])
+ZF_KEYFILE([ZF_DMARC([author.example], [p=reject])][ZF_DOMAIN([subdomain.author.example])])
+ZF_CONFDMARC([honor_dmarc
+db_sql_whitelisted author.example:-1])
+AT_DATA([mail], [ZF_MESSAGE_AUTH(ZF_SIGSUB_BYSUB, [user@subdomain.author.example])])
+ZF_CTLBATCHDMARC([550 Rejected for policy reasons (blacklisted).], [ZF_LOG([reject! shoot on sight])])
 AT_CLEANUP
 
 AT_SETUP([DMARC subdomain SPF by another subdomain])
@@ -3160,9 +3712,54 @@ ZF_KEYFILE([ZF_DMARC([author.example], [p=reject; adkim=s; aspf=s])])
 ZF_CONFDMARC([honor_dmarc])
 ZF_MESSAGE_AUTH_BYSUB
 ZF_CTLBATCHDMARC([550 Reject after DMARC policy.],
-	[ZF_LOG([dmarc=reject policy for author.example, no VBR and no whitelist])])
+	[ZF_LOG([reject! DMARC policy=reject for author.example])])
 AT_CLEANUP
 
+# config file and publicsuffix; 1=extra config, [2=override verbose]
+m4_define([ZF_CONFPSDDMARC],
+[ZF_CONFIG([m4_default([$2], [3])], [publicsuffix=publicsuffix
+psddmarc=psddmarc
+db_backend test
+db_sql_domain_flags example:0:1:0:1
+db_sql_insert_msg_ref dummy
+$1
+])
+AT_DATA([publicsuffix], [example
+])
+AT_DATA([psddmarc], [*.*.*.*
+!example
+])])
+
+# [1-exit msg], 2-log
+m4_define([ZF_CTLBATCHPSDDMARC],
+[ZF_VERIFYCTL
+ZF_BATCH24
+AT_CHECK(
+ZF_RUN,
+0,
+[m4_default([$1], [250 Ok.])][
+],
+[$2])])
+
+AT_SETUP([Find PSD quarantine])
+ZF_BAREKEYFILE([ZF_DMARC([example], [p=quarantine])])
+ZF_CONFPSDDMARC
+AT_DATA([mail], [ZF_MESSAGE_AUTH([], [author@nxdomain.subdomain.example])])
+ZF_CTLBATCHPSDDMARC([], [ZF_LOG([quarantine! DMARC policy=quarantine for nxdomain.subdomain.example])])
+AT_CHECK(
+head -n 2 mail, 0,
+[Authentication-Results: test.example;
+  dmarc=fail (QUARANTINE) header.from=nxdomain.subdomain.example
+], [])
+AT_CLEANUP
+
+AT_SETUP([Find PSD with np=reject])
+ZF_BAREKEYFILE([ZF_DMARC([example], [p=quarantine; np=reject ])])
+ZF_CONFPSDDMARC
+AT_DATA([mail], [ZF_MESSAGE_AUTH([], [author@nxdomain.subdomain.example])])
+ZF_CTLBATCHPSDDMARC([550 Reject after DMARC policy.],
+	[ZF_LOG([reject! DMARC policy=reject for nxdomain.subdomain.example])])
+AT_CLEANUP
 
 #
 AT_SETUP([Check wrapping long lines on signing])
@@ -3334,8 +3931,135 @@ ZF_RUN,
 0,
 [250 not filtered.
 ],
-[INFO:zdkimfilter[[0]]:id=signmsg: response: 250 not filtered.
+[WARN:zdkimfilter[[0]]:Cannot sign message: no authenticated sender, empty or disabled RELAYCLIENT, and no default_domain
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 not filtered.
 ])
 AT_CHECK([sed -n /^r/p ctl], 0, [rrecipient%target.domain.example@author.example
 ], [])
 AT_CLEANUP
+
+#
+AT_SETUP([Publicsuffix operation])
+AT_DATA([short-list], [*.*.foo
+!not.foo
+!x.y.foo
+])
+AT_CHECK_UNQUOTED([TESTpublicsuffix short-list foo a.foo b.a.foo c.b.a.foo d.c.b.a.foo e.d.c.b.a.foo not.foo a.not.foo a.b.not.foo y.foo x.y.foo c.x.y.foo b.c.x.y.foo],
+[0], [foo -> null
+a.foo -> null
+b.a.foo -> null
+c.b.a.foo -> c.b.a.foo
+d.c.b.a.foo -> c.b.a.foo
+e.d.c.b.a.foo -> c.b.a.foo
+not.foo -> not.foo
+a.not.foo -> not.foo
+a.b.not.foo -> not.foo
+y.foo -> null
+x.y.foo -> x.y.foo
+c.x.y.foo -> x.y.foo
+b.c.x.y.foo -> x.y.foo
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Sign and verify EAI])
+ZF_CONFIG(6, [trust_a_r
+add_auth_pass
+sign_hfields Date From To Subject Authentication-Results
+])
+ZF_PRIVATEKEY([παράδειγμα.example])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([], [χρήστης@παράδειγμα.example])])
+AT_DATA([ctls], [Msignmsg
+uauthsmtp
+iχρήστης@παράδειγμα.example
+])
+ZF_BATCH([mail
+ctls
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for χρήστης@παράδειγμα.example with domain παράδειγμα.example, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+# make a modified copy of mail for later
+AT_CHECK([sed '/^Authentication-Results:/s/^/Old-/' mail > mail2])
+# verify mail normally
+AT_DATA([ctlv], [Mverifymsg
+usmtp
+])
+AT_DATA([KEYFILE],
+[s._domainkey.παράδειγμα.example v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqlye7m5zLLXoIpBp2OO05LNMqKu0zKowoHOpyRpviOVqOaNCk5uZ+wY00JwrKbt5u1G1ghuXsFkFkl0h00LBurz7ivyZH3LohSWOZ8okgR+8kuGu9GHtQ+MqgRd16tlCF8PlWS2kGaBQKua1zk+ZCDwFy82Uo5G21nu/+Nn2sUwIDAQAB
+])
+ZF_POLICYFILE
+ZF_BATCH([test2
+test3
+mail
+ctlv
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: Authentication-Results by παράδειγμα.example: please check ALLOW settings
+INFO:zdkimfilter[[0]]:id=verifymsg: verified: dkim=pass (id=@παράδειγμα.example, stat=0) rep=0
+INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
+])
+# now repeat the test with modified mail
+ZF_BATCH([test2
+test3
+mail2
+ctlv
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=verifymsg: verified: dkim=pass (id=@παράδειγμα.example, stat=0) rep=0
+INFO:zdkimfilter[[0]]:id=verifymsg: response: 250 Ok.
+])
+AT_CLEANUP
+
+# simple signing w/o SMTPauth
+AT_SETUP([Sign without uauthsmtp])
+ZF_CONFIG(6, [key_choice_header from * -
+default_domain another.example
+])
+ZF_PRIVATEKEY([author.example])
+ZF_PRIVATEKEY([another.example])
+AT_DATA([mail], [ZF_MESSAGE_AUTH([], [user@author.example])])
+AT_DATA([ctl], [Msignmsg
+ORELAYCLIENT=
+])
+ZF_BATCH([mail
+ctl
+
+])
+AT_CHECK(
+ZF_RUN,
+0,
+[250 Ok.
+],
+[INFO:zdkimfilter[[0]]:id=signmsg: signing for @another.example with domain author.example, selector s
+INFO:zdkimfilter[[0]]:id=signmsg: response: 250 Ok.
+])
+AT_CLEANUP
+
+#
+AT_SETUP([Check cstring utility])
+AT_CHECK([TESTcstring printf], 0, [ignore], [])
+AT_CLEANUP
+
+#
+AT_SETUP([Check mailbox parsing])
+AT_CHECK([TESTmailparse testsuite], 0, [], [])
+AT_CLEANUP
+
+

@@ -3,7 +3,7 @@
 * based on test.c written on 27 jan 2015
 * structures and functions for using Mozilla Public Suffix List
 
-Copyright (C) 2015 Alessandro Vesely
+Copyright (C) 2015-2019 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -29,7 +29,21 @@ licence, the licensor of zdkimfilter grants you additional permission to convey
 the resulting work.
 */
 
+/*
+* Obtain a stdalone debug file like so:
+* gcc -o test -W -Wall -O0 -DZDKIMFILTER_DEBUG -DDEBUG_PUBLICSUFFIX -DTEST_MAIN publicsuffix.c -lunistring
+*
+* then:
+*       ./test test-list test.dom.1 test.dom.2 test.dom.3
+* or
+*       ./test /usr/share/publicsuffix/public_suffix_list.dat
+*       less debug_tables.dump
+*/
+
+#if !defined DEBUG_PUBLICSUFFIX
 #include <config.h>
+#endif
+
 #if !ZDKIMFILTER_DEBUG
 #define NDEBUG
 #endif
@@ -58,36 +72,40 @@ the resulting work.
 
 static logfun_t do_report = &syslog;
 
-// write a file "debug_tables.h" with a printout of the rules:
-// #define DEBUG_PUBLICSUFFIX 1
-
-
 /*
 * This code reuses Bryan McQuade's design of domain-registry-provider, see
 * https://code.google.com/p/domain-registry-provider/wiki/DesignDoc
-*
-* A suffix trie is used to store rules, where each node represents a label
-* in a domain name.  Labels are stored in a string table.  Each node holds
-* the offset in the string table of the label it represents.  The final nodes
-* are stored in two arrays, where the short one is for full nodes.  A full
-* node, in addition to the label, holds the array index of its first child,
-* the total number of children, and an is_terminal flag.  An element of the
-* short array, a trie_node, holds just those extra members.  All the children
-* of a given node are stored consecutively (one after another, without gaps)
-* after the first child.  Elements of the long array, string_node's, hold
-* just the string offset.  Equal indexes of both array semantically refer to
-* the same trie node.
-*
-* Initialization consists of about twice as much lines of code as the runtime
-* functions, and it uses more than twelve times as much memory.  Memory used
-* at runtime is allocated in one big chunk, while initialization uses small
-* amounts allocated as needed and linked into lists.  The corresponding
-* structures are defined right before the code which uses them, so that it is
-* clear that functions defined earlier don't use them.
+* 
+* A suffix trie is used to store rules, where each node represents a 
+* label in a domain name.  Labels are stored in a string table.  Each 
+* node holds the offset in the string table of the label it represents. 
+* The final nodes are stored in two arrays, one for all nodes and one for 
+* non-leaf nodes only. A non-leaf node, trie_node, holds the array index 
+* of its first child, the total number of children, and the is_tld flag.  
+* The label of a trie_node is stored at the corresponding element in the 
+* array of all nodes.  A leaf node, string_node, contains just the label 
+* as a pointer into the string table.
+* 
+* All the children of a given node are stored consecutively (one after 
+* another, without gaps) after the first child, so as to allow binary 
+* search.  Equal indexes of both array semantically refer to the same 
+* trie node.
+* 
+* Initialization consists of about twice as much lines of code as the 
+* runtime functions, and it uses more than twelve times as much memory.  
+* Memory used at runtime is allocated in one big chunk, while 
+* initialization uses small amounts allocated as needed and linked into 
+* lists.  The corresponding structures are defined right before the code 
+* which uses them, so that it is clear that functions defined earlier 
+* don't use them.
 */
 
-static char **
-reverse_labels(char *domain, size_t len, char const *extra)
+static char **reverse_labels(char *domain, size_t len)
+/*
+* Domain must be a valid, normalized utf-8 domain name.
+* It is modfied by replacing dots with '\0'.
+* Return a NULL-terminated array of pointers to the resulting labels.
+*/
 {
 	assert(domain);
 	assert(strlen(domain) == len);
@@ -109,23 +127,20 @@ reverse_labels(char *domain, size_t len, char const *extra)
 
 	labels          63 octets or less
 	names           255 octets or less
+
+	That is not exact for utf-8 encoding.  However, max 128 labels is ok.
 	*/
-	if (len == 0 || len > 255)
+	if (len == 0 || len > 255*4)
 		return NULL;
 
 	char *labels[128];
 	size_t count = 0;
-	
+
 	// backward, starting off-string
 	char *prev = &domain[len], *s = &domain[len];
-	while	(len-- > 0)
+	while (len-- > 0)
 	{
 		int ch = *(unsigned char*)--s;
-		if (isupper(ch))
-			*s = tolower(ch);
-		else if (!isalnum(ch) && strchr("-_.", ch) == NULL &&
-			(extra == NULL || strchr(extra, ch) == NULL))
-				return NULL;
 
 		if (ch == '.' || len == 0)
 		{
@@ -137,17 +152,10 @@ reverse_labels(char *domain, size_t len, char const *extra)
 			}
 
 			size_t l_len = prev - label;
-			if (l_len == 0 || l_len > 63)
+			if (l_len == 0 || l_len > 63*4)
 				return NULL;
 
-			// silly hack, saves about 700 bytes of string table
-			if (l_len > 4 && strncmp(label, "xn--", 4) == 0)
-			{
-				labels[count] = label + 3;
-				*labels[count] = '#';
-			}
-			else
-				labels[count] = label;
+			labels[count] = label;
 			++count;
 			prev = s;
 		}
@@ -166,14 +174,14 @@ reverse_labels(char *domain, size_t len, char const *extra)
 // trie nodes, only for the first names
 typedef struct trie_node // 4 bytes
 {
-	unsigned int first_child: 13;
-#define MAX_NUM_TRIE_NODES 0x1fffU
+	unsigned int first_child: 15;
+#define MAX_NUM_TRIE_NODES 0x7fffU
 
-	unsigned int num_children: 11;
-#define MAX_NUM_CHILDREN 0x7ffU
+	unsigned int num_children: 12;
+#define MAX_NUM_CHILDREN 0xfffU
 
-	unsigned int is_terminal: 1;
-	//unsigned int nu: 7;
+	unsigned int is_tld: 1;
+	//unsigned int nu: 4;
 } trie_node;
 
 // string table entry, for each name
@@ -208,19 +216,22 @@ typedef struct bsearch_key
 static int bsearch_cmp(void const *k, void const *el)
 {
 	bsearch_key const *const key = k;
-	register char const *a = key->component;
+	char const *a = key->component;
 	string_node const *const str = el;
-	register char const *b = key->pst->string_table + str->n;
+	char const *b = key->pst->string_table + str->n;
 
-	register int c, d, r;
-	do c = *a++, d = *b++;
-	while (c && d && (r = c - d) == 0);
+	int c, d;
+	do c = *(unsigned char const*)a++, d = *(unsigned char const*)b++;
+	while (c && c == d);
 
 	return c - d;
 }
 
-static string_node *find_node(publicsuffix_trie const *pst,
-	char *component, string_node *parent)
+static string_node *
+find_node(publicsuffix_trie const *pst, char *component, string_node *parent)
+/*
+* Find the child of the parent node matching this component.
+*/
 {
 	assert(pst);
 	assert(component);
@@ -233,7 +244,7 @@ static string_node *find_node(publicsuffix_trie const *pst,
 
 	string_node *base;
 	size_t size;
-	if (parent == NULL)
+	if (parent == NULL) // root
 	{
 		base = pst->str;
 		size = pst->num_root_nodes;
@@ -244,7 +255,7 @@ static string_node *find_node(publicsuffix_trie const *pst,
 		base = &pst->str[node->first_child];
 		size = node->num_children;
 	}
-	else
+	else // parent is a leaf node
 		return NULL;
 
 	string_node *current =
@@ -263,6 +274,7 @@ static string_node *find_node(publicsuffix_trie const *pst,
 	*/
 	key.component = "*";
 	current = bsearch(&key, base, size, sizeof(string_node), bsearch_cmp);
+
 	if (current)
 	/*
 	* If there was a wildcard match, see if there is a wildcard
@@ -273,7 +285,7 @@ static string_node *find_node(publicsuffix_trie const *pst,
 	* rule."
 	*/
 	{
-		char exception_component[68];
+		char exception_component[strlen(component) + 2];
 		exception_component[0] = '!';
 		strcpy(&exception_component[1], component);
 		key.component = exception_component;
@@ -288,79 +300,63 @@ static string_node *find_node(publicsuffix_trie const *pst,
 
 char *org_domain(publicsuffix_trie const *pst, char const *c_domain)
 /*
-* c_domain must be ascii
+* c_domain must be normalized utf-8
 */
 {
 	char *domain = c_domain? strdup(c_domain): NULL;
-	if (domain == NULL)
+	if (domain == NULL || pst == NULL)
 		return NULL;
 
 	char *org = NULL;
 	size_t len = strlen(domain);
-	char **labels = reverse_labels(domain, len, NULL);
+	char **labels = reverse_labels(domain, len);
 
 	if (labels)
 	{
-		char **last_valid = NULL;
-		string_node *current = NULL;
-		for (char **l = labels; *l; ++l)
+		string_node *current = NULL, *parent;
+		char **org_label;
+		for (org_label = labels; *org_label; ++org_label)
+		/*
+		* Loop reversed labels until either not found or exception
+		*/
 		{
-			current = find_node(pst, *l, current);
+			parent = current;
+			current = find_node(pst, *org_label, parent);
 			if (current == NULL)
 				break;
 
-			unsigned int const ndx = current - pst->str;
-			if (ndx >= pst->num_trie_nodes || pst->node_table[ndx].is_terminal)
-			{
-				last_valid = l;
-				if (ndx >= pst->num_trie_nodes)
-					break;
-			}
-			else
-				last_valid = NULL;
+#if defined DEBUG_PUBLICSUFFIX
+			printf("%s: %s -> %s\n",
+				*org_label,
+				parent? &pst->string_table[parent->n]: "TOP",
+				&pst->string_table[current->n]);
+#endif // DEBUG_PUBLICSUFFIX
+
+			if (pst->string_table[current->n] == '!')
+				break;
 		}
 
-		if (last_valid == NULL)
+		if (*org_label == NULL ||
+			(current == NULL && parent == NULL))
 		{
 			free(domain);
 			free(labels);
-			return NULL; // not listed
-		}
-
-		int const exception = current && pst->string_table[current->n] == '!';
-
-		if (!exception)
-		{
-			if (last_valid[1])
-				++last_valid;
-			else if (current)
-			{
-				free(domain);
-				free(labels);
-				return NULL; // listed, but missing an org domain
-			}
+			return NULL;
 		}
 
 		len = 0;
 		for (char **l = labels; ; ++l)
 		{
 			len += strlen(*l) + 1;
-			if (**l == '#')
-				len += 3;
-			if (l == last_valid)
+			if (l == org_label)
 				break;
 		}
 		org = malloc(len);
 		if (org)
 		{
 			*org = 0;
-			for (char **l = last_valid; ; --l)
+			for (char **l = org_label; ; --l)
 			{
-				if (**l == '#')
-				{
-					strcat(org, "xn--");
-					*l += 1;
-				}
 				strcat(org,  *l);
 				if (l == labels)
 					break;
@@ -388,12 +384,12 @@ typedef struct loose_trie
 	struct loose_trie *next, *child, *parent;
 	size_t num_children;
 	uint16_t n; // offset of corresponding trie_node/ string_node
-	unsigned int is_terminal: 1;
+	unsigned int is_tld: 1;
 	unsigned int is_string: 1;
 	unsigned int is_first_child: 1;
 	unsigned int nu: 4;
 	unsigned int u_is_ll: 1;
-	union
+	union // switched in step 1
 	{
 		loose_label *ll;
 		char label[sizeof(loose_label*)];
@@ -555,23 +551,11 @@ static int read_rules(FILE *fp, char const *fname, loose_trie **root)
 			}
 
 			n[ulen] = 0;
-
-			uint8_t *xn = NULL;
-			int rtc = idn2_lookup_u8(n, &xn, 0);
-			if (rtc != IDN2_OK || xn == NULL || (len = strlen((char*)xn)) >= sizeof buf)
-			{
-				(*do_report)(LOG_CRIT, "IDNA failed at %s:%d: %s for \"%s\"",
-					fname, lineno, idn2_strerror_name(rtc), buf);
-				++bad;
-				continue;
-			}
-
-			memcpy(buf, xn, len);
-			idn2_free(xn);
-			buf[len] = 0;
+			if (strcmp((char *)n, buf))
+				(*do_report)(LOG_INFO, "Input: %s, normalized: %s\n", buf, n);
 		}
 
-		char **labels = reverse_labels(buf, len, "!*");
+		char **labels = reverse_labels(buf, len);
 		if (labels == NULL)
 		{
 			(*do_report)(LOG_CRIT, "Invalid domain at %s:%d for \"%s\"",
@@ -588,7 +572,7 @@ static int read_rules(FILE *fp, char const *fname, loose_trie **root)
 		if (node == NULL) // out of memory
 			return -1;
 
-		node->is_terminal = 1;
+		node->is_tld = 1;
 	}
 
 	return bad;
@@ -719,7 +703,7 @@ static int wt_step2(loose_trie* t, void *v, int depth)
 		trie_node *node = &pst->node_table[n];
 		memset(node, 0, sizeof *node);
 		node->num_children = t->num_children;
-		node->is_terminal = t->is_terminal;
+		node->is_tld = t->is_tld;
 
 		// string part
 		pst->str[n].n = t->u.ll->n;
@@ -783,6 +767,7 @@ publicsuffix_trie *publicsuffix_init(char const *fname, publicsuffix_trie *old)
 
 	do_report = set_parm_logfun(NULL);  // use that logging function
 
+#if 0
 	if (_LIBUNISTRING_VERSION != _libunistring_version) // (major<<8) + minor
 		(*do_report)(LOG_WARNING,
 			"unistring version mismatch, expecting %d, have %d",
@@ -792,6 +777,7 @@ publicsuffix_trie *publicsuffix_init(char const *fname, publicsuffix_trie *old)
 		(*do_report)(LOG_WARNING,
 			"IDN2 version mismatch, expecting %s", IDN2_VERSION);
 	}
+#endif
 
 	struct stat stat_dat;
 	int rtc = stat(fname, &stat_dat);
@@ -856,30 +842,32 @@ publicsuffix_trie *publicsuffix_init(char const *fname, publicsuffix_trie *old)
 					ini.string_size;
 
 #if DEBUG_PUBLICSUFFIX
-				ini.fp = fopen("debug_tables.h", "w");
+				ini.fp = fopen("debug_tables.dump", "w");
 				if (ini.fp)
 				{
 					fprintf(ini.fp,
-						"/* Size of kStringTable %zu */\n"
-						"/* Size of kNodeTable %zu of size %zu */\n"
-						"/* Size of kLeafNodeTable %zu of size %zu */\n"
-						"/* Total size %zu bytes */\n\n",
-							ini.string_size,
-							pst->num_trie_nodes, sizeof(trie_node),
-							pst->num_strings - pst->num_trie_nodes,
-							sizeof(string_node),
-							tot_alloc);
-					fprintf(ini.fp,
-						"%zu root nodes\n"
-						"%zu trie nodes (max=%u)\n"
-						"%zu total string nodes (max=%u)\n"
-						"%zu max children (max=%u)\n",
+						"%#8zx root nodes\n"
+						"%#8zx trie nodes (max=%#x)\n"
+						"%#8zx total string nodes (max=%#x)\n"
+						"%#8zx max children (max=%#x)\n\n",
 						pst->num_root_nodes,
 						pst->num_trie_nodes, MAX_NUM_TRIE_NODES,
 						pst->num_strings, UINT16_MAX,
 						ini.max_num_children, MAX_NUM_CHILDREN);
-					fprintf(ini.fp, "%zu num strings in string table\n\n",
+					fprintf(ini.fp, "%8zu num_strings in string table\n\n",
 						ini.num_strings);
+
+					fprintf(ini.fp,
+						"%8zu  %zu trie_nodes of size %zu +\n"
+						"%8zu  %zu num_strings of size %zu +\n"
+						"%8zu  total string table size =\n"
+						"%8zu\n\n",
+						pst->num_trie_nodes * sizeof(trie_node),
+						pst->num_trie_nodes,  sizeof(trie_node),
+						pst->num_strings * sizeof(string_node),
+						pst->num_strings,  sizeof(string_node),
+						ini.string_size,
+						tot_alloc);
 
 					fputs("Strings:\n", ini.fp);
 					for (loose_label *ll = ini.string_loose; ll; ll= ll->next)
@@ -957,6 +945,9 @@ publicsuffix_trie *publicsuffix_init(char const *fname, publicsuffix_trie *old)
 #if defined TEST_MAIN
 #include <stdarg.h>
 
+#if defined __GNUC__
+__attribute__ ((format(printf, 2, 3)))
+#endif
 static void stdalone_reporting(int nu, char const *fmt, ...)
 {
 	va_list ap;
@@ -973,6 +964,152 @@ logfun_t set_parm_logfun(logfun_t nu)
 	(void)nu;
 }
 
+static char* normalize_utf8(char const *domain)
+/*
+* similar to that in zdkimfilter.c
+*/
+{
+	if (domain)
+	{
+		char *out = NULL;
+		if (idn2_to_unicode_8z8z(domain, &out, 0) == IDN2_OK)
+			return out;
+	}
+	return NULL;
+}
+
+void checkPublicSuffix(publicsuffix_trie *pst, char const *in, char const *out)
+{
+	if (in && *in == '.') // Courier-rejects these
+		return;
+
+	int error = 0;
+	char *domain = in? normalize_utf8(in): NULL;
+	char *norm_out = out? normalize_utf8(out): NULL;
+	char *check = org_domain(pst, domain);
+	if (check == NULL)
+	{
+		if (norm_out != NULL)
+			error = 1;
+	}
+	else if (norm_out == NULL)
+		error = 1;
+	else
+		error = strcmp(norm_out, check);
+
+	if (error)
+		(*do_report)(LOG_ERR, "%s -> %s instead of %s\n",
+			in? in: "NULL", check? check: "NULL", norm_out? norm_out: "NULL");
+
+	free(check);
+	free(norm_out);
+	free(domain);
+}
+
+// official testsuite --requires real PSL to test again
+// https://hg.mozilla.org/mozilla-central/raw-file/4121453852cb90884200815b333a6fd636f3931c/netwerk/test/unit/data/test_psl.txt
+void run_checkPublicSuffix(publicsuffix_trie *pst)
+{
+// Any copyright is dedicated to the Public Domain.
+// http://creativecommons.org/publicdomain/zero/1.0/
+
+	// NULL input.
+	checkPublicSuffix(pst, NULL, NULL);
+	// Mixed case.
+	checkPublicSuffix(pst, "COM", NULL);
+	checkPublicSuffix(pst, "example.COM", "example.com");
+	checkPublicSuffix(pst, "WwW.example.COM", "example.com");
+	// Leading dot.
+	checkPublicSuffix(pst, ".com", NULL);
+	checkPublicSuffix(pst, ".example", NULL);
+	checkPublicSuffix(pst, ".example.com", NULL);
+	checkPublicSuffix(pst, ".example.example", NULL);
+	// Unlisted TLD.
+	checkPublicSuffix(pst, "example", NULL);
+	//checkPublicSuffix(pst, "example.example", "example.example");
+	//checkPublicSuffix(pst, "b.example.example", "example.example");
+	//checkPublicSuffix(pst, "a.b.example.example", "example.example");
+	// Listed, but non-Internet, TLD.
+	//checkPublicSuffix(pst, "local", NULL);
+	//checkPublicSuffix(pst, "example.local", NULL);
+	//checkPublicSuffix(pst, "b.example.local", NULL);
+	//checkPublicSuffix(pst, "a.b.example.local", NULL);
+	// TLD with only 1 rule.
+	checkPublicSuffix(pst, "biz", NULL);
+	checkPublicSuffix(pst, "domain.biz", "domain.biz");
+	checkPublicSuffix(pst, "b.domain.biz", "domain.biz");
+	checkPublicSuffix(pst, "a.b.domain.biz", "domain.biz");
+	// TLD with some 2-level rules.
+	checkPublicSuffix(pst, "com", NULL);
+	checkPublicSuffix(pst, "example.com", "example.com");
+	checkPublicSuffix(pst, "b.example.com", "example.com");
+	checkPublicSuffix(pst, "a.b.example.com", "example.com");
+	checkPublicSuffix(pst, "uk.com", NULL);
+	checkPublicSuffix(pst, "example.uk.com", "example.uk.com");
+	checkPublicSuffix(pst, "b.example.uk.com", "example.uk.com");
+	checkPublicSuffix(pst, "a.b.example.uk.com", "example.uk.com");
+	checkPublicSuffix(pst, "test.ac", "test.ac");
+	// TLD with only 1 (wildcard) rule.
+	checkPublicSuffix(pst, "bd", NULL);
+	checkPublicSuffix(pst, "c.bd", NULL);
+	checkPublicSuffix(pst, "b.c.bd", "b.c.bd");
+	checkPublicSuffix(pst, "a.b.c.bd", "b.c.bd");
+	// More complex TLD.
+	checkPublicSuffix(pst, "jp", NULL);
+	checkPublicSuffix(pst, "test.jp", "test.jp");
+	checkPublicSuffix(pst, "www.test.jp", "test.jp");
+	checkPublicSuffix(pst, "ac.jp", NULL);
+	checkPublicSuffix(pst, "test.ac.jp", "test.ac.jp");
+	checkPublicSuffix(pst, "www.test.ac.jp", "test.ac.jp");
+	checkPublicSuffix(pst, "kyoto.jp", NULL);
+	checkPublicSuffix(pst, "test.kyoto.jp", "test.kyoto.jp");
+	checkPublicSuffix(pst, "ide.kyoto.jp", NULL);
+	checkPublicSuffix(pst, "b.ide.kyoto.jp", "b.ide.kyoto.jp");
+	checkPublicSuffix(pst, "a.b.ide.kyoto.jp", "b.ide.kyoto.jp");
+	checkPublicSuffix(pst, "c.kobe.jp", NULL);
+	checkPublicSuffix(pst, "b.c.kobe.jp", "b.c.kobe.jp");
+	checkPublicSuffix(pst, "a.b.c.kobe.jp", "b.c.kobe.jp");
+	checkPublicSuffix(pst, "city.kobe.jp", "city.kobe.jp");
+	checkPublicSuffix(pst, "www.city.kobe.jp", "city.kobe.jp");
+	// TLD with a wildcard rule and exceptions.
+	checkPublicSuffix(pst, "ck", NULL);
+	checkPublicSuffix(pst, "test.ck", NULL);
+	checkPublicSuffix(pst, "b.test.ck", "b.test.ck");
+	checkPublicSuffix(pst, "a.b.test.ck", "b.test.ck");
+	checkPublicSuffix(pst, "www.ck", "www.ck");
+	checkPublicSuffix(pst, "www.www.ck", "www.ck");
+	// US K12.
+	checkPublicSuffix(pst, "us", NULL);
+	checkPublicSuffix(pst, "test.us", "test.us");
+	checkPublicSuffix(pst, "www.test.us", "test.us");
+	checkPublicSuffix(pst, "ak.us", NULL);
+	checkPublicSuffix(pst, "test.ak.us", "test.ak.us");
+	checkPublicSuffix(pst, "www.test.ak.us", "test.ak.us");
+	checkPublicSuffix(pst, "k12.ak.us", NULL);
+	checkPublicSuffix(pst, "test.k12.ak.us", "test.k12.ak.us");
+	checkPublicSuffix(pst, "www.test.k12.ak.us", "test.k12.ak.us");
+	// IDN labels.
+	checkPublicSuffix(pst, "食狮.com.cn", "食狮.com.cn");
+	checkPublicSuffix(pst, "食狮.公司.cn", "食狮.公司.cn");
+	checkPublicSuffix(pst, "www.食狮.公司.cn", "食狮.公司.cn");
+	checkPublicSuffix(pst, "shishi.公司.cn", "shishi.公司.cn");
+	checkPublicSuffix(pst, "公司.cn", NULL);
+	checkPublicSuffix(pst, "食狮.中国", "食狮.中国");
+	checkPublicSuffix(pst, "www.食狮.中国", "食狮.中国");
+	checkPublicSuffix(pst, "shishi.中国", "shishi.中国");
+	checkPublicSuffix(pst, "中国", NULL);
+	// Same as above, but punycoded.
+	checkPublicSuffix(pst, "xn--85x722f.com.cn", "xn--85x722f.com.cn");
+	checkPublicSuffix(pst, "xn--85x722f.xn--55qx5d.cn", "xn--85x722f.xn--55qx5d.cn");
+	checkPublicSuffix(pst, "www.xn--85x722f.xn--55qx5d.cn", "xn--85x722f.xn--55qx5d.cn");
+	checkPublicSuffix(pst, "shishi.xn--55qx5d.cn", "shishi.xn--55qx5d.cn");
+	checkPublicSuffix(pst, "xn--55qx5d.cn", NULL);
+	checkPublicSuffix(pst, "xn--85x722f.xn--fiqs8s", "xn--85x722f.xn--fiqs8s");
+	checkPublicSuffix(pst, "www.xn--85x722f.xn--fiqs8s", "xn--85x722f.xn--fiqs8s");
+	checkPublicSuffix(pst, "shishi.xn--fiqs8s", "shishi.xn--fiqs8s");
+	checkPublicSuffix(pst, "xn--fiqs8s", NULL);
+}
+
 int main(int argc, char *argv[])
 {
 	if (argc > 1)
@@ -980,16 +1117,22 @@ int main(int argc, char *argv[])
 		publicsuffix_trie *pst = publicsuffix_init(argv[1], NULL);
 		if (pst)
 		{
-			for (int i = 2; i < argc; ++i)
-			{
-				char *od = org_domain(pst, argv[i]);
-				printf("%s -> %s\n", argv[i], od? od: "null");
-				free(od);
-			}
+			if (argc > 2)
+				for (int i = 2; i < argc; ++i)
+				{
+					char *od = org_domain(pst, argv[i]);
+					printf("%s -> %s\n", argv[i], od? od: "null");
+					free(od);
+				}
+			else
+				run_checkPublicSuffix(pst);
 			publicsuffix_done(pst);
 		}
 	}
-	else fprintf(stderr, "usage: %s rule-file domain...\n", argv[0]);
+	else fprintf(stderr,
+		"usage: %s rule-file domain...\n"
+		"   or: %s real-psl\n",
+		argv[0], argv[0]);
 
 	return 0;
 }

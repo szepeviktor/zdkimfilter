@@ -37,5 +37,8 @@ override_dh_auto_install:
 		zaggregate-example.sh > $(PWD)/debian/zdkimfilter/usr/share/zdkimfilter/dmarc_send
 	mv $(PWD)/debian/zdkimfilter/etc/courier/filters/zdkimfilter.conf.dist \
 		$(PWD)/debian/zdkimfilter/usr/share/zdkimfilter/zdkimfilter.conf.orig.dist
+	mkdir -p $(PWD)/debian/zdkimfilter/usr/share/dbconfig-common/data/zdkimfilter/upgrade/mysql
+	cp debian/upgrade_mysql_1.7.sql $(PWD)/debian/zdkimfilter/usr/share/dbconfig-common/data/zdkimfilter/upgrade/mysql/1.7
+	cp tentative-psddmarc-list.txt $(PWD)/debian/zdkimfilter/usr/share/zdkimfilter
 
 

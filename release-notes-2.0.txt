@@ -1,0 +1,206 @@
+
+New features
+============
+Switch to signing mode if RELAYCLIENT is set by incoming SMTP.
+
+Shoot on sight when whitelisted < 0, overridable like policy
+failures and action_header.
+
+
+Slightly incompatible whitelist/ dnswl changes
+==============================================
+
+Previous versions accepted any whitelist/ dnswl to override
+a reject/ drop/ quarantine, while required whitelisted_pass
+or dnswl_worthiness_pass (respectively) to override action_header.
+
+Now all overrides need whitelisted_pass or dnswl_worthiness_pass,
+including the new shoot on sight.  (Ditto for reputation_pass;
+the code is still there although the site is dead.)
+
+
+Authentication-Results changes
+==============================
+
+Messages without From: used to have no specific A-R field set.
+Now they get "dkim-adsp=nxdomain".
+
+
+Database changes
+================
+
+Add a 4th variable (COUNT(*)) to db_sql_domain_flags.
+
+
+Minor changes and bug fixes
+===========================
+
+Fix PSDDMARC queries.
+
+Fix publicsuffix code for TLD exceptions.
+
+Enable domain flags for PSDDMARC super-org domains.
+
+Fix potential null pointer dereference in cstring.c
+
+Fix mailbox parsing for edge cases.
+
+Skip raising a domain to whitelited=2 on sending to various
+rfc2142 recipients; before only postmaster caused skipping.
+
+Fix behavior if zdkimfilter initialization fails.
+
+Re-initialize DNS queries (res_ninit()) on reload config.
+
+Fix DNS query error handling.
+
+Fix VBR bug signaled by Hanno Böck.
+
+
+Log changes
+===========
+Reworking the code to override reject/ drop/ quarantine actions
+resulted in several changes of log lines.  If you were grepping
+for specific log lines, that code needs to be revised.  Below
+a list of changes taken from the testsuite (thence the titles):
+
+
+Reject message with non-existent From: domain
+OLD
+INFO:zdkimfilter[0]:id=fraudmsg: invalid domain author.example, no VBR and no whitelist
+NEW
+INFO:zdkimfilter[0]:id=fraudmsg: reject! invalid domain author.example
+
+Whitelisted but not authenticated From: domain
+OLD
+INFO:zdkimfilter[0]:id=fraudmsg: invalid domain author.example, no VBR and no whitelist
+NEW
+INFO:zdkimfilter[0]:id=fraudmsg: reject! invalid domain author.example
+
+Drop author signature with policy: discard
+OLD
+INFO:zdkimfilter[0]:id=policymsg: adsp=discardable policy: author.example, no VBR and no whitelist
+NEW
+INFO:zdkimfilter[0]:id=policymsg: drop! ADSP policy=discardable for author.example
+
+OLD
+INFO:zdkimfilter[0]:drop msg,id=policymsg: adsp=discard
+NEW
+INFO:zdkimfilter[0]:drop msg,id=policymsg: ADSP discardable
+
+Action header reject
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: 550 Action-Header (was: Header field content)
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: reject! Action-Header: Value of header field
+
+Action header drop
+OLD
+-
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: drop! Action-Header: Value of header field
+
+DMARC failed quarantine honored ...
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: dmarc=quarantine policy for author.example, no VBR and no whitelist
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: quarantine! DMARC policy=quarantine for author.example
+
+DMARC failed reject honored ...
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: dmarc=reject policy for author.example, no VBR and no whitelist
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: reject! DMARC policy=reject for author.example
+
+DMARC failed reject not honored if whitelisted
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: dmarc=reject policy for author.example, but sender.example is whitelisted (auth: SPF)
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: reject! DMARC policy=reject for author.example
+INFO:zdkimfilter[0]:id=verifymsg: reject->deliver!! sender.example is whitelisted (3) (auth: SPF)
+
+Whitelisted sender, non-existent From: domain
+OLD
+INFO:zdkimfilter[0]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: SPF)
+NEW
+INFO:zdkimfilter[0]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[0]:id=usenetmsg: reject->deliver!! sender.example is whitelisted (2) (auth: SPF)
+
+Whitelisted signer, non-existent From: domain
+OLD
+INFO:zdkimfilter[0]:id=usenetmsg: invalid domain author.example, but sender.example is whitelisted (auth: DKIM)
+NEW
+INFO:zdkimfilter[0]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[0]:id=usenetmsg: reject->deliver!! sender.example is whitelisted (2) (auth: DKIM)
+
+Whitelisted sender, failed policy: discard
+OLD
+INFO:zdkimfilter[0]:id=policymsg: adsp=discardable policy: author.example, but sender.example is whitelisted (auth: SPF)
+NEW
+INFO:zdkimfilter[0]:id=policymsg: drop! ADSP policy=discardable for author.example
+INFO:zdkimfilter[0]:id=policymsg: drop->deliver!! sender.example is whitelisted (2) (auth: SPF)
+
+DNSWL sender, non-existent From: domain
+OLD
+INFO:zdkimfilter[0]:id=usenetmsg: invalid domain author.example, but I found 1 DNSWL record(s) --sender.example
+NEW
+INFO:zdkimfilter[0]:id=usenetmsg: reject! invalid domain author.example
+INFO:zdkimfilter[0]:id=usenetmsg: reject->deliver!! sender.example is in dnswl (0)
+
+DMARC reject not honored if dnswl'd
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: dmarc=reject policy for author.example, but I found 1 DNSWL record(s) --sender.example
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: reject! DMARC policy=reject for author.example
+INFO:zdkimfilter[0]:id=verifymsg: reject->deliver!! sender.example is in dnswl (0)
+
+DMARC reject not honored if vouched
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: dmarc=reject policy for author.example, but sender.example is VBR vouched by sender-cert.example (auth: SPF)
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: reject! DMARC policy=reject for author.example
+INFO:zdkimfilter[0]:id=verifymsg: reject->deliver!! sender.example is vouched by sender-cert.example (auth: SPF)
+
+
+
+Not dropped if worthiness 1 (signed)
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: drop-me: file name, but sender.example is in dnswl (1)
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[0]:id=verifymsg: drop->deliver!! sender.example is in dnswl (1)
+
+Not dropped if whitelisted (author signature)
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: drop-me: file name, but author.example is whitelisted (3)
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[0]:id=verifymsg: drop->deliver!! author.example is whitelisted (3) (auth: DKIM)
+
+Not dropped if whitelisted (SPF auth)
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: drop-me: file name, but sender.example is whitelisted (3)
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[0]:id=verifymsg: drop->deliver!! sender.example is whitelisted (3) (auth: SPF)
+
+Not dropped if vouched
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: drop-me: file name, but author.example is vouched (author-cert.example)
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[0]:id=verifymsg: drop->deliver!! author.example is vouched by author-cert.example (auth: DKIM)
+
+Not dropped if reputed author sig
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: drop-me: file name, but author.example is in al.dkim-reputation.org (-100)
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: drop! drop-me: file name
+INFO:zdkimfilter[0]:id=verifymsg: drop->deliver!! author.example is in al.dkim-reputation.org (-100)
+
+DMARC reject and reputation (changed behavior)
+OLD
+INFO:zdkimfilter[0]:id=verifymsg: dmarc=reject policy for author.example, even if author.example is in al.dkim-reputation.org (-100)
+NEW
+INFO:zdkimfilter[0]:id=verifymsg: reject! DMARC policy=reject for author.example
+INFO:zdkimfilter[0]:id=verifymsg: reject->deliver!! author.example is in al.dkim-reputation.org (-100)

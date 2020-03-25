@@ -2,7 +2,7 @@
 * parm.h - written by ale in milano on 21sep2012
 * parameter file parsing
 
-Copyright (C) 2012-2017 Alessandro Vesely
+Copyright (C) 2012-2019 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -53,6 +53,7 @@ typedef struct parm_t
 	char *save_drop;
 	char *action_header;
 	char *publicsuffix;
+	char *psddmarc;
 	const char **sign_hfields;
 	const char **skip_hfields;
 	const char **key_choice_header;

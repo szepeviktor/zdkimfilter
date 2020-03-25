@@ -1,0 +1,33 @@
+=pod
+
+=head1 NAME
+
+zdkimfilter - DKIM filter for the Courier mail server
+
+=head1 SYNOPSIS
+
+2idn I<punycode-name> ...
+
+=head1 DESCRIPTION
+
+Internationalized Domain Name (IDNA2008) decode punycode names back to
+UTF-8, by calling I<idn2_to_unicode_8z8z>.  This is the opposite of
+I<idn2>; that is, the same of I<idn2 --decode>, except that the latter
+not always exists.
+
+=head1 AUTHOR
+
+Alessandro Vesely E<lt>vesely@tana.itE<gt>
+
+=head1 SEE ALSO
+
+=over
+
+=item B<idn2>(1)
+
+=item B<idn2_to_unicode_8z8z>(3)
+
+=back
+
+=cut
+

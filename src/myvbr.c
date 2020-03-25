@@ -575,6 +575,7 @@ static int run_tests(int from, int to, int silent)
 		char **t = vbr_test[i];
 		for (char *a = *t; a; a = *++t)
 		{
+#if 0
 			if ((a[0] == 'Q' || a[0] == 'q') && a[1] == '=')
 			{
 				vbr_info *v = vbr_info_get(start, &a[2]);
@@ -589,6 +590,7 @@ static int run_tests(int from, int to, int silent)
 				}
 			}
 			else
+#endif
 			{
 				int rtc = vbr_info_add(&start, a);
 				if (rtc)

@@ -5,7 +5,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2015 Alessandro Vesely
+Copyright (C) 2015, 2019 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -61,6 +61,10 @@ the resulting work.
 #include "myadsp.h"
 #include "cstring.h"
 #include <assert.h>
+
+// there's no .h for this
+cstring* urlencode(char const *);
+
 
 #if HAVE_OPENDBX
 
@@ -260,10 +264,45 @@ static char const bailout[] = ", bailing out...";
 
 static int record_select(int nfield, char const *field[], void* vxml)
 /*
-* Receive fields from domain selection query.  These must be:
-* ip [0], count [1], dispo [2], d_dkim [3], d_spf [4], reason [5], domain [6],
-* spf [7], spf_result [8], spf_helo [9], spf_result [10], and
-* dkim [11], dkim_result [12] (repeated any number of times, NULL values skipped)
+* Receive fields from domain selection query.
+
+db_sql_dmarc_agg_record SELECT INET_NTOA(CONV(HEX(m.ip),16,10)) AS source, COUNT(*) AS n,\
+m.dmarc_dispo AS disposition, m.dmarc_dkim AS d_dkim, m.dmarc_spf AS d_spf,\
+m.dmarc_reason AS reason, da.domain AS author,\
+dspf.domain AS spf, rspf.spf AS spf_re,\
+dhelo.domain AS helo, rhelo.spf AS helo_re,\
+d1.domain AS dkim1, r1.dkim_selector AS dkim1_se, r1.dkim AS dkim1_re,\
+...
+FROM message_in AS m\
+LEFT JOIN (msg_ref AS rd INNER JOIN domain AS dd ON rd.domain = dd.id)\
+  ON m.id = rd.message_in AND FIND_IN_SET('dmarc', rd.auth)\
+LEFT JOIN (msg_ref AS ra INNER JOIN domain AS da ON ra.domain = da.id)\
+  ON m.id = ra.message_in AND FIND_IN_SET('author', ra.auth)\
+LEFT JOIN (msg_ref AS rspf INNER JOIN domain AS dspf ON rspf.domain = dspf.id)\
+  ON m.id = rspf.message_in AND FIND_IN_SET('spf', rspf.auth)\
+LEFT JOIN (msg_ref AS rhelo INNER JOIN domain AS dhelo ON rhelo.domain = dhelo.id)\
+  ON m.id = rhelo.message_in AND FIND_IN_SET('spf_helo', rhelo.auth)\
+LEFT JOIN (msg_ref AS r1 INNER JOIN domain AS d1 ON r1.domain = d1.id)\
+  ON m.id = r1.message_in AND r1.dkim_order = 1\
+...
+
+* Receiver order must be:
+*
+*  ip [0],             INET_NTOA(CONV(HEX(m.ip),16,10)) AS source
+*  count [1],          COUNT(*) AS n
+*  dispo [2],          m.dmarc_dispo AS disposition
+*  d_dkim [3],         m.dmarc_dkim AS d_dkim
+*  d_spf [4],          m.dmarc_spf AS d_spf
+*  reason [5],         m.dmarc_reason AS reason
+*  domain [6],         da.domain AS author
+*  spf [7],            dspf.domain AS spf
+*  spf_result [8],     rspf.spf AS spf_re
+*  spf_helo [9],       dhelo.domain AS helo,
+*  spf_result [10],    rhelo.spf AS helo_re
+*  and, repeated any   number of times, NULL values skipped,
+*  dkim [11],          d1.domain AS dkim1
+*  dkim_selector [12]  r1.dkim_selector AS dkim1_se
+*  dkim_result [13],   r1.dkim AS dkim1_re
 */
 {
 	if (nfield < 10)
@@ -306,12 +345,13 @@ static int record_select(int nfield, char const *field[], void* vxml)
 	etag(xml);
 
 	stag(xml, "auth_results");
-	for (int i = 11; i+1 < nfield; i += 2)
-		if (field[i] && field[i+1])
+	for (int i = 11; i+1 < nfield; i += 3)
+		if (field[i] && field[i+1] && *field[i+1] && field[i+2])
 		{
 			stag(xml, "dkim");
 			xtag(xml, "domain", field[i]);
-			xtag(xml, "result", field[i+1]);
+			xtag(xml, "selector", field[i+1]);
+			xtag(xml, "result", field[i+2]);
 			etag(xml); // dkim
 		}
 
@@ -370,7 +410,8 @@ typedef struct zag_parm
 	int use_z: 1;
 	int use_tmpfile: 1;
 	int no_set_dmarc_agg: 1;
-	int nu: 21;
+	int one_rcpt: 1;
+	int nu: 20;
 	int good, bad;
 
 	time_t period;
@@ -496,7 +537,10 @@ static unsigned char base64_symbol[] =
 	{
 		z_stream *zout = &dom->b64.zout;
 		zout->avail_in = cstr_length(cstr);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 		zout->next_in = cstr->data;
+#pragma GCC diagnostic pop
 
 		unsigned char buf[4096];
 		size_t rest = dom->b64.rest, col = dom->b64.col;
@@ -669,9 +713,10 @@ static int pipe_on_first_record(cstring *cstr, void *vdom, int end)
 static size_t check_addr(domain_run *dom, char *p, int rndx)
 /*
 * Verify limit and external recipients.  Add good addr to dom->addr.
-* In case of override, add new rua to dom->rua, don't add to dom->addr.
+* In case of override, add new rua to dom->rua instead of dom->addr
+* (it will be added to dom->addr in a subsequent call with rndx > 0).
 *
-* Return 0=ok, 1=protocol violation, -1=memory fault
+* Return 0=ok (possibly not added), 1=protocol violation, -1=memory fault
 */
 {
 	assert(dom);
@@ -683,7 +728,8 @@ static size_t check_addr(domain_run *dom, char *p, int rndx)
 	char *l = strchr(p, '!');
 	if (l)
 	{
-		*l = 0;
+		char *const bang = l;
+		*bang = 0;
 		limit = 0;
 		int ch;
 		while ((ch = *(unsigned char*)++l) != 0)
@@ -708,9 +754,12 @@ static size_t check_addr(domain_run *dom, char *p, int rndx)
 		if (ch != 0 || limit == 0)
 		{
 			if (verbose >= 2)
+			{
+				*bang = '!';
 				(*do_log)(LOG_NOTICE,
 					"Invalid address %s (bad limit) in rua of %s",
 					p, domain);
+			}
 			p = NULL;
 		}
 	}
@@ -765,7 +814,6 @@ static size_t check_addr(domain_run *dom, char *p, int rndx)
 					if (rua == NULL)
 					{
 						free(override);
-						free(badout);
 						return -1;
 					}
 
@@ -804,24 +852,37 @@ static size_t check_addr(domain_run *dom, char *p, int rndx)
 		}
 	}
 
-	if (p) // good address
+	if (p)
 	{
-		size_t n = dom->n_addr + 1;
-		size_t size = n * sizeof(dmarc_addr);
-		dmarc_addr *addr = dom->addr? realloc(dom->addr, size): malloc(size);
-		if (addr == NULL)
-			return -1;
+		if (db_check_dmarc_rcpt(dom->zag->dwa, p) == 0) // good address
+		{
+			size_t n = dom->n_addr + 1;
+			size_t size = n * sizeof(dmarc_addr);
+			dmarc_addr *addr = dom->addr?
+				realloc(dom->addr, size): malloc(size);
+			if (addr == NULL)
+				return -1;
 
-		dom->addr = addr;
-		dom->n_addr = n--;
-		addr[n].addr = p;
-		addr[n].limit = limit;
+			dom->addr = addr;
+			dom->n_addr = n--;
+			addr[n].addr = p;
+			addr[n].limit = limit;
+		}
+		else if (verbose >= 5)
+			(*do_log)(LOG_NOTICE,
+				"Invalid address %s (bounced) in rua of %s",
+					p, domain);
 	}
 
 	return 0;
 }
 
 static int each_rua(domain_run *dom, size_t rndx)
+/*
+* A domain can have rua=mailto:addr1,addr2,... all of which stay at
+* rua[0].  In case of override, rua[1], rua[2], ... are added and
+* checked on a subsequent call to this function with rndx > 0.
+*/
 {
 	assert(dom);
 	assert(dom->rua);
@@ -843,12 +904,18 @@ static int each_rua(domain_run *dom, size_t rndx)
 
 typedef enum {write_all, write_accept, write_discard} write_rcpt;
 static cstring *write_to_header(domain_run *dom, write_rcpt wr)
+/*
+* Write the To: header field based on dom->addr.  Behavior depends on wr:
+* write_all: write all available addresses,
+* write_accept: write only addresses whose limit is above current size,
+* write_discard: write only addresses whose limit is exceeded.
+*/
 {
 	assert(dom);
 
 	cstring *to_header = cstr_init(dom->n_addr * (64/3 + 3 + 20)); // guess
 
-	uint64_t limit = dom->use_z? dom->total_out: UINT64_MAX;
+	uint64_t report_size = dom->use_z? dom->total_out: UINT64_MAX;
 	
 	size_t n_addr = 0;
 	for (size_t i = 0; i < dom->n_addr; ++i)
@@ -858,16 +925,16 @@ static cstring *write_to_header(domain_run *dom, write_rcpt wr)
 			{
 				if (wr == write_accept)
 				{
-					if (dom->addr[i].limit > limit)
+					if (dom->addr[i].limit < report_size)
 					{
 						if (dom->zag->z.verbose >= 6)
 							(*do_log)(LOG_ERR,
-								"rcpt %s discarded: limit %" PRIu64 " > %" PRIu64,
-								dom->addr[i].addr, dom->addr[i].limit, limit);
+								"rcpt %s discarded: limit %" PRIu64 " < %" PRIu64,
+								dom->addr[i].addr, dom->addr[i].limit, report_size);
 						continue;
 					}
 				}
-				else if (dom->addr[i].limit <= limit)
+				else if (dom->addr[i].limit >= report_size)
 					continue;
 			}
 
@@ -882,13 +949,15 @@ static cstring *write_to_header(domain_run *dom, write_rcpt wr)
 			}
 		}
 
-	if (to_header && n_addr == 0 && wr <= write_accept)
+	if (to_header && n_addr == 0 && wr <= write_accept) // no address written
 	{
-		if (wr)
-			to_header = cstr_printf(to_header, " at limit %" PRIu64, limit);
 		if (dom->zag->z.verbose >= 1)
+		{
+			if (wr)
+				to_header = cstr_printf(to_header, " at limit %" PRIu64, report_size);
 			(*do_log)(LOG_INFO, "no rcpt left%s for domain %s",
 				to_header? cstr_get(to_header): "", dom->domain);
+		}
 		free(to_header);
 		to_header = NULL;
 	}
@@ -906,11 +975,81 @@ static int chk_signal(domain_run *dom)
 	return 1;
 }
 
+static bool reap_child(domain_run *dom, char const *dar_domain)
+{
+	bool report_considered_sent = false;
+	const zag_parm *zag = dom->zag;
+	while (dom->child)
+	{
+		int status;
+		pid_t pid = waitpid(dom->child, &status, 0);
+		if (pid == dom->child)
+		{
+			if (WIFEXITED(status))
+			{
+				int rc = WEXITSTATUS(status);
+				if (zag->z.verbose >= (rc? 3: 7))
+					(*do_log)(rc? LOG_INFO: LOG_DEBUG,
+						"%s for %s exit code=%d", zag->pargv[0], dar_domain, rc);
+				report_considered_sent = rc == 0;
+			}
+			else if (WIFSIGNALED(status))
+			{
+				int sig = WTERMSIG(status);
+				if (zag->z.verbose >= 3)
+					(*do_log)(LOG_WARNING,
+						"%s for %s: %s%s",
+						zag->pargv[0], dar_domain, strsignal(sig),
+						dom->child_killed? " (I killed pipe myself)": "");
+			}
+		}
+		else if (errno == EINTR)
+		{
+			if (signal_break)
+			{
+				if (zag->z.verbose >= 1)
+					(*do_log)(LOG_INFO, "killing process group %d",
+						dom->child);
+				if (kill(-dom->child, SIGTERM))
+					(*do_log)(LOG_ERR, "cannot kill: %s",
+						strerror(errno));
+				else
+					dom->child_killed = 1;
+			}
+			continue;
+		}
+
+		dom->child = 0;
+		break;
+	}
+
+	return report_considered_sent;
+}
+
+static int do_pipe(domain_run *dom)
+{
+	int rtc = 0;
+	rewind(dom->out);
+	FILE *out = run_child(dom);
+	if (out)
+	{
+		if ((rtc = copy_file(dom->out, out)) != 0)
+			(*do_log)(LOG_ERR, "cannot send tmpfile through pipe: %s",
+				strerror(errno));
+		if (fclose(out) != 0)
+			(*do_log)(LOG_ERR, "cannot close pipe: %s", strerror(errno));
+	}
+	return rtc;
+}
+
 static int domain_select(int nfield, char const *field[], void* vzag)
 /*
 * Receive fields from domain selection query.  These must be:
-* domain_ref, domain name, [ last_report, dmarc_ri, dmarc_rua, dmarc_rec ]
-* (at least the first two are needed)
+*
+*   domain_ref, domain name, 
+*    [ last_report, dmarc_ri, dmarc_rua, dmarc_rec ]
+*
+* (at least the first two are needed, the last )
 * Produce a report either on a file or through a pipe.
 * Return non-zero to abort receiving further domains.
 */
@@ -985,15 +1124,21 @@ static int domain_select(int nfield, char const *field[], void* vzag)
 			check_remove_sentinel(dom.rua[0].rua))
 	{
 		dmarc_rec dmarc;
+		dmarc_domains dd;
 		memset(&dmarc, 0, sizeof dmarc);
-		if (get_dmarc(dar.domain, NULL, &dmarc) != 0)
+		memset(&dd, 0, sizeof dd);
+		if ((dd.domain = strdup(dar.domain)) != NULL &&
+			(get_dmarc(&dd, &dmarc) != 0))
 		{
 			int out = ++zag->bad - 2*zag->good > 2;
 			(*do_log)(LOG_ERR, "Cannot retrieve DMARC record for %s%s",
 				dar.domain, out? bailout: ".");
 			clean_dom(&dom);
+			free(dd.domain);
 			return out;
 		}
+
+		free(dd.domain);
 
 		if (dmarc.rua == NULL)
 		{
@@ -1247,7 +1392,7 @@ static int domain_select(int nfield, char const *field[], void* vzag)
 	/*
 	* If no pipe, use two files.  *.env has environment variables, while
 	* *.xml[.gz.b64] has the data.  Files are created here and deleted in
-	* clean_dom(), case of error.
+	* clean_dom(), in case of error.
 	*/
 	{
 		if (dom.fname)
@@ -1324,6 +1469,10 @@ static int domain_select(int nfield, char const *field[], void* vzag)
 	if (signal_break) return chk_signal(&dom); } while(0)
 	CHECK_SIGNAL;
 
+	/*
+	* Data can be piped to a child or saved to a file.
+	* (See four cases commented below.)
+	*/
 	dom.xml.flush_arg = &dom;
 	dom.xml.flush = dom.use_z? &flush_out_z: &flush_out;
 	dom.xml.cstr = cstr_init(1024);
@@ -1337,9 +1486,11 @@ static int domain_select(int nfield, char const *field[], void* vzag)
 
 	bool report_considered_sent = false;
 	bool delayed_pipe_mode = false;
+	bool pipe_each_addr = false;
 	if (!dom.use_file)
 	{
-		if (zag->use_tmpfile ||
+		pipe_each_addr = zag->one_rcpt;
+		if (pipe_each_addr || zag->use_tmpfile ||
 			dom.addr[0].limit != dom.addr[dom.n_addr-1].limit)
 		{
 			if ((dom.out = tmpfile()) == NULL)
@@ -1371,6 +1522,9 @@ static int domain_select(int nfield, char const *field[], void* vzag)
 	SETENV("CONTENT_TRANSFER_ENCODING", dom.use_z? "base64": "7bit");
 	SETENV("DOMAIN", dar.domain);
 	SETENV("LIMIT", limit_str);
+	if (!pipe_each_addr)
+		SETENV("URLENCODED_RCPT", "");
+
 	if (!delayed_pipe_mode && !dom.use_file)
 	{
 		cstring *to_header = write_to_header(&dom, write_all);
@@ -1431,56 +1585,98 @@ static int domain_select(int nfield, char const *field[], void* vzag)
 		p = e;
 	}
 	etag(&dom.xml); // policy_published
+
+	// rtc can be SIGINT (2) SIGTERM (15) or a negative, fatal error
+	// flushing may result in DEAD_CHILD for an aborted send.
+	// We return 0 except for fatal error.
 	int rtc = db_run_dmarc_agg_record(zag->dwa, &dar, &record_select, &dom.xml);
 	etag(&dom.xml); // feedback - end of report
+
 	if (rtc == 0)
-		rtc = xml_flush(&dom.xml, 1);
+		rtc = xml_flush(&dom.xml, 1 /* end of report */);
+
 	if (rtc == 0)
 		zag->good += 1;
 	if (zag->z.verbose >= 5)
 		(*do_log)(LOG_INFO,
 			"%zu row(s) for domain %s, rtc=%d", dom.n_record, dar.domain, rtc);
+
 	if (rtc == DEAD_CHILD)
 		rtc = 0; // want more domains
 
 	/*
-	* If dom.out is still opened, no write error occurred and the report is
-	* written.
+	* If dom.out is still opened, no write error occurred and the report
+	* is written or piped, except if rtc.  There can be four cases.
 	*/
-	if (dom.out)
+	if (dom.out && rtc == 0)
 	{
-		if (delayed_pipe_mode)
+		if (pipe_each_addr)
+		/*
+		* The report is on a tempfile, and has to be piped to the
+		* sending process.  Option -1 was given, one recipient per
+		* process and bounce address.
+		*/
 		{
-			CHECK_SIGNAL;
-
-			if (rtc == 0 && dom.n_record > 0)
+			for (size_t i = 0; rtc == 0 && i < dom.n_addr; ++i)
 			{
-				cstring *to_header = write_to_header(&dom, write_accept);
-				if (to_header == NULL)
+				CHECK_SIGNAL;
+
+				char *addr = dom.addr[i].addr;
+				cstring *urlencoded_rcpt = urlencode(addr);
+				cstring *to_header = cstr_init(5 + strlen(addr));
+				to_header = cstr_printf(to_header, "To: %s", addr);
+				if (urlencoded_rcpt == NULL || to_header == NULL)
 				{
 					clean_dom(&dom);
 					return 0;
 				}
 
+				setenv("URLENCODED_RCPT", cstr_get(urlencoded_rcpt), 1);
+				free(urlencoded_rcpt);
 				setenv("TO_HEADER", cstr_get(to_header), 1);
 				free(to_header);
-				
-				rewind(dom.out);
-				FILE *out = run_child(&dom);
-				if (out)
-				{
-					if ((rtc = copy_file(dom.out, out)) != 0)
-						(*do_log)(LOG_ERR, "cannot send tmpfile through pipe: %s",
-							strerror(errno));
-					if (fclose(out) != 0)
-						(*do_log)(LOG_ERR, "cannot close pipe: %s", strerror(errno));
-				}
 
-				fclose(dom.out);
-				dom.out = NULL;
+				rtc |= do_pipe(&dom);
+
+				// add to period if at least one is sent
+				if (dom.child)
+					report_considered_sent |= reap_child(&dom, dar.domain);
 			}
+
+			fclose(dom.out);
+			dom.out = NULL;
+		}
+		else if (delayed_pipe_mode)
+		/*
+		* The report is on a tempfile, by option -t or because of
+		* multiple size limits.  The file has to be piped, once, only
+		* to those recipients which accept its size.
+		*/
+		{
+			CHECK_SIGNAL;
+
+			cstring *to_header = write_to_header(&dom, write_accept);
+			if (to_header == NULL)
+			{
+				clean_dom(&dom);
+				return 0;
+			}
+
+			setenv("TO_HEADER", cstr_get(to_header), 1);
+			free(to_header);
+			
+			report_considered_sent = do_pipe(&dom);
+			fclose(dom.out);
+			dom.out = NULL;
+
+			if (dom.child)
+				report_considered_sent = reap_child(&dom, dar.domain);
 		}
 		else if (dom.use_file)
+		/*
+		* The report is written on file, as well as the environment.
+		* The caller knows what to do with those files.
+		*/
 		{
 			CHECK_SIGNAL;
 
@@ -1502,18 +1698,22 @@ static int domain_select(int nfield, char const *field[], void* vzag)
 					cstr_get(dom.fname), strerror(errno));
 			envout = dom.out = NULL;
 
-			if (rtc == 0 && dom.n_record > 0)
-			{
-				dom.use_file = 0; // prevent cleanup
-				report_considered_sent = true;
-			}
+			dom.use_file = 0; // prevent cleanup, files rm by caller
+			report_considered_sent = true;
 		}
-		else // direct pipe
+		else
+		/*
+		* Direct pipe, required by --pipe and not disabled by other
+		* options or size limits.
+		*/
 		{
 			assert(dom.n_record > 0); // otherwise wouldn't have piped it!
 			if (fclose(dom.out) != 0)
 				(*do_log)(LOG_ERR, "cannot close pipe: %s", strerror(errno));
 			dom.out = NULL;
+
+			if (dom.child)
+				report_considered_sent = reap_child(&dom, dar.domain);
 		}
 	}
 
@@ -1521,50 +1721,6 @@ static int domain_select(int nfield, char const *field[], void* vzag)
 	{
 		fclose(envout);
 		envout = NULL;
-	}
-
-	while (dom.child)
-	{
-		int status;
-		pid_t pid = waitpid(dom.child, &status, 0);
-		if (pid == dom.child)
-		{
-			if (WIFEXITED(status))
-			{
-				int rc = WEXITSTATUS(status);
-				if (zag->z.verbose >= (rc? 3: 7))
-					(*do_log)(rc? LOG_INFO: LOG_DEBUG,
-						"%s for %s exit code=%d", zag->pargv[0], dar.domain, rc);
-				report_considered_sent = rc == 0 && rtc == 0 && dom.n_record > 0;
-			}
-			else if (WIFSIGNALED(status))
-			{
-				int sig = WTERMSIG(status);
-				if (zag->z.verbose >= 3)
-					(*do_log)(LOG_WARNING,
-						"%s for %s: %s%s",
-						zag->pargv[0], dar.domain, strsignal(sig),
-						dom.child_killed? " (I killed pipe myself)": "");
-			}
-		}
-		else if (errno == EINTR)
-		{
-			if (signal_break)
-			{
-				if (zag->z.verbose >= 1)
-					(*do_log)(LOG_INFO, "killing process group %d",
-						dom.child);
-				if (kill(-dom.child, SIGTERM))
-					(*do_log)(LOG_ERR, "cannot kill: %s",
-						strerror(errno));
-				else
-					dom.child_killed = 1;
-			}
-			continue;
-		}
-
-		dom.child = 0;
-		break;
 	}
 
 	CHECK_SIGNAL;
@@ -1599,6 +1755,10 @@ static int do_args(int argc, char *argv[], zag_parm *zag)
 			{
 				switch(ch)
 				{
+					case '1':
+						zag->one_rcpt = 1;
+						break;
+
 					case 'f':
 						expect = &zag->config_file;
 						break;
@@ -1745,6 +1905,12 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
+	if (query_init() < 0)
+	{
+		db_clear(zag.dwa);
+		return 1;
+	}
+
 	// adjust verbosity
 	if (zag.verbose == 0 && zag.z.verbose > 9)
 		zag.verbose = zag.z.verbose - 9;
@@ -1789,6 +1955,7 @@ int main(int argc, char *argv[])
 
 	clear_parm(parm_target);
 	db_clear(zag.dwa);
+	query_done();
 	return rtc != 0;
 }
 

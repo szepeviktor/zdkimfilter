@@ -174,7 +174,7 @@ static int run_zdkimfilter(char *argv[], int do_what)
 					out += wn;
 					len -= wn;
 				}
-				else if (wn == 0 || errno != EINTR && errno != EAGAIN)
+				else if (wn == 0 || (errno != EINTR && errno != EAGAIN))
 				{
 					if (wn)
 						(*do_report)(LOG_CRIT, "Pipe broken: %s\n", strerror(errno));
@@ -274,7 +274,7 @@ static int run_zdkimfilter(char *argv[], int do_what)
 					next -= p - first;
 					assert(first <= next && next < last);
 				}
-				else if (rd == 0 || errno != EINTR && errno != EAGAIN)
+				else if (rd == 0 || (errno != EINTR && errno != EAGAIN))
 				{
 					if (rd)
 						(*do_report)(LOG_CRIT, "Pipe broken: %s\n", strerror(errno));
@@ -336,7 +336,7 @@ static int run_zdkimfilter(char *argv[], int do_what)
 	}
 	else // child process
 	{
-		int rc, exp_rc;
+		int rc = 0, exp_rc;
 
 		if ((do_what & do_filter) == 0)
 		{
@@ -474,24 +474,24 @@ copy_recipients(FILE *fp_in, FILE *fp_ctl, FILE *fp_out)
 
 		if (ch == ':')
 		{
-			if (len == 3 && strncmp(start, "bcc", 3) == 0 ||
-				len == 2 &&
-					(strncmp(start, "to", 2) == 0 || strncmp(start, "cc", 2) == 0))
+			if ((len == 3 && strncmp(start, "bcc", 3) == 0) ||
+				(len == 2 &&
+					(strncmp(start, "to", 2) == 0 || strncmp(start, "cc", 2) == 0)))
 			{
 				unsigned const max_rcpts = keep/7; // 1@3.56,
 				unsigned rcpts = 0;
-				unsigned char *user, *domain, *pcont = NULL;
+				char *user, *domain, *pcont = NULL;
 				int err = 0;
 				char *err_report = strdup(++p);
 				static char const data_lost[] = "--*DATA LOST*--";
 
 				while (rcpts++ < max_rcpts)
 				{
-					err = dkim_mail_parse_c(p, &user, &domain, &pcont);
+					err = my_mail_parse_c(p, &user, &domain, &pcont);
 
 					if (err)
 					{
-						if (verbose)
+						if (verbose > 1)
 							(*do_report)(LOG_ERR,
 								"unable to parse address %u of %s (err=%d)",
 								rcpts, err_report? err_report: data_lost, err);

@@ -5,7 +5,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2015 Alessandro Vesely
+Copyright (C) 2015-2019 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -33,11 +33,7 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #if !defined MYADSP_H_INCLUDED
 #define MYADSP_H_INCLUDED
 
-#if defined DKIM_POLICY_NONE
-#undef DKIM_POLICY_NONE
-#endif
-#define DKIM_POLICY_NONE          0
-
+#define POLICY_NOT_DEFINED        0
 #define DMARC_POLICY_NONE         4
 #define DMARC_POLICY_QUARANTINE   5
 #define DMARC_POLICY_REJECT       6
@@ -48,11 +44,24 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #define POLICY_IS_ADSP(n)   (((n)&8) != 0)
 #define POLICY_IS_STRICT(n) (((n)&3) != 0)
 
-#if ! defined DKIM_PRESULT_NONE
-#define DKIM_PRESULT_NONE		(-1)	/* none/undefined */
-#endif
+
+#define PRESULT_FOUND 0
+#define PRESULT_NOT_FOUND 1
+#define PRESULT_NXDOMAIN 3
+#define PRESULT_INT_ERROR -1
+#define PRESULT_DNS_ERROR -2
+#define PRESULT_DNS_BAD -3
+#define PRESULT_NOT_DONE -4
+
 
 #include <stdint.h>
+
+typedef struct dmarc_domains
+{
+	char *domain;      // aka dkim_domain, the domain of From:
+	char *org_domain;  // can be in dwa
+	char *super_org;   // psddmarc domain, if any
+} dmarc_domains;
 
 typedef struct dmarc_rec
 {
@@ -60,14 +69,18 @@ typedef struct dmarc_rec
 	int effective_p; // one of the DMARC macros above
 	uint32_t ri;
 	char fo[8];
-	char adkim, aspf, p, sp, pct;
-	char found_at_org;
-	char nu[2];
+	char adkim, aspf, p, sp, np, pct;
+	char found_at_org; // 1 if found at org, 2 if super
+	char nxdomain;     // 1 if domain not found, 2 if org not found
+	char nu;
 } dmarc_rec;
+
+int query_init(void);
+void query_done(void);
 
 int set_adsp_query_faked(int mode);
 int my_get_adsp(char const *domain, int *policy);
-int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc);
+int get_dmarc(dmarc_domains const *dd, dmarc_rec *dmarc);
 int verify_dmarc_addr(char const *poldo, char const *rcptdo,
 	char **override, char **badout);
 char* write_dmarc_rec(dmarc_rec const *dmarc);

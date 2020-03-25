@@ -1,0 +1,48 @@
+=pod
+
+=head1 NAME
+
+urlencode - an URL-encoding utility
+
+=head1 SYNOPSIS
+
+urlencode [arg...]
+
+=head1 DESCRIPTION
+
+The utility encodes any argument by replacing any non-alphanumeric
+character, except dash C<->, dot C<.>, underline C<_>, and tilde C<~>,
+the unreserved characters of I<RFC 3986>, with its percent escaped
+hexadecimal representation.
+
+If no argument is supplied, the utility reads standard input until
+end of file.
+
+Encoded words are put on standard output, terminated by newlines.
+
+=head1 EXAMPLES
+
+    urlencode user@example.com
+    user%40example.org
+
+    printf '\x04\x05\x06 \x07\x08\x09'  | urlencode
+    %04%05%06%20%07%08%09
+
+=head1 AUTHOR
+
+Alessandro Vesely E<lt>vesely@tana.itE<gt>
+
+=head1 SEE ALSO
+
+=over
+
+=item B<RFC 3986>
+
+Uniform Resource Identifier (URI): Generic Syntax
+
+=item B<urldecode>(1)
+
+=back
+
+=cut
+

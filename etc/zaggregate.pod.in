@@ -55,6 +55,13 @@ Short options can be stuffed into a single argument.
 
 =over
 
+=item B<-1>
+
+Set fork for each recipient, if B<--pipe> is also given.  That may entail
+more forks if a report unlikely has multiple recipients.  In addition,
+this flag causes the environment variable URLENCODED_RCPT to be set.
+The latter can be used to set unique bounce addresses.
+
 =item B<-f> I<config-filename>
 
 Specify a different configuration file.
@@ -93,7 +100,7 @@ the report frequency, the size limit, or both.
 This pipes the output to a child process.  The arguments following this option
 are passed to the child process, starting with the executable path.
 
-A child is forked for each report, setting the environment variables described
+A child is forked for each mail, setting the environment variables described
 below.  The report content is piped to child's standard input.  If the size
 limit is exceeded, the child is killed with SIGTERM.  However, if there are
 multiple limits or option I<-t> is used, the report is first written to a
@@ -180,10 +187,16 @@ limit, the default is 18446744073709551615 (UINT64_MAX).
 
 =item TO_HEADER
 
-The C<To:> header field, containing all addresses.  If I<-z> is used, only
+The C<To:> header field, containing all addresses, or just one if I<-1>
+is used.  If I<-z> is used, only
 addresses that accept the report size are included.  In any case, addresses
 which specify a non-default size limit are followed by a comment with the
 specified limit.
+
+=item URLENCODED_RCPT
+
+This variable is empty unless I<-1> is used.  In that case, it contains
+the urlencoded target address to be used for bounces.
 
 =item MESSAGE_ID
 
@@ -191,6 +204,30 @@ This variable is only set if option I<-u> is used.  It contains the uniq-id.
 
 =back
 
+head1 QUERIES
+
+These queries must be configured for zaggregate to function.  See
+I<zfilter_db>(1) for details on the available variables.
+
+=over
+
+=item I<db_sql_dmarc_agg_domain>
+
+DMARC aggregate domain query, to select domains.
+
+=item I<db_sql_dmarc_agg_record>
+
+DMARC aggregate record query, given a domain, select records.
+
+=item I<db_sql_check_dmarc_rcpt>
+
+Check recipient address, so as to skip bouncing targets.
+
+=item I<db_sql_set_dmarc_agg>
+
+Adjust the reported perios after the report is considered sent.
+
+=back
 
 =head1 FILES
 

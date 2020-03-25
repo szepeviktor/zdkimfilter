@@ -5,7 +5,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2015 Alessandro Vesely
+Copyright (C) 2015-2019 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -50,7 +50,10 @@ zdkimfilter grants you additional permission to convey the resulting work.
 #if defined HAVE_NETDB_H
 #include <netdb.h>
 #endif
+
 #include <resolv.h>
+
+#include <idn2.h>
 
 #include "myadsp.h"
 #include "util.h"
@@ -61,6 +64,52 @@ zdkimfilter grants you additional permission to convey the resulting work.
 
 #define NS_BUFFER_SIZE 1536
 
+// freed by clean_vh()
+static res_state statep = NULL;
+int query_init(void)
+{
+	if (statep == NULL)
+		statep = malloc(sizeof *statep);
+	if (statep)
+	{
+		if (res_ninit(statep) == 0)
+		{
+			statep->options &= ~RES_DNSRCH; // don't search local tree
+//#if defined RES_TRUSTAD
+//			// glibc 2.31.
+//			statep->options |= RES_TRUSTAD; // pass Authentic Data (AD) bit
+//#endif
+			return 0;
+		}
+		free(statep);
+		statep = NULL;
+	}
+
+	return -1;
+}
+
+void query_done(void)
+{
+	free(statep);
+	statep = NULL;
+}
+
+#if defined TEST_MAIN && ! defined NO_DNS_QUERY
+static const char* explain_h_errno(int my_h_errno)
+{
+	switch(my_h_errno)
+	{
+		/* netdb.h: Possible values left in `h_errno'.  */
+		case HOST_NOT_FOUND: return "HOST_NOT_FOUND: Authoritative Answer Host not found.";
+		case TRY_AGAIN: return "TRY_AGAIN: Non-Authoritative Host not found, or SERVERFAIL.";
+		case NO_RECOVERY: return "NO_RECOVERY: Non recoverable errors, FORMERR, REFUSED, NOTIMP.";
+		case NO_DATA: return "NO_DATA: Valid name, no data record of requested type.";
+		default: return "Unexpected h_errno.";
+	}
+}
+#endif
+ 
+
 static int do_txt_query(char *query, size_t len_d, size_t len_sub,
 	int (*parse_fn)(char*, void*), void* parse_arg)
 /*
@@ -70,10 +119,10 @@ static int do_txt_query(char *query, size_t len_d, size_t len_sub,
 * parse_fn is a parsing function, and parse_arg its argument. 
 *
 * Run query and return:
-*   >= 0 txt records successfully parsed
-*  -1  on caller's error
-*  -2  on temporary error (includes SERVFAIL)
-*  -3  on bad DNS data or other transient error
+*   >= 0 number of txt records successfully parsed
+*  -1  (PRESULT_INT_ERROR) on caller's error
+*  -2  (PRESULT_DNS_ERROR) on temporary error (includes SERVFAIL)
+*  -3  (PRESULT_DNS_BAD) on bad DNS data or other (transient?) error
 *  -4  for NXDOMAIN if len_sub > 0, or just res_query() failed
 */
 {
@@ -85,10 +134,19 @@ return 0; (void)query, (void)len_d, (void)len_sub, (void)parse_fn, (void)parse_a
 	assert(len_d);
 	assert(parse_fn);
 
-#if defined TEST_MAIN
-	if (isatty(fileno(stdout)))
-		printf("query: %s\n", query);
-#endif
+	if (statep == NULL)
+		return PRESULT_DNS_ERROR;
+
+	char *a_query = NULL;
+	if (idn2_to_ascii_8z(query, &a_query, 0) != IDN2_OK ||
+		strlen(a_query) >= NS_BUFFER_SIZE)
+	{
+		free(a_query);
+		return PRESULT_DNS_BAD;
+	}
+
+	strcpy(query, a_query);
+	free(a_query);
 
 	union dns_buffer
 	{
@@ -99,15 +157,18 @@ return 0; (void)query, (void)len_d, (void)len_sub, (void)parse_fn, (void)parse_a
 	// res_query returns -1 for NXDOMAIN
 	unsigned int qtype;
 	char *query_cmp = query;
-	int rc = res_query(query, 1 /* Internet */, qtype = 16 /* TXT */,
+	int rc = res_nquery(statep, query, 1 /* Internet */, qtype = 16 /* TXT */,
 		buf.answer, sizeof buf.answer);
 
 	if (rc < 0)
 	{
-		if (h_errno == NO_DATA)
-			return 0;
+		int orig_h_errno = h_errno;
 
-		// check the base domain exists
+#if defined TEST_MAIN
+		if (isatty(fileno(stdout)))
+			printf("query: %s; error: %s\n", query, explain_h_errno(orig_h_errno));
+#endif
+		// check the base domain is given
 		if (len_sub == 0)
 			return -4;
 
@@ -124,25 +185,38 @@ return 0; (void)query, (void)len_d, (void)len_sub, (void)parse_fn, (void)parse_a
 		};
 		for (size_t t = 0; t < sizeof try_qtype/ sizeof try_qtype[0]; ++t)
 		{
-			rc = res_query(query_cmp, 1 /* Internet */, qtype = try_qtype[t],
+			rc = res_nquery(statep, query_cmp, 1 /* Internet */, qtype = try_qtype[t],
 				buf.answer, sizeof buf.answer);
-			if (rc >= 0)
-				break;
 
 			int my_h_errno = h_errno;
-			if (my_h_errno == NO_DATA)
-				return 0;
+#if defined TEST_MAIN
+			if (isatty(fileno(stdout)))
+				printf("tried %s, qtype=%d, %s\n", query_cmp,
+					qtype, rc < 0? explain_h_errno(my_h_errno): "found");
+#endif
 
-			if (my_h_errno == HOST_NOT_FOUND)
-				return -4;
+			/*
+			*   For DMARC purposes, a non-existent domain is a domain
+			*   for which there is an NXDOMAIN or NODATA response for
+			*   A, AAAA, and MX records.  This is a broader definition
+			*   than that in NXDOMAIN [RFC8020].
+			*/
+			if (rc >= 0 ||
+				(my_h_errno != NO_DATA && my_h_errno != HOST_NOT_FOUND))
+			{
+				if (orig_h_errno == NO_DATA || orig_h_errno == HOST_NOT_FOUND)
+					return 0;  // domain exists, no TXT record found
+				return PRESULT_DNS_ERROR; // orig was TRY_AGAIN or NO_RECOVERYU
+			}
 		}
 
-#if defined TEST_MAIN
-		if (isatty(fileno(stdout)))
-			printf("tried qtype=%d, rc=%d\n", qtype, rc);
-#endif
-		if (rc < 0) return -2;
+		return -4;
 	}
+
+#if defined TEST_MAIN
+	if (isatty(fileno(stdout)))
+		printf("query: %s\n", query);
+#endif
 
 	size_t ancount;
 	if (rc < HFIXEDSZ ||
@@ -279,7 +353,7 @@ static int parse_adsp(char *record, void *v_policy)
 					else if (len == 11 && strncmp(p, "discardable", 11) == 0)
 						*policy = ADSP_POLICY_DISCARDABLE;
 					else
-						*policy = DKIM_POLICY_NONE;
+						found = -1;
 				}
 			}
 		}
@@ -290,15 +364,15 @@ static int parse_adsp(char *record, void *v_policy)
 
 static int do_adsp_query(char const *domain, int *policy)
 // run query and return:
-//   0  and a response if found
-//   1  found, but no adsp retrieved
-//   3  for NXDOMAIN
-//  -1  on caller's error
-//  -2  on temporary error (includes SERVFAIL)
-//  -3  on bad DNS data or other transient error
+//   0  (PRESULT_FOUND) and a response if found
+//   1  (PRESULT_NOT_FOUND) found, but no adsp retrieved
+//   3  (PRESULT_NXDOMAIN) for NXDOMAIN
+//  -1  (PRESULT_INT_ERROR) on caller's error
+//  -2  (PRESULT_DNS_ERROR) on temporary error (includes SERVFAIL)
+//  -3  (PRESULT_DNS_BAD) on bad DNS data or other transient error
 {
 	if (domain == NULL || *domain == 0)
-		return -1;
+		return PRESULT_INT_ERROR;
 
 	static char const subdomain[] = "_adsp._domainkey.";
 	size_t len_sub = sizeof subdomain - 1;
@@ -306,13 +380,13 @@ static int do_adsp_query(char const *domain, int *policy)
 	char query[NS_BUFFER_SIZE];
 
 	if (len_d >= sizeof query)
-		return -1;
+		return PRESULT_INT_ERROR;
 
 	memcpy(query, subdomain, sizeof subdomain);
 	strcat(&query[sizeof subdomain - 1], domain);
 
 	int rtc = (*txt_query)(query, len_d, len_sub, parse_adsp, policy);
-	return rtc == -4? 3: rtc >= 0? rtc != 1: rtc;
+	return rtc == -4? PRESULT_NXDOMAIN: rtc > 0? PRESULT_FOUND: rtc == 0? PRESULT_NOT_FOUND: rtc;
 }
 
 static int do_get_adsp(char const *domain, int* policy)
@@ -331,15 +405,15 @@ fake_adsp_query_policyfile(char const *domain, int *policy)
 	char buf[512];
 	FILE *fp = fopen("POLICYFILE", "r");
 	if (fp == NULL)
-		return 3; // NXDOMAIN
+		return -4; // NXDOMAIN
 
 	char *s;
-	int rtc = -1;
+	int rtc = 0;
 	while ((s = fgets(buf, sizeof buf, fp)) != NULL)
 	{
 		if (parse_adsp(buf, policy))
 		{
-			rtc = 0;
+			rtc = 1;
 			break;
 		}
 	}
@@ -829,6 +903,12 @@ static int parse_dmarc(char *record, void *v_dmarc)
 				if (sp)
 					dmarc->sp = sp;
 			}
+			else if (strcmp(tv.tag, "np") == 0)
+			{
+				int np = none_quarantine_reject(tv.value);
+				if (np)
+					dmarc->np = np;
+			}
 			else if (strcmp(tv.tag, "adkim") == 0)
 			{
 				int a = relax_strict(tv.value);
@@ -931,21 +1011,26 @@ int verify_dmarc_addr(char const *poldo, char const *rcptdo,
 	return rtc;
 }
 
-int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
+int get_dmarc(dmarc_domains const *dd, dmarc_rec *dmarc)
 // run query and return:
-//   0  and a response if found
-//   1  found, but no dmarc retrieved
-//   3  for NXDOMAIN
-//  -1  on caller's error
-//  -2  on temporary error (includes SERVFAIL)
-//  -3  on bad DNS data or other transient error
+//   0  (PRESULT_FOUND) and a response if found
+//   1  (PRESULT_NOT_FOUND) found, but no dmarc retrieved
+//   3  (PRESULT_NXDOMAIN) for NXDOMAIN
+//  -1  (PRESULT_INT_ERROR) on caller's error
+//  -2  (PRESULT_DNS_ERROR) on temporary error (includes SERVFAIL)
+//  -3  (PRESULT_DNS_BAD) on bad DNS data or other transient error
 {
-	assert(domain);
+	assert(dd);
+	assert(dd->domain);
 	assert(dmarc);
-	assert(org_domain == NULL || strlen(org_domain) <= strlen(domain));
+	assert(dd->org_domain == NULL || strlen(dd->org_domain) <= strlen(dd->domain));
+	assert(dd->super_org == NULL || dd->org_domain != NULL);
+
+	char const *domain = dd->domain;
+	char const *org_domain = dd->org_domain;
 
 	if (domain == NULL || *domain == 0)
-		return -1;
+		return PRESULT_INT_ERROR;
 
 	// clear it on entry
 	memset(dmarc, 0, sizeof *dmarc);
@@ -956,12 +1041,13 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
 	char query[NS_BUFFER_SIZE];
 
 	if (len_d >= sizeof query)
-		return -1;
+		return PRESULT_INT_ERROR;
 
 	memcpy(query, subdomain, sizeof subdomain);
 	strcat(&query[len_sub], domain);
 
 	int found_at_org = 0;
+	int nxdomain = 0;
 
 	int rtc = (*txt_query)(query, len_d, len_sub, parse_dmarc, dmarc);
 	/*
@@ -974,6 +1060,9 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
        records is returned.	
 	*/
 
+	if (rtc == -4) // NXDOMAIN
+		nxdomain = 1;
+
 	if (rtc != 1 && org_domain && *org_domain && strcmp(domain, org_domain))
 	{
 		found_at_org = 1;
@@ -981,37 +1070,59 @@ int get_dmarc(char const *domain, char const *org_domain, dmarc_rec *dmarc)
 		memcpy(query, subdomain, sizeof subdomain);
 		strcat(&query[len_sub], org_domain);
 		rtc = (*txt_query)(query, len_d, len_sub, parse_dmarc, dmarc);
+
+		if (rtc == -4)
+			nxdomain |= 2;
+	}
+
+	if (rtc != 1 && dd->super_org && *dd->super_org &&
+		strcmp(org_domain, dd->super_org) && strcmp(domain, dd->super_org))
+	{
+		found_at_org = 2;
+		len_d = strlen(dd->super_org) + len_sub;
+		memcpy(query, subdomain, sizeof subdomain);
+		strcat(&query[len_sub], dd->super_org);
+		rtc = (*txt_query)(query, len_d, len_sub, parse_dmarc, dmarc);
 	}
 
 	if (rtc == 1)
 	{
 		// check subdomain policy that may apply
 		// don't check domains of rua addresses: do once on sending
+		dmarc->nxdomain = nxdomain;
 		dmarc->found_at_org = found_at_org;
-		dmarc->effective_p =
-			nqr_to_int(found_at_org && dmarc->sp? dmarc->sp: dmarc->p);
+		if (found_at_org == 0) // neither sp nor np are applicable
+			dmarc->effective_p = nqr_to_int(dmarc->p);
+		else if (nxdomain && dmarc->np)
+			dmarc->effective_p = nqr_to_int(dmarc->np);
+		else if (found_at_org && dmarc->sp)
+			dmarc->effective_p = nqr_to_int(dmarc->sp);
+		else
+			dmarc->effective_p = nqr_to_int(dmarc->p);
 	}
 	else
 	{
 		free(dmarc->rua);
 		memset(dmarc, 0, sizeof *dmarc);
+		dmarc->nxdomain = nxdomain;
 	}
 
-	return rtc == -4? 3: rtc >= 0? rtc != 1: rtc;
+	return rtc == -4? PRESULT_NXDOMAIN: rtc > 0? PRESULT_FOUND: rtc == 0? PRESULT_NOT_FOUND: rtc;
 }
 
 char const *presult_explain(int rtc)
 {
-	if (rtc == 0) return "found";
-	if (rtc == 1) return "not found";
-	if (rtc == 3) return "NXDOMAIN";
-	if (rtc == -1) return "internal error";
-	if (rtc == -2) return "DNS temperror";
-	if (rtc == -3) return "garbled DNS";
+	if (rtc == PRESULT_FOUND) return "found";
+	if (rtc == PRESULT_NOT_FOUND) return "not found";
+	if (rtc == PRESULT_NXDOMAIN) return "NXDOMAIN";
+	if (rtc == PRESULT_INT_ERROR) return "internal error";
+	if (rtc == PRESULT_DNS_ERROR) return "DNS temperror";
+	if (rtc == PRESULT_DNS_BAD) return "garbled DNS";
 	return "unknown error";
 }
 
 #if defined TEST_MAIN && ! defined NO_DNS_QUERY
+#include <errno.h>
 
 static void disp_dmarc(dmarc_rec *dmarc)
 {
@@ -1038,6 +1149,13 @@ static void disp_dmarc(dmarc_rec *dmarc)
 
 int main(int argc, char *argv[])
 {
+	if (query_init() < 0)
+	{
+		fprintf(stderr,
+			"cannot init query: %s", strerror(errno));
+		return 1;
+	}
+
 	if (argc >= 2)
 	{
 		if (strcmp(argv[1], "--parse") == 0)
@@ -1070,7 +1188,10 @@ int main(int argc, char *argv[])
 			}
 			dmarc_rec dmarc;
 			memset(&dmarc, 0, sizeof dmarc);
-			int rtc = get_dmarc(a, NULL, &dmarc);
+			dmarc_domains dd;
+			memset(&dd, 0, sizeof dd);
+			dd.domain = a;
+			int rtc = get_dmarc(&dd, &dmarc);
 			printf("rtc = %d %s\n", rtc, presult_explain(rtc));
 			if (rtc == 0)
 				disp_dmarc(&dmarc);
@@ -1082,6 +1203,7 @@ int main(int argc, char *argv[])
 	else
 		printf("Usage:\n\t%s domain...\nor\n\t%s --parse dmarc-record...\n",
 			argv[0], argv[0]);
+	query_done();
 	return 0;
 }
 #endif

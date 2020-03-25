@@ -2,7 +2,7 @@
 * database_statements.h - written by ale in milano on 16oct2012
 * list of statements, included multiple times
 
-Copyright (C) 2012-2015 Alessandro Vesely
+Copyright (C) 2012-2019 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -48,4 +48,5 @@ DATABASE_STATEMENT(db_sql_check_user)
 DATABASE_STATEMENT(db_sql_dmarc_agg_domain)
 DATABASE_STATEMENT(db_sql_dmarc_agg_record)
 DATABASE_STATEMENT(db_sql_set_dmarc_agg)
+DATABASE_STATEMENT(db_sql_check_dmarc_rcpt)
 

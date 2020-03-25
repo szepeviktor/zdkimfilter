@@ -42,12 +42,12 @@ struct fl_rcpt_enum;
 typedef struct fl_rcpt_enum fl_rcpt_enum;
 
 typedef void (*fl_callback)(fl_parm*);
+typedef int (*int_fl_callback_int)(fl_parm*, int);
 typedef struct fl_init_parm
 {
-	fl_callback
-		filter_fn, // filter function
-		init_complete, // called once before main loop
-		on_fork, // called on the parent, before main loop and before forking
+	fl_callback filter_fn; // filter function
+	int_fl_callback_int init_complete; // called once before main loop, can fail
+	fl_callback on_fork, // called on the parent, before main loop and before forking
 		on_sighup, on_sigusr1, on_sigusr2, // possibly null sig handlers
 		test_fn1, test_fn2, test_fn3, test_fn4; // test functions
 } fl_init_parm;

@@ -1,0 +1,37 @@
+// short-list
+//
+// Specification https://publicsuffix.org/list/
+// 
+// * The list is a set of rules, with one rule per line.
+// 
+// * Each line is only read up to the first whitespace; entire lines can 
+//   also be commented using //.
+// 
+// * Each line which is not entirely whitespace or begins with a comment 
+//   contains a rule.
+// 
+// * Each rule lists a public suffix, with the subdomain portions 
+//   separated by dots (.) as usual. There is no leading dot.
+// 
+// * The wildcard character * (asterisk) matches any valid sequence of 
+//   characters in a hostname part. (Note: the list uses Unicode, not 
+//   Punycode forms, and is encoded using UTF-8.) Wildcards are not 
+//   restricted to appear only in the leftmost position, but they must 
+//   wildcard an entire label. (I.e. *.*.foo is a valid rule: *bar.foo is 
+//   not.)
+// 
+// * Wildcards may only be used to wildcard an entire level. That is, they 
+//   must be surrounded by dots (or implicit dots, at the beginning of a 
+//   line).
+// 
+// * If a hostname matches more than one rule in the file, the longest 
+//   matching rule (the one with the most levels) will be used.
+// 
+// * An exclamation mark (!) at the start of a rule marks an exception to 
+//   a previous wildcard rule. An exception rule takes priority over any 
+//   other matching rule.
+
+*.*.foo
+!not.foo
+!x.y.foo
+

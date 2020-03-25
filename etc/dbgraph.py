@@ -37,7 +37,7 @@ BASELINE_DISP = 59.13325
 FIG_WIDTH = 2427.88
 FIG_HEIGHT = 2637.59
 
-DOTS_PER_INCH = 90.0
+DOTS_PER_INCH = 96.0
 
 # upper left coordinate for each table
 table_coord = {
@@ -46,7 +46,8 @@ table_coord = {
 	'message_in': (1784.75, 140.46),
 	'user': (73.22, 1619.36),
 	'message_out': (930, 1479.35),
-	'msg_out_ref': (930, 1043.59)}
+	'msg_out_ref': (930, 1043.59),
+	'dmarc_bounce': (1784.75, 2183.16)}
 
 # table/field links: dictionary of
 #     table['-'field]: {'coord': (x, y), 'def': blah, 'descr': blah}
@@ -184,7 +185,7 @@ fig.save(args['--out'] + '.svg')
 
 
 ###########################################
-from perlpod import pod2html, pod2fields
+from perlpod import pod2html, pod2fields, is_font
 
 # pod2fields moved to perlpod and imported here (for avfilter)
 
@@ -277,7 +278,7 @@ def read_pod(fname):
 				tables = False
 				fields = False
 		elif tables or intro.track:
-			para_dd.para += pod2html(pod_line)
+			para_dd.para += pod2html(is_font(pod_line))
 	f.close()
 
 for fname in args['--pod']:
@@ -322,7 +323,7 @@ def write_html():
 					k, def_body 
 				))
 			else:
-				out.write('\t\t<h5>%s <span>%s</span></h5>\n\t\t<p>%s' %
+				out.write('\t\t<h5>%s <span>%s</span></h5>\n\t\t%s' %
 				(
 					k[k_dash+1:], cgi.escape(image_map[k]['def']), def_body
 				))
@@ -389,7 +390,7 @@ def write_css():
 	''' write inline definitions; see:
 	http://frankmanno.com/ideas/css3-imagemap/ '''
 
-	out.write('<style type="text/css">\n')
+	out.write('<style>\n')
 	out.write('''\tdiv#dbgraph{
 		border-width: 0 0.2em 0.2em 0.2em;
 		border-style: solid;

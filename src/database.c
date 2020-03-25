@@ -5,7 +5,7 @@
 /*
 * zdkimfilter - Sign outgoing, verify incoming mail messages
 
-Copyright (C) 2012-2015 Alessandro Vesely
+Copyright (C) 2012-2019 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -113,7 +113,7 @@ static const char * const variable_name[] =
 	"", // not used variable
 	#include "database_variables.h"
 	NULL
-};	
+};
 #undef DATABASE_VARIABLE
 
 
@@ -132,13 +132,12 @@ static inline int var_is_used(flags_var const *flags, variable_id id)
 { return flags->var[id] & 0x7fU; }
 static inline void set_var_used(flags_var *flags, variable_id id)
 { flags->var[id] =
-	flags->var[id] & 0x80U | 0x7fU & (var_is_used(flags, id) + 1); }
+	(flags->var[id] & 0x80U) | (0x7fU & (var_is_used(flags, id) + 1)); }
 	
 // make sure a 64-bit flag holds all the variables we use;
 typedef int
 compile_time_check_that_FLAG_VAR_SIZE_le_64[FLAG_VAR_SIZE <= 64? 1: -1];
 typedef uint64_t var_flag_t;
-static const var_flag_t var_flag_one = 1;
 
 #define DATABASE_VARIABLE(x) \
 	static const var_flag_t x##_mask_bit = (var_flag_t)1 << x##_variable;
@@ -389,17 +388,28 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 		int count = 0;
 		fatal = 0;
 
-		STMT_ALLOC(db_sql_whitelisted, domain_mask_bit | ip_mask_bit);
+		if (dwa->z.db_backend == NULL)
+		{
+			if (in)
+				*in = 0;
+			if (out)
+				*out = 0;
+
+			return 0;
+		}
+
+		STMT_ALLOC(db_sql_whitelisted,
+			domain_mask_bit | ip_mask_bit | iprev_mask_bit);
 
 		STMT_ALLOC(db_sql_domain_flags, org_domain_mask_bit |
-			domain_mask_bit | ip_mask_bit);
+			domain_mask_bit | ip_mask_bit | iprev_mask_bit);
 
 		const var_flag_t common_variables =
 			ino_mask_bit | mtime_mask_bit | pid_mask_bit |
 			date_mask_bit |message_id_mask_bit | subject_mask_bit |
 			content_type_mask_bit | content_encoding_mask_bit |
 			from_mask_bit | mailing_list_mask_bit | envelope_sender_mask_bit |
-			ip_mask_bit;
+			ip_mask_bit | iprev_mask_bit;
 
 
 		const var_flag_t message_variables = common_variables |
@@ -415,8 +425,10 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 			vbr_mv_mask_bit | vbr_response_mask_bit |
 			reputation_mask_bit | dmarc_record_mask_bit |
 			dmarc_ri_mask_bit | original_ri_mask_bit | prefix_len_mask_bit |
-			dmarc_rua_mask_bit |dkim_result_mask_bit | dkim_order_mask_bit |
-			spf_result_mask_bit;
+			dmarc_rua_mask_bit | spf_result_mask_bit |
+			dkim_result_mask_bit;
+		// since v1.7, dkim_result here is 0 or 1 tinyint, if there is
+		// a valid signature
 
 		STMT_ALLOC(db_sql_select_domain, domain_variables);
 
@@ -426,7 +438,8 @@ int db_config_wrapup(db_work_area *dwa, int *in, int *out)
 		// domain_ref_variable used to be allowed until v1.2
 
 		STMT_ALLOC(db_sql_insert_msg_ref, domain_variables |
-			domain_ref_mask_bit | message_ref_mask_bit);
+			domain_ref_mask_bit | message_ref_mask_bit |
+			dkim_result_mask_bit | dkim_order_mask_bit | dkim_selector_mask_bit);
 
 		if (in)
 			*in = count;
@@ -488,6 +501,8 @@ int db_zag_wrapup(db_work_area *dwa, int *zag)
 		STMT_ALLOC(db_sql_set_dmarc_agg,
 			domain_mask_bit |domain_ref_mask_bit |
 			period_start_mask_bit | period_end_mask_bit);
+
+		STMT_ALLOC(db_sql_check_dmarc_rcpt, dmarc_rcpt_mask_bit);
 
 		if (zag)
 			*zag = count;
@@ -588,8 +603,8 @@ static int dump_vars(db_work_area* dwa, stmt_id sid, var_flag_t bitflag)
 	return 0;
 }
 
-static int stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
-	int count, ...)
+static int
+stmt_run_n(db_work_area* dwa, stmt_id sid, var_flag_t bitflag, int count, ...)
 /*
 * Build a statement assembling snippets and arguments, then run it.
 * count is the number of arguments that follow.
@@ -1023,6 +1038,31 @@ int db_set_dmarc_agg(db_work_area *dwa, dmarc_agg_record *dar)
 	return db_dmarc2(dwa, dar, NULL, NULL);
 }
 
+int db_check_dmarc_rcpt(db_work_area *dwa, char const *dmarc_rcpt)
+/*
+* Run statement db_sql_check_dmarc_rcpt
+* return zero if the recipient address is ok, i.e. not found in
+* bounces or no bounce table; return 1 if dmarc_rcpt shouldn't be used.
+* The query should return zero on good addresses.
+*/
+{
+	assert(dwa);
+	assert(dmarc_rcpt);
+
+	dwa->var[dmarc_rcpt_variable] = (char*)dmarc_rcpt; // won't change
+
+	int result = 0;
+	int rtc = stmt_run_n(dwa, db_sql_check_dmarc_rcpt,
+		dmarc_rcpt_mask_bit, -1, &result);
+
+	dwa->var[dmarc_rcpt_variable] = NULL;
+
+	if (rtc <= 0)
+		result = 0;
+
+	return result;
+}
+
 static inline int stmt_run(db_work_area* dwa, stmt_id sid, var_flag_t bitflag,
 	char **wantchar, int* wantint)
 /*
@@ -1200,20 +1240,33 @@ int db_connect(db_work_area *dwa)
 	return 0;
 }
 
+static char *domainstr(char* zdb_test, char const *domain)
+{
+	size_t n = strlen(domain);
+	char *next = zdb_test;
+	while (next && *next)
+	{
+		if (strncmp(next, domain, n) == 0)
+			return next + n;
+
+		next = strchr(next, ' ');
+		while (next && isspace(*(unsigned char*)next))
+			++next;
+	}
+
+	return NULL;
+}
+
 static int test_whitelisted(db_work_area* dwa, char const* domain)
 {
-	char *const h = dwa->z.db_sql_whitelisted;
-	if (h)
+	char *x = domainstr(dwa->z.db_sql_whitelisted, domain);
+	if (x)
 	{
-		char *x = strstr(h, domain);
-		if (x)
-		{
-			x += strlen(domain);
-			if (*x == ':')
-				++x;
-			return atoi(x);
-		}
+		if (*x == ':')
+			++x;
+		return atoi(x);
 	}
+
 	return 0;
 }
 
@@ -1242,7 +1295,8 @@ int db_is_whitelisted(db_work_area* dwa, char *domain)
 
 	if (dwa->stmt[db_sql_whitelisted] != NULL)
 	{
-		const var_flag_t bitflag = domain_mask_bit | ip_mask_bit;
+		const var_flag_t bitflag =
+			domain_mask_bit | ip_mask_bit | iprev_mask_bit;
 		dwa->var[domain_variable] = domain;
 		if (dwa->is_test) // need our own rtc for testsuite
 		{
@@ -1255,42 +1309,40 @@ int db_is_whitelisted(db_work_area* dwa, char *domain)
 	}
 	else if (dwa->stmt[db_sql_domain_flags] != NULL)
 	{
-		int dummy, dummier;
-		db_get_domain_flags(dwa, domain, &rtc, &dummy, &dummier);
+		int dummy, dummier, dummiest;
+		db_get_domain_flags(dwa, domain, &rtc, &dummy, &dummier, &dummiest);
 	}
 
 	return rtc;
 }
 
-static int test_domain_flags(db_work_area* dwa, char const* domain, int *three)
+static int test_domain_flags(db_work_area* dwa, char const* domain, int *four)
 {
 	// db_sql_domain_flags <SPACE> example.com:0:1:1 example.org:3:2:1 ...
-	char *const h = dwa->z.db_sql_domain_flags;
-	if (h)
+	char *x = domainstr(dwa->z.db_sql_domain_flags, domain);
+	if (x)
 	{
-		char const *x = strstr(h, domain);
-		if (x)
-		{
-			char const *z = strchr(x, ' ');
-			if (z == NULL)
-				z = x + strlen(x);
-			int rtc = 0;
-			for (char *flag = strchr(x, ':');
-				flag && flag < z && rtc < 3; flag = strchr(flag, ':'))
-					three[rtc++] = atoi(++flag);
-			return rtc;
-		}
+		char const *z = strchr(x, ' ');
+		if (z == NULL)
+			z = x + strlen(x);
+		int rtc = 0;
+		for (char *flag = strchr(x, ':');
+			flag && flag < z && rtc < 4; flag = strchr(flag, ':'))
+				four[rtc++] = atoi(++flag);
+		return rtc;
 	}
+
 	return 0;
 }
 
 int db_get_domain_flags(db_work_area* dwa, char *domain,
-	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled)
+	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled, int *count)
 /*
 * Get all domain flags needed before verifying a message.
 * If the query * is not defined, resort to db_is_whitelisted.
 * Return the number of flags retrieved, in that order, 0 if no result,
 * a negative error value otherwise.
+* zdkimfilter 1.9: add 4th variable (count)
 */
 {
 	assert(dwa == NULL || dwa->handle || dwa->is_test);
@@ -1299,6 +1351,7 @@ int db_get_domain_flags(db_work_area* dwa, char *domain,
 	assert(is_whitelisted);
 	assert(is_dmarc_enabled);
 	assert(is_adsp_enabled);
+	assert(count);
 
 	if (dwa == NULL)
 		return 0;
@@ -1313,22 +1366,23 @@ int db_get_domain_flags(db_work_area* dwa, char *domain,
 
 	int rtc;
 	const var_flag_t bitflag =
-		domain_mask_bit | ip_mask_bit | org_domain_mask_bit;
+		domain_mask_bit | ip_mask_bit | org_domain_mask_bit | iprev_mask_bit;
 
 	dwa->var[domain_variable] = domain;
 
 	if (dwa->is_test) // need our own rtc for testsuite
 	{
 		dump_vars(dwa, db_sql_whitelisted, bitflag);
-		int three[3];
-		rtc = test_domain_flags(dwa, domain, three);
-		if (rtc > 0) *is_whitelisted = three[0];
-		if (rtc > 1) *is_dmarc_enabled = three[1];
-		if (rtc > 2) *is_adsp_enabled = three[2];
+		int four[4];
+		rtc = test_domain_flags(dwa, domain, four);
+		if (rtc > 0) *is_whitelisted = four[0];
+		if (rtc > 1) *is_dmarc_enabled = four[1];
+		if (rtc > 2) *is_adsp_enabled = four[2];
+		if (rtc > 3) *count = four[3];
 	}
 	else
 		rtc = stmt_run_n(dwa, db_sql_domain_flags, bitflag,
-			-3, is_whitelisted, is_dmarc_enabled, is_adsp_enabled);
+			-4, is_whitelisted, is_dmarc_enabled, is_adsp_enabled, count);
 
 	dwa->var[domain_variable] = NULL;
 	return rtc;
@@ -1422,7 +1476,7 @@ void db_set_authenticated_user(db_work_area *dwa,
 }
 
 extern char *ip_to_hex(char const *ip); // ip_to_hex.c
-void db_set_client_ip(db_work_area *dwa, char const *ip)
+void db_set_client_ip(db_work_area *dwa, char const *ip, char const *iprev)
 {
 	assert(dwa);
 	assert(ip);
@@ -1430,6 +1484,12 @@ void db_set_client_ip(db_work_area *dwa, char const *ip)
 	if (dwa->var[ip_variable])
 		free(dwa->var[ip_variable]);
 	dwa->var[ip_variable] = ip_to_hex(ip);
+	if (iprev)
+	{
+		if (dwa->var[iprev_variable])
+			free(dwa->var[iprev_variable]);
+		dwa->var[iprev_variable] = strdup(iprev);
+	}
 }
 
 void db_set_org_domain(db_work_area *dwa, char *org_domain)
@@ -1583,23 +1643,34 @@ static void comma_copy(char *buf, char const *value, int *comma)
 
 static var_flag_t
 in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
+/*
+* Insert incoming message, including related domains and ref's.
+*/
 {
 	assert(dwa);
 	assert(info);
 
-	var_flag_t zeroflag = 0, dmarcflag = 0;
+	/*
+	* bitflag (parameter) = variables available thus far
+	* zeroflag (return value) = variables to be zeroed (not free'd)
+	* dmarcflag = const strings available only for dmarc domains
+	* (dmarc_rua and dmarc_record are "picked" and flagged already)
+	*/
+	var_flag_t zeroflag = 0, dmarcflag = dmarc_rua_mask_bit | dmarc_record_mask_bit;
 
-#define CONST_STRING(N, V) do {\
+#define CONST_DMARC_STRING(N, V) do {\
 	dwa->var[N##_variable] = (V); \
 	dmarcflag |= N##_mask_bit; \
+	zeroflag |= N##_mask_bit; \
+	bitflag |= N##_mask_bit; \
 	} while (0)
 
 	/* dmarc_{dkim,spf,dispo,reason} are message variables */
-	CONST_STRING(dmarc_dkim, info->dmarc_found && info->dkim_any?
+	CONST_DMARC_STRING(dmarc_dkim, info->dmarc_found && info->dkim_any?
 		info->dmarc_dkim? "pass": "fail": "none");
-	CONST_STRING(dmarc_spf, info->dmarc_found && info->spf_any?
+	CONST_DMARC_STRING(dmarc_spf, info->dmarc_found && info->spf_any?
 		info->dmarc_spf? "pass": "fail": "none");
-	CONST_STRING(dmarc_dispo, info->dmarc_dispo == 0? "none":
+	CONST_DMARC_STRING(dmarc_dispo, info->dmarc_dispo == 0? "none":
 		info->dmarc_dispo == 1? "quarantine": "reject");
 	char *reason;
 	switch (info->dmarc_reason)
@@ -1614,7 +1685,7 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 		case dmarc_reason_local_policy: reason = "local_policy"; break;
 		case dmarc_reason_other: reason = "other"; break;
 	}
-	CONST_STRING(dmarc_reason, reason);
+	CONST_DMARC_STRING(dmarc_reason, reason);
 
 	/* dmarc_{ri,rua,record} are domain variables */
 	char dmarc_ri_buf[MAX_DECIMAL_DIG(sizeof info->dmarc_ri)];
@@ -1629,17 +1700,12 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 		dmarc_ri_buf[0] = 0;
 		original_ri_buf[0] = 0;
 	}
-	CONST_STRING(dmarc_ri, dmarc_ri_buf);
-	CONST_STRING(original_ri, original_ri_buf);
-
-	zeroflag |= dmarcflag;
-	dmarcflag |= dmarc_rua_mask_bit | dmarc_record_mask_bit;
-	bitflag |= dmarcflag;
-
-#undef CONST_STRING
+	CONST_DMARC_STRING(dmarc_ri, dmarc_ri_buf);
+	CONST_DMARC_STRING(original_ri, original_ri_buf);
+#undef CONST_DMARC_STRING
 
 	char *var = NULL;
-	int rc = stmt_run(dwa, db_sql_insert_message, bitflag, &var, NULL);
+	int rc = stmt_run_n(dwa, db_sql_insert_message, bitflag, 1, &var);
 
 	if ((dwa->var[message_ref_variable] = var) != NULL)
 		bitflag |= message_ref_mask_bit;
@@ -1648,7 +1714,7 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 	* For each domain:
 	* Query it.  If not found, insert it, and possibly query it again so as to
 	* have a reference.  If found, update it.
-	* With the retrieved reference, insert a msg_ref.
+	* With the retrieved reference, insert msg_ref's.
 	*/
 	if (rc >= 0 && info->domain_head != NULL)
 	{
@@ -1657,10 +1723,7 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 		char authbuf[72]; // 20        30        40        50        60
 		dwa->var[auth_type_variable] = authbuf;
 
-		char dkim_order_buf[MAX_DECIMAL_DIG(sizeof (size_t))];
-		dwa->var[dkim_order_variable] = dkim_order_buf;
-		var_flag_t bit2 = auth_type_mask_bit | domain_mask_bit |
-			spf_result_mask_bit | dkim_result_mask_bit | dkim_order_mask_bit;
+		var_flag_t bit2 = auth_type_mask_bit | domain_mask_bit | spf_result_mask_bit;
 		bitflag |= bit2;
 		zeroflag |= bit2;
 
@@ -1685,7 +1748,10 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 		// reputation (usually 0) available for domain and message_ref
 		bitflag |= reputation_mask_bit;
 		zeroflag |= reputation_mask_bit;
-		
+
+		// possibly added in domain loop
+		zeroflag |= dkim_result_mask_bit | dkim_order_mask_bit | dkim_selector_mask_bit;
+
 		int scope = info->scope;
 
 		for (domain_prescreen *dps = info->domain_head;
@@ -1708,13 +1774,7 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 			if (dps->u.f.is_mfrom)
 				comma_copy(authbuf, "spf", &comma);
 			if (dps->nsigs)
-			{
-				assert(dps->dkim_order > 0);
 				comma_copy(authbuf, "dkim", &comma);
-				sprintf(dkim_order_buf, "%zu", dps->dkim_order);
-			}
-			else
-				strcpy(dkim_order_buf, "0");
 
 			if (dps->u.f.is_org_domain)
 				comma_copy(authbuf, "org", &comma);
@@ -1778,7 +1838,6 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 					comma_copy(authbuf, "nx", &comma);
 
 			dwa->var[spf_result_variable] = get_spf_result(dps->spf);
-			dwa->var[dkim_result_variable] = get_dkim_result(dps->dkim);
 
 			char rep_buf[MAX_DECIMAL_DIG(sizeof(int))];
 			sprintf(rep_buf, "%d", dps->reputation);
@@ -1787,21 +1846,27 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 			dwa->var[domain_variable] = dps->name;
 			bitflag &= ~domain_ref_mask_bit;
 
+			char str2[2]; // allow whitelist = 1 for any valid sig
+			bitflag |= dkim_result_mask_bit;
+			dwa->var[dkim_result_variable] = str2;
+			str2[0] = dps->u.f.sig_is_ok? '1': '0';
+			str2[1] = 0;
+
 			int selected = 1;
 			char *domain_ref = NULL;
-			rc = stmt_run(dwa, db_sql_select_domain, bitflag, &domain_ref, NULL);
+			rc = stmt_run_n(dwa, db_sql_select_domain, bitflag, 1, &domain_ref);
 			if (rc < 0)
 				continue;
 
 			if (domain_ref == NULL)
 			{
 				selected = 0;
-				rc = stmt_run(dwa, db_sql_insert_domain, bitflag, &domain_ref, NULL);
+				rc = stmt_run_n(dwa, db_sql_insert_domain, bitflag, 1, &domain_ref);
 				if (rc < 0)
 					continue;
 
 				if (domain_ref == NULL)
-					stmt_run(dwa, db_sql_select_domain, bitflag, &domain_ref, NULL);
+					stmt_run_n(dwa, db_sql_select_domain, bitflag, 1, &domain_ref);
 			}
 
 			if (domain_ref)
@@ -1812,9 +1877,32 @@ in_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 			}
 
 			if (selected)
-				stmt_run(dwa, db_sql_update_domain, bitflag, NULL, NULL);
+				stmt_run_n(dwa, db_sql_update_domain, bitflag, 0);
 
-			stmt_run(dwa, db_sql_insert_msg_ref, bitflag, NULL, NULL);
+			char dkim_order_buf[MAX_DECIMAL_DIG(sizeof (int))];
+			dwa->var[dkim_order_variable] = dkim_order_buf;
+			bitflag |= dkim_result_mask_bit | dkim_order_mask_bit | dkim_selector_mask_bit;
+			if (dps->nsigs)
+			{
+				for (int n = 0; n < dps->nsigs; ++n)
+				{
+					sprintf(dkim_order_buf, "%u", dps->sig[n]->dkim_order);
+					dwa->var[dkim_result_variable] = get_dkim_result(dps->sig[n]->dkim);
+					dwa->var[dkim_selector_variable] = dps->sig[n]->name;
+					stmt_run_n(dwa, db_sql_insert_msg_ref, bitflag, 0);
+				}
+			}
+			else
+			/*
+			* need at least one msg_ref for each domain
+			*/
+			{
+				strcpy(dkim_order_buf, "0");
+				dwa->var[dkim_result_variable] = get_dkim_result(dkim_none);
+				dwa->var[dkim_selector_variable] = NULL;
+				stmt_run_n(dwa, db_sql_insert_msg_ref, bitflag, 0);
+			}
+			bitflag &= ~(dkim_result_mask_bit | dkim_order_mask_bit | dkim_selector_mask_bit);
 		}
 	}
 	return zeroflag;
@@ -1888,6 +1976,12 @@ out_stmt_run(db_work_area* dwa, var_flag_t bitflag, stats_info *info)
 }
 
 void db_set_stats_info(db_work_area* dwa, stats_info *info)
+/*
+* This is called once, after filter completion, with the bulk of
+* database variables.  Special variables are set in advance, by
+* calling db_set_org_domain(), db_set_client_ip(), or
+* db_set_authenticated_user().
+*/
 {
 	assert(dwa);
 	assert(info);
@@ -1895,6 +1989,7 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 	for (int i = 0; i < DB_SQL_VAR_SIZE; ++i)
 		assert(dwa->var[i] == NULL ||
 			i == ip_variable ||
+			i == iprev_variable ||
 			i == local_part_variable ||
 			i == org_domain_variable);
 #endif
@@ -1953,6 +2048,8 @@ void db_set_stats_info(db_work_area* dwa, stats_info *info)
 
 	if (dwa->var[ip_variable] != NULL) // this may have been set in its own call
 		bitflag |= ip_mask_bit;
+	if (dwa->var[iprev_variable] != NULL) // ditto
+		bitflag |= iprev_mask_bit;
 
 #define PICK_STRING(N) \
 	if ((dwa->var[N##_variable] = info->N) != NULL) { \
@@ -2050,7 +2147,7 @@ static int autoargip(db_work_area *dwa)
 {
 	char buf[32];
 	sprintf(buf, "192.0.2.%d", (int)(rand() & 30) + 1);
-	db_set_client_ip(dwa, buf);
+	db_set_client_ip(dwa, buf, NULL);
 	return 1;
 }
 
@@ -2274,7 +2371,7 @@ int main(int argc, char*argv[])
 			"  --dry-run                            don't actually run queries\n"
 			"  --test                               force the \"test\" backend\n"
 			"  --db-sql-whitelisted domain ...      query domains\n"
-			"  --db-sql-domain_flags [org=domain] domain ...\n"
+			"  --db-sql-domain-flags [org=domain] domain ...\n"
 			"  --set-stats <d> [msg-data]           insert new data (see below)\n"
 			" [--set-stats-domain] domain[,tok] ... domains related to the message\n"
 			"\n"
@@ -2422,7 +2519,7 @@ int main(int argc, char*argv[])
 								else
 								{
 									set_client_ip = 1;
-									db_set_client_ip(dwa, arg);
+									db_set_client_ip(dwa, arg, NULL);
 								}
 
 								break;
@@ -2543,13 +2640,29 @@ int main(int argc, char*argv[])
 					}
 					else if (strcmp(arg, "dkim") == 0)
 					{
+						// size of pointer + size of object + length of name, rounded up to 32
+						size_t fixed = (sizeof dps->sig[0] + sizeof *dps->sig[0] + 11 + 31) & -32;
+						dps->sig = calloc(2, fixed);
+						dps->sig[0] = (void*)&dps->sig[2];
+						strcpy(&dps->sig[0]->name[0], "selector_1");
 						if (result)
-							dps->dkim = dkim_result_string(result);
+							dps->sig[0]->dkim = dkim_result_string(result);
 						else
-							dps->dkim = rand()/32 % 7;
-						dps->u.f.sig_is_ok = dps->dkim == dkim_pass;
+							dps->sig[0]->dkim = rand()/32 % 7;
+						dps->u.f.sig_is_ok = dps->sig[0]->dkim == dkim_pass;
 						dps->nsigs = rand() % 2 + 1;
-						dps->dkim_order = ++dkim_order;
+						dps->sig[0]->dkim_order = ++dkim_order;
+						if (dps->nsigs > 1)
+						{
+							dps->sig[1] = dps->sig[0] + fixed/sizeof dps->sig[0] - 1;
+							strcpy(&dps->sig[1]->name[0], "selector_2");
+							if (result)
+								dps->sig[1]->dkim = dkim_result_string(result);
+							else
+								dps->sig[1]->dkim = rand()/32 % 7;
+							dps->sig[1]->dkim_order = ++dkim_order;
+							dps->u.f.sig_is_ok |= dps->sig[1]->dkim == dkim_pass;
+						}
 					}
 					else if (strcmp(arg, "vbr") == 0)
 					{
@@ -2646,7 +2759,7 @@ int main(int argc, char*argv[])
 					if (dps->u.f.is_mfrom || dps->u.f.is_helo)
 						dps->spf = rand() % (spf_pass + 1);
 					dps->u.f.sig_is_ok = rand() > PERC_20;
-					dps->dkim = dps->u.f.sig_is_ok? dkim_pass: dkim_fail;
+					dps->sig[0]->dkim = dps->u.f.sig_is_ok? dkim_pass: dkim_fail;
 					dps->u.f.is_reputed  = rand() > PERC_10;
 					if (dps->u.f.is_reputed)
 					{
@@ -2678,6 +2791,7 @@ int main(int argc, char*argv[])
 			for (domain_prescreen *dps = stats.domain_head; dps;)
 			{
 				domain_prescreen *next = dps->next;
+				free(dps->sig);
 				free(dps);
 				dps = next;
 			}
@@ -2712,11 +2826,11 @@ int main(int argc, char*argv[])
 						continue;
 					}
 
-					int w = 0, d = 0, a = 0,
-						c = db_get_domain_flags(dwa, argv[i], &w, &d, &a);
+					int w = 0, d = 0, a = 0, n = 0,
+						c = db_get_domain_flags(dwa, argv[i], &w, &d, &a, &n);
 					printf("%d of the following were set for %s:\n"
-						"  whitelisted = %d, do DMARC = %d, do ADSP = %d\n",
-							c, argv[i], w, d, a);						
+						"  whitelisted = %d, do DMARC = %d, do ADSP = %d, count = %d\n",
+							c, argv[i], w, d, a, n);
 				}
 			}
 	}
@@ -2741,13 +2855,13 @@ int db_config_wrapup(db_work_area* dwa, int *in, int *out)
 int db_connect(db_work_area *dwa) { return 0; }
 int db_is_whitelisted(db_work_area* dwa, char *domain) {return 0;}
 int db_get_domain_flags(db_work_area* dwa, char *domain,
-	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled)
+	int *is_whitelisted, int *is_dmarc_enabled, int *is_adsp_enabled, int *count)
 	{return 0;}
 char *db_check_user(db_work_area* dwa) {return NULL;}
 
 void db_set_authenticated_user(db_work_area *dwa,
 	char const *local_part, char const *domain) {}
-void db_set_client_ip(db_work_area *dwa, char const *ip) {}
+void db_set_client_ip(db_work_area *dwa, char const *ip, char const*i) {}
 void db_set_stats_info(db_work_area* dwa, stats_info *info) {}
 void db_set_org_domain(db_work_area *dwa, char *org_domain) {}
 #if defined TEST_MAIN

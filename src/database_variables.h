@@ -2,7 +2,7 @@
 * database_variables.h - written by ale in milano on 29sep2012
 * list of variables, included multiple times
 
-Copyright (C) 2012-2015 Alessandro Vesely
+Copyright (C) 2012-2019 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -58,12 +58,14 @@ DATABASE_VARIABLE(adsp_flags)
 DATABASE_VARIABLE(dmarc_record)
 DATABASE_VARIABLE(dmarc_rua)
 DATABASE_VARIABLE(dmarc_ri)
+DATABASE_VARIABLE(dmarc_rcpt)
 DATABASE_VARIABLE(original_ri)
 DATABASE_VARIABLE(dmarc_dkim)
 DATABASE_VARIABLE(dmarc_spf)
 DATABASE_VARIABLE(spf_result)
 DATABASE_VARIABLE(dkim_result)
 DATABASE_VARIABLE(dkim_order)
+DATABASE_VARIABLE(dkim_selector)
 DATABASE_VARIABLE(dmarc_reason)
 DATABASE_VARIABLE(dmarc_dispo)
 DATABASE_VARIABLE(message_status)
@@ -75,5 +77,6 @@ DATABASE_VARIABLE(complaint_flag)
 DATABASE_VARIABLE(period_start)
 DATABASE_VARIABLE(period_end)
 DATABASE_VARIABLE(period)
+DATABASE_VARIABLE(iprev)
 
 

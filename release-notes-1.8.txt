@@ -1,0 +1,20 @@
+Bug fix
+=======
+
+Null pointer on multiple signatures
+if only the first is verified.
+
+in db_sql_dmarc_agg_record substitute
+COUNT(*) with COUNT(DISTINCT(m.id))
+
+
+Other changes:
+==============
+
+Skip DB if there is no db_backend.
+Previously, the presence of db_statements
+was enough to trigger DB functions, and
+the absence of db_backend would cause an
+error.  Now it should be enough to
+comment out db_backend.
+

@@ -1,0 +1,13 @@
+// psddmarc.org
+//
+// This list follows the same rules specified for PSL:
+// https://publicsuffix.org/list/
+// 
+
+
+// longest public suffix have 5 labels
+// (e.g. app.os.stg.fedoraproject.org)
+
+*.*.*.*.*.*.*.*
+!gov.uk
+!mil

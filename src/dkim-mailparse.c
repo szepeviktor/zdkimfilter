@@ -6,6 +6,11 @@
 **    All rights reserved.
 */
 
+#include <config.h>
+#if !ZDKIMFILTER_DEBUG
+#define NDEBUG
+#endif
+
 /* system inludes */
 #include <sys/types.h>
 #include <ctype.h>
@@ -13,18 +18,27 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 /* libopendkim includes */
 #include "dkim-mailparse.h"
+
+#include <assert.h>
 
 /* types */
 typedef unsigned long cmap_elem_type;
 
 /* symbolic names */
-#define DKIM_MAILPARSE_OK 		0 	/* success */
-#define DKIM_MAILPARSE_ERR_PUNBALANCED	1	/* unbalanced parentheses */
-#define DKIM_MAILPARSE_ERR_QUNBALANCED	2	/* unbalanced quotes */
-#define DKIM_MAILPARSE_ERR_SUNBALANCED	3	/* unbalanced sq. brackets */
+#define MY_MAILPARSE_OK                0   /* success */
+#define MY_MAILPARSE_ERR_PUNBALANCED   1   /* unbalanced parentheses */
+#define MY_MAILPARSE_ERR_QUNBALANCED   2   /* unbalanced quotes */
+#define MY_MAILPARSE_ERR_SUNBALANCED   3   /* unbalanced sq. brackets */
+#define MY_MAILPARSE_ERR_ESCAPE_EOS    4   /* cannot escape end-of-string */
+#define MY_MAILPARSE_ERR_ANGLE_BRA     5   /* found closed bracket only */
+#define MY_MAILPARSE_ERR_BAD_LITERAL   6   /* unexpected special between [] */
+#define MY_MAILPARSE_ERR_MANY_AT       7   /* multiple @'s, not source-route */
+#define MY_MAILPARSE_ERR_NO_DOMAIN     8   /* domain cannot be empty */
+#define MY_MAILPARSE_ERR_SEMICOL       9   /* ';' without group syntax */
 
 /* a bitmap for the "specials" character class */
 #define	CMAP_NBITS	 	(sizeof(cmap_elem_type) * CHAR_BIT)
@@ -34,7 +48,7 @@ typedef unsigned long cmap_elem_type;
 #define	CMAP_TST(ar, c)    	((ar)[CMAP_INDEX(c)] &  CMAP_BIT(c))
 #define	CMAP_SET(ar, c)    	((ar)[CMAP_INDEX(c)] |= CMAP_BIT(c))
 
-static unsigned char const SPECIALS[] = "<>@,;:\\\"/[]?=";
+static unsigned char const SPECIALS[] = "()<>@,;:\\\"/[]";
 
 static cmap_elem_type /* almost const */ is_special[CMAP_NELEMS] = { 0 };
 static int /* almost const */ inited = 0;
@@ -47,7 +61,7 @@ static int /* almost const */ inited = 0;
 */
 
 void
-dkim_mail_parse_init __P((void))
+my_mail_parse_init __P((void))
 {
 	/* set up special finder */
 	size_t		i;
@@ -57,7 +71,7 @@ dkim_mail_parse_init __P((void))
 }
 
 
-#ifdef DKIM_MAILPARSE_TEST
+#ifdef TEST_MAIN
 /*
 **  DKIM_MAIL_UNESCAPE -- remove escape characters from a string
 **
@@ -69,10 +83,9 @@ dkim_mail_parse_init __P((void))
 */
 
 static char *
-dkim_mail_unescape(char *s)
+my_mail_unescape(char *s)
 {
-	char 		*w;
-	char const 	*r, *p, *e;
+	char *w, *r, *p, *e;
 
 	if (s == NULL)
 		return NULL;
@@ -112,7 +125,7 @@ dkim_mail_unescape(char *s)
 
 	return s;
 }
-#endif /* DKIM_MAILPARSE_TEST */
+#endif /* TEST_MAIN */
 
 /*
 **  DKIM_MAIL_MATCHING_PAREN -- return the location past matching opposite
@@ -131,8 +144,8 @@ dkim_mail_unescape(char *s)
 **  	everything is balanced.
 */
 
-static u_char *
-dkim_mail_matching_paren(u_char *s, u_char *e, int open_paren, int close_paren)
+static char *
+my_mail_matching_paren(char *s, char *e, int open_paren, int close_paren)
 {
 	int 		paren = 1;
 
@@ -157,94 +170,6 @@ dkim_mail_matching_paren(u_char *s, u_char *e, int open_paren, int close_paren)
 	return s;
 }
 
-/*
-**  DKIM_MAIL_FIRST_SPECIAL -- find the first "special" character
-**
-**  Parameters:
-**  	p -- input string
-**  	e -- end of input string
-**  	special_out -- pointer to the first special character found
-**
-**  Return value:
-**  	0 on success, or an DKIM_MAILPARSE_ERR_* on failure.
-*/
-
-static int
-dkim_mail_first_special(u_char *p, u_char *e, u_char **special_out)
-{
-	u_char		*at_ptr = NULL;
-
-	for (; p < e && *p != '\0'; p++)
-	{
-		/* skip white space between tokens */
-		while (p < e && (*p == '(' ||
-		                 (isascii(*p) && isspace(*p))))
-		{
-			if (*p != '(')
-			{
-				p++;
-			}
-			else
-			{
-				p = dkim_mail_matching_paren(p + 1, e,
-				                             '(', ')');
-				if (*p == '\0')
-					return DKIM_MAILPARSE_ERR_PUNBALANCED;
-				else
-					p++;
-			}
-		}
-
-		if (*p == '\0')
-			break;
-
-		if (*p == '"')
-		{
-			p = dkim_mail_matching_paren(p + 1, e, '\0', '"');
-			if (*p == '\0')
-				return DKIM_MAILPARSE_ERR_QUNBALANCED;
-		}
-		else if (*p == '[')
-		{
-			p = dkim_mail_matching_paren(p + 1, e, '\0', ']');
-			if (*p == '\0')
-				return DKIM_MAILPARSE_ERR_SUNBALANCED;
-		}
-		else if (CMAP_TST(is_special, *p))
-		{
-			if (*p == '<')
-			{
-				*special_out = p;
-				return 0;
-			}
-			else if (*p == ':' || *p == ';' || *p == ',')
-			{
-				if (at_ptr != NULL)
-					*special_out = at_ptr;
-				else
-					*special_out = p;
-				return 0; 
-			}
-			else if (*p == '@')
-			{
-				at_ptr = p;
-			}
-		}
-		else
-		{
-			while (*p != '\0' &&
-			       !CMAP_TST(is_special, *p) &&
-			       (!isascii(*p) ||
-			        !isspace((unsigned char) *p)) &&
-			       *p != '(')
-				p++;
-			p--;
-		}
-	}
-
-	*special_out = p;
-	return 0;
-}
 
 /*
 **  DKIM_MAIL_TOKEN -- find the next token
@@ -254,23 +179,22 @@ dkim_mail_first_special(u_char *p, u_char *e, u_char **special_out)
 **  	e -- end of input string
 **  	type_out -- type of token (returned)
 **  	start_out -- start of token (returned)
-**  	end_out -- start of token (returned)
+**  	end_out -- end of token (returned)
 **  	uncommented_whitespace -- set to TRUE if uncommented whitespace is
 **  	                          discovered (returned)
 **
 **  Return value:
-**  	0 on success, or an DKIM_MAILPARSE_ERR_* on failure.
+**  	0 on success, or an MY_MAILPARSE_ERR_* on failure.
 */
 
 static int
-dkim_mail_token(u_char *s, u_char *e, int *type_out, u_char **start_out,
-                u_char **end_out, int *uncommented_whitespace)
+my_mail_token(char *s, char *e, int *type_out, char **start_out,
+                char **end_out, int *uncommented_whitespace)
 {
-	u_char *p;
+	char *p;
 	int err = 0;
-	size_t i;
 	int token_type;
-	u_char *token_start, *token_end;
+	char *token_start, *token_end;
 
 	*start_out = NULL;
 	*end_out   = NULL;
@@ -278,16 +202,13 @@ dkim_mail_token(u_char *s, u_char *e, int *type_out, u_char **start_out,
 
 	err = 0;
 
-	/* set up special finder */
-	for (i = 0; SPECIALS[i] != '\0'; i++)
-		CMAP_SET(is_special, SPECIALS[i]);
-
+	assert(inited);
 	p = s;
 
 	/* skip white space between tokens */
 	while (p < e && (*p == '(' ||
-	                 (isascii((unsigned char) *p) &&
-	                  isspace((unsigned char) *p))))
+	                 (isascii(*(unsigned char *)p) &&
+	                  isspace(*(unsigned char *)p))))
 	{
 		if (*p != '(')
 		{
@@ -296,9 +217,9 @@ dkim_mail_token(u_char *s, u_char *e, int *type_out, u_char **start_out,
 		}
 		else
 		{
-			p = dkim_mail_matching_paren(p + 1, e, '(', ')');
+			p = my_mail_matching_paren(p + 1, e, '(', ')');
 			if (*p == '\0')
-				return DKIM_MAILPARSE_ERR_PUNBALANCED;
+				return MY_MAILPARSE_ERR_PUNBALANCED;
 			else
 				p++;
 		}
@@ -313,33 +234,35 @@ dkim_mail_token(u_char *s, u_char *e, int *type_out, u_char **start_out,
 	/* fill in the token contents and type */
 	if (*p == '"')
 	{
-		token_end = dkim_mail_matching_paren(p + 1, e, '\0', '"');
+		token_end = my_mail_matching_paren(p + 1, e, '\0', '"');
 		token_type = '"';
 		if (*token_end != '\0')
 			token_end++;
 		else
-			err = DKIM_MAILPARSE_ERR_QUNBALANCED;
+			err = MY_MAILPARSE_ERR_QUNBALANCED;
 	}
 	else if (*p == '[')
 	{
-		token_end = p = dkim_mail_matching_paren(p + 1, e, '\0', ']');
+		token_end = p = my_mail_matching_paren(p + 1, e, '\0', ']');
 		token_type = '[';
 		if (*token_end != '\0')
 			token_end++;
 		else
-			err = DKIM_MAILPARSE_ERR_SUNBALANCED;
+			err = MY_MAILPARSE_ERR_SUNBALANCED;
 	}
-	else if (CMAP_TST(is_special, *p))
+	else if (CMAP_TST(is_special, *(unsigned char*)p))
 	{
 		token_end  = p + 1;
 		token_type = *p;
 	}
 	else
 	{
-		while (p < e && *p != '\0' && !CMAP_TST(is_special, *p) &&
-		       (!isascii(*p) || !isspace((unsigned char) *p)) &&
-		       *p != '(')
-			p++;
+		int ch;
+		while ((ch = *(unsigned char*)p) != '\0' &&
+				!CMAP_TST(is_special, ch) &&
+				(!isascii(ch) || !isspace(ch)) &&
+				*p != '(')
+			++p;
 
 		token_end = p;
 		token_type = 'x';
@@ -350,6 +273,56 @@ dkim_mail_token(u_char *s, u_char *e, int *type_out, u_char **start_out,
 	*type_out  = token_type;
 
 	return err;
+}
+
+static int end_token(char **cont, char *in)
+{
+	bool escaped = false, quoted = false;
+	int parens = 0, rtc = 0;
+
+	for (char *p = in; ; ++p)
+	{
+		if (escaped)
+		{
+			escaped = false;
+			continue;
+		}
+
+		switch (*p)
+		{
+		  case '\\':
+			escaped = true;
+			continue;
+
+		  case '"':
+			quoted = !quoted;
+			continue;
+
+		  case '(':
+			++parens;
+			continue;
+
+		  case ')':
+			if (--parens < 0)
+				rtc = MY_MAILPARSE_ERR_PUNBALANCED;
+
+			continue;
+
+		  case ',':
+			if (parens > 0 || quoted)
+				continue;
+
+			*cont = ++p;
+			return rtc;
+
+		  case '\0':
+			if (parens || quoted)
+				rtc = parens? MY_MAILPARSE_ERR_PUNBALANCED:
+					MY_MAILPARSE_ERR_QUNBALANCED;
+			*cont = p;
+			return rtc;
+		}
+	}
 }
 
 /*
@@ -363,133 +336,224 @@ dkim_mail_token(u_char *s, u_char *e, int *type_out, u_char **start_out,
 **    cont -- continuation point for a further call (returned)
 **
 **  Return value:
-**  	0 on success, or an DKIM_MAILPARSE_ERR_* on failure.
+**  	0 on success, or an MY_MAILPARSE_ERR_* on failure.
 **
 **  Notes:
 **  	Input string is modified.
 */
 
 int
-dkim_mail_parse_c(unsigned char *line, unsigned char **user_out,
-                unsigned char **domain_out, unsigned char **cont)
+my_mail_parse_c(char *entry_line, char **user_out,
+                char **domain_out, char **cont)
 {
-	int type;
-	int ws;
-	int err;
-	u_char *e, *special;
-	u_char *tok_s, *tok_e;
-	u_char *w;
+	assert(entry_line);
+	assert(user_out);
+	assert(domain_out);
+	assert(cont);
+
 
 	*user_out = NULL;
 	*domain_out = NULL;
 
-	err = 0;
-	w = line;
-	e = line + strlen((char *) line);
-	ws = 0;
+	int type;
+	int ws = 0;
+	int err = 0;
+	char *tok_s, *tok_e;
+	char *line = entry_line;
+	char *w = line;
+	char *e = line + strlen(line);
+	bool angle_bracket = false, seen_at = false, ignore_input = false,
+		seen_group = false;
 
 	/* non-multithreaded clients don't have to initialize */
 	if (inited == 0)
-		dkim_mail_parse_init();
+		my_mail_parse_init();
 
 	for (;;)
 	{
-		err = dkim_mail_first_special(line, e, &special);
-		if (err != 0)
-			return err;
-		
-		/* given the construct we're looking at, do the right thing */
-		switch (*special)
+		err = my_mail_token(line, e, &type, &tok_s, &tok_e, &ws);
+		if (err != 0  || type == '\0')
 		{
-		  case '<':
-			/* display name <address> */
-			line = special + 1;
-			for (;;)
+			*w = 0;
+			end_token(cont, line);
+			if (err == 0)
 			{
-				err = dkim_mail_token(line, e, &type, &tok_s,
-				                      &tok_e, &ws);
-				if (err != 0)
-					return err;
-
-				if (type == '>' || type == '\0')
-				{
-					*w = '\0';
-					*cont = tok_e;
-					return 0;
-				}
-				else if (type == '@')
-				{
-					*w++ = '\0';
-					*domain_out = w;
-				}
-				else if (type == ',' || type == ':')
-				{
-					/* source route punctuation */
-					*user_out = NULL;
-					*domain_out = NULL;
-				}
-				else
-				{
-					if (*user_out == NULL)
-						*user_out = w;
-					memmove(w, tok_s, tok_e - tok_s);
-					w += tok_e - tok_s;
-				}
-				line = tok_e;
+				if (*domain_out == NULL || **domain_out == 0)
+					err = MY_MAILPARSE_ERR_NO_DOMAIN;
+				else if (angle_bracket)
+					err = MY_MAILPARSE_ERR_ANGLE_BRA;
 			}
-
-		  case ';':
-		  case ':':
-		  case ',':
-			/* skip a group name or result */
-		  	line = special + 1;
-			break;
-
-		  default:
-			/* (display name) addr(display name)ess */
-			ws = 0;
-			for (;;)
-			{
-				err = dkim_mail_token(line, e, &type, &tok_s,
-				                      &tok_e, &ws);
-				if (err != 0)
-					return err;
-
-				if (type == '\0' ||  type == ',' || type == ';')
-				{
-					*w = '\0';
-					break;
-				}
-				else if (type == '@')
-				{
-					*w++ = '\0';
-					*domain_out = w;
-					ws = 0;
-				}
-				else
-				{
-
-					if (*user_out == NULL)
-						*user_out = w;
-					else if (type == 'x' && ws == 1)
-						*w++ = ' ';
-
-					memmove(w, tok_s, tok_e - tok_s);
-					w += tok_e - tok_s;
-
-					ws = 0;
-				}
-
-				line = tok_e;
-			}
-			*cont = line;
-			return 0;
+			return err;
 		}
+
+		if (type == '<')
+		{
+			*user_out = NULL;
+			*domain_out = NULL;
+			w = entry_line;
+			line = tok_s + 1;
+			angle_bracket = true;
+		}
+		else if (type == '>')
+		{
+			if (angle_bracket)
+			{
+				*w = '\0';
+				err = end_token(cont, tok_e);
+				if (err == 0 &&
+					(*domain_out == NULL || **domain_out == 0))
+						err = MY_MAILPARSE_ERR_NO_DOMAIN;
+				return err;
+			}
+			*user_out = NULL;
+			*domain_out = NULL;
+			end_token(cont, tok_e);
+			return MY_MAILPARSE_ERR_ANGLE_BRA;
+		}
+		else if (type == ')' || type == ']')
+		{
+			*user_out = NULL;
+			*domain_out = NULL;
+			end_token(cont, tok_e);
+			return type == ')'? MY_MAILPARSE_ERR_PUNBALANCED:
+				MY_MAILPARSE_ERR_SUNBALANCED;
+		}
+		else if (type == '@')
+		{
+			if (w > entry_line && !ignore_input) // have user
+			{
+				if (seen_at)
+				{
+					*domain_out = NULL;
+					end_token(cont, tok_e);
+					return MY_MAILPARSE_ERR_MANY_AT;
+				}
+				*w++ = '\0';
+				*domain_out = w;
+				seen_at = true;
+			}
+			else
+			/*
+			* @example.com must be a source route.
+			*/
+				ignore_input = true;
+		}
+		else if (type == ':' || type == ';')
+		{
+			/* group or source-routing */
+			*user_out = NULL;
+			*domain_out = NULL;
+			w = entry_line;
+			ignore_input = false;
+
+			if (!ignore_input) // group
+			{
+				if (type == ':')
+					seen_group = true;
+				else if (seen_group)
+					seen_group = false;
+				else // lone ';'
+				{
+					end_token(cont, tok_e);
+					return MY_MAILPARSE_ERR_SEMICOL;
+				}
+			}
+		}
+		else if (type == '\\')
+		{
+			if (!ignore_input)
+			{
+				if (*user_out == NULL)
+					*user_out = w;
+				int ch = *(unsigned char*)tok_e++;
+				do
+				{
+					*w++ = ch;
+					ch = *(unsigned char*)tok_e++;
+				} while ((ch & 0xc0) == 0x80);
+				--tok_e;
+			}
+		}
+		else if (type == ',')
+		{
+			*w = 0;
+			*cont = tok_e;
+			return 	(*domain_out == NULL || **domain_out == 0)?
+				MY_MAILPARSE_ERR_NO_DOMAIN: 0;
+		}
+		else if (type == '[')
+		{
+			if (*domain_out == w && !ignore_input)
+			{
+				int i_type, nu;
+				char *i_tok_s, *i_tok_e;
+
+				++tok_s;
+				*w++ = '[';
+				for (;;)
+				{
+					err = my_mail_token(tok_s, tok_e, &i_type, &i_tok_s, &i_tok_e, &nu);
+					if (err == 0 && (i_type == 'x' || i_type == ':' || i_type == ']'))
+					{
+						if (i_type == 'x')
+						{
+							memmove(w, i_tok_s, i_tok_e - i_tok_s);
+							w += i_tok_e - i_tok_s;
+						}
+						else if (i_type == ':')
+							*w++ = ':';
+						else
+						{
+							assert(i_type == ']');
+							break;
+						}
+						tok_s = i_tok_e;
+					}
+					else
+					{
+						*domain_out = NULL;
+						end_token(cont, line);
+						return MY_MAILPARSE_ERR_BAD_LITERAL;
+					}
+				}
+				*w++ = ']';
+			}
+			else
+			{
+				*user_out = NULL;
+				*domain_out = NULL;
+				end_token(cont, line);
+				return MY_MAILPARSE_ERR_BAD_LITERAL;
+			}
+		}
+		else if (!ignore_input)
+		{
+			bool local_part = false;
+			if (type == '"') // remove quotes
+			{
+				++tok_s;
+				--tok_e;
+			}
+			if (*user_out == NULL)
+			{
+				*user_out = w;
+				local_part = true;
+			}
+			memmove(w, tok_s, tok_e - tok_s);
+			w += tok_e - tok_s;
+			if (type == '"') // restore token
+			{
+				++tok_e;
+				if (local_part)
+					*w++ = 0; // in case local part is empty
+			}
+		}
+		line = tok_e;
 	}
 }
 
 /*
-**  DKIM_MAIL_PARSE -- compatibility function, see dkim_mail_parse_c
+**  DKIM_MAIL_PARSE -- compatibility function, see my_mail_parse_c
 **
 **  Parameters:
 **  	line -- input line
@@ -497,7 +561,7 @@ dkim_mail_parse_c(unsigned char *line, unsigned char **user_out,
 **  	domain_out -- pointer to hostname (returned)
 **
 **  Return value:
-**  	0 on success, or an DKIM_MAILPARSE_ERR_* on failure.
+**  	0 on success, or an MY_MAILPARSE_ERR_* on failure.
 **
 **  Notes:
 **    Don't use this function, use the new one instead.
@@ -505,31 +569,234 @@ dkim_mail_parse_c(unsigned char *line, unsigned char **user_out,
 */
 
 int
-dkim_mail_parse(unsigned char *line, unsigned char **user_out,
-                unsigned char **domain_out)
+my_mail_parse(char *line, char **user_out, char **domain_out)
 {
-	unsigned char *nu;
-	return dkim_mail_parse_c(line, user_out, domain_out, &nu);
+	assert(line);
+	assert(user_out);
+	assert(domain_out);
+
+	char *nu;
+	return my_mail_parse_c(line, user_out, domain_out, &nu);
 }
 
 
-#ifdef DKIM_MAILPARSE_TEST
-int
-main(int argc, char **argv)
+#ifdef TEST_MAIN
+
+#define MAX_CONT_ARRAY 3 // cannot be flexible?
+static const struct addr_test
+{
+	char const *src; // the string to test
+	int nres;        // number of results expected
+	struct addr_test_result
+	{
+		char const *user;
+		char const *domain;
+		int rtc;
+	} res[MAX_CONT_ARRAY];
+} addr_test[] =
+{
+	/*
+	* NOTES:
+	* When an error is returned, user and domain are what they are.
+	* Address literals are not checked to be valid IPv4 or IPv6.
+	* Domain names are not checked for validity.
+	* Local-part starting with '.' or with consecutive 's's are allowed.
+	* Escaping backslashes are allowed also outside of quoted strings.
+	*/
+	{"user@example.com", 1, {{"user", "example.com", MY_MAILPARSE_OK}}},
+	{".user@example.com", 1, {{".user", "example.com", MY_MAILPARSE_OK}}}, // bad
+	{".us..er@example.com", 1, {{".us..er", "example.com", MY_MAILPARSE_OK}}}, // bad
+	{";user@example.com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"us;er@example.com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"user;@example.com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"user@;example.com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"user@example;com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"user@example.com;", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"U. Ser <;user@example.com>", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"U. Ser <us;er@example.com>", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"U. Ser <user;@example.com>", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"U. Ser <user@;example.com>", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"U. Ser <user@example;com>", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"U. Ser <user@example.com;", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SEMICOL}}},
+	{"U. Ser <user@example.com", 1, {{"user", "example.com", MY_MAILPARSE_ERR_ANGLE_BRA}}},
+	{"[user]@example.com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_BAD_LITERAL}}},
+	{"us[er]@example.com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_BAD_LITERAL}}},
+	{"U.S. <us[er]@example.com>", 1, {{NULL, NULL, MY_MAILPARSE_ERR_BAD_LITERAL}}},
+	{"user]@example.com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SUNBALANCED}}},
+	{"U.S. <user]@example.com>", 1, {{NULL, NULL, MY_MAILPARSE_ERR_SUNBALANCED}}},
+	{"user@[]example.com", 1, {{"user", "[]example.com", MY_MAILPARSE_OK}}},  // bad
+	{"U.S. <user@[]example.com>", 1, {{"user", "[]example.com", MY_MAILPARSE_OK}}},  //bad
+	{"user@example.[]com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_BAD_LITERAL}}},
+	{"U.S. <user@example.[]com>", 1, {{NULL, NULL, MY_MAILPARSE_ERR_BAD_LITERAL}}},
+	{"user@example.com[]", 1, {{NULL, NULL, MY_MAILPARSE_ERR_BAD_LITERAL}}},
+	{"U.S. <user@example.com[]>", 1, {{NULL, NULL, MY_MAILPARSE_ERR_BAD_LITERAL}}},
+	{"U.S. <user@example.com> []", 1, {{"user", "example.com", MY_MAILPARSE_OK}}}, // ?
+	{"\"user@example.com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_QUNBALANCED}}},
+	{"\"user\\\"@example.com", 1, {{NULL, NULL, MY_MAILPARSE_ERR_QUNBALANCED}}},
+	{"\"\"\"@example.com", 1, {{"", NULL, MY_MAILPARSE_ERR_QUNBALANCED}}},
+	{"\"\"@example.com", 1, {{"", "example.com", MY_MAILPARSE_OK}}},
+	{"Empty local part <\"\"@example.com>", 1, {{"", "example.com", MY_MAILPARSE_OK}}},
+	{"\"\"@ , \"\" , @", 3, {{"", "", MY_MAILPARSE_ERR_NO_DOMAIN},
+		{"", NULL, MY_MAILPARSE_ERR_NO_DOMAIN}, {NULL, NULL, MY_MAILPARSE_ERR_NO_DOMAIN}}},
+	{"user@example@example.com, user (without @), The <user (without @)>", 3, {{"user", NULL, MY_MAILPARSE_ERR_MANY_AT},
+		{"user", NULL, MY_MAILPARSE_ERR_NO_DOMAIN}, {"user", NULL, MY_MAILPARSE_ERR_NO_DOMAIN}}},
+	{"user@@example.com, user (with trailing @)@, The <user (without @)>@", 3, {{"user", NULL, MY_MAILPARSE_ERR_MANY_AT},
+		{"user", "", MY_MAILPARSE_ERR_NO_DOMAIN}, {"user", NULL, MY_MAILPARSE_ERR_NO_DOMAIN}}},
+	{"@1.example @2.example: user@example.com", 1, {{"user", "example.com", MY_MAILPARSE_OK}}},
+	{"a@b.c,d@e.f,g@h.i", 3, {{"a", "b.c", MY_MAILPARSE_OK}, {"d", "e.f", MY_MAILPARSE_OK},
+		{"g", "h.i", MY_MAILPARSE_OK}}},
+	{"\"I have spaces\"@example.com", 1, {{"I have spaces", "example.com", MY_MAILPARSE_OK}}},
+	{"\"I have  two  spaces\"@example.com", 1, {{"I have  two  spaces", "example.com", MY_MAILPARSE_OK}}},
+	{"To: user@example.com", 1, {{"user", "example.com", MY_MAILPARSE_OK}}},
+	{"To: U. Ser <user@example.com>", 1, {{"user", "example.com", MY_MAILPARSE_OK}}},
+	{"To: U. Ser <user@example.com> not continued", 1, {{"user", "example.com", MY_MAILPARSE_OK}}}, // ?
+	{"To: U\" Ser <user@example.com> not continued", 1, {{"U", NULL, MY_MAILPARSE_ERR_QUNBALANCED}}},
+	{"To: \"someone@example.org\" <user@example.com>", 1, {{"user", "example.com", MY_MAILPARSE_OK}}},
+	{"To: someone\\@example.org <user@example.com>", 1, {{"user", "example.com", MY_MAILPARSE_OK}}},
+	{"Bcc: User with a comma <user\\,@example.com>", 1, {{"user,", "example.com", MY_MAILPARSE_OK}}},
+	{"Bcc: User with a comma <\"user,\"@example.com>", 1, {{"user,", "example.com", MY_MAILPARSE_OK}}},
+	{"Bcc: User with inner comma <us\\,er@example.com>", 1, {{"us,er", "example.com", MY_MAILPARSE_OK}}},
+	{"Bcc: User with inner comma <\"us,er\"@example.com>", 1, {{"us,er", "example.com", MY_MAILPARSE_OK}}},
+	{"Bcc: User with leading comma <\\,user@example.com>", 1, {{",user", "example.com", MY_MAILPARSE_OK}}},
+	{"Bcc: User with leading comma <\",user\"@example.com>", 1, {{",user", "example.com", MY_MAILPARSE_OK}}},
+	{"user\\,@example.com", 1, {{"user,", "example.com", MY_MAILPARSE_OK}}},
+	{"From: final.comma@example.org ,", 1, {{"final.comma", "example.org", MY_MAILPARSE_OK},
+		{NULL, NULL, MY_MAILPARSE_OK}}},
+	{"From: final.comma@example.org , ", 2, {{"final.comma", "example.org", MY_MAILPARSE_OK},
+		{NULL, NULL, MY_MAILPARSE_ERR_NO_DOMAIN}}},
+	{"From: first@example.org , second@example.com", 2, {{"first", "example.org", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"From: \"first,last\"@example.org , second(is it?\n)@example.com", 2, {{"first,last", "example.org", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"From: \"first.last\"@example.org , second@example.com", 2, {{"first.last", "example.org", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"From: first.last@example.org , second@example.com", 2, {{"first.last", "example.org", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"From: first\\,last@example.org , second@example.com", 2, {{"first,last", "example.org", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"From: first\\@last@example.org , second@example.com", 2, {{"first@last", "example.org", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"From: \"first@last\"@example.org , second@example.com", 2, {{"first@last", "example.org", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"first\\@last@example.org,second@example.com", 2, {{"first@last", "example.org", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"first\\\\last@example.org,second@example.com", 2, {{"first\\last", "example.org", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"\"first\\last\"@example.org,second@example.com", 2, {{"first\\last", "example.org", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"first\\@last@>example.org,second@example.com", 2, {{NULL, NULL, MY_MAILPARSE_ERR_ANGLE_BRA},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"From: \"(me)\"@example.net, second@example.com", 2, {{"(me)", "example.net", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"From: \\(m(the em)e\\)@example.net, second@example.com", 2, {{"(me)", "example.net", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"From: \"<me>\"@example.net, [second]s@example.com", 2, {{"<me>", "example.net", MY_MAILPARSE_OK},
+		{NULL, NULL, MY_MAILPARSE_ERR_BAD_LITERAL}}},
+	{"\\用(useless to escape)戶@example.net, second@example.com", 2, {{"用戶", "example.net", MY_MAILPARSE_OK},
+		{"second", "example.com", MY_MAILPARSE_OK}}},
+	{"\\用(never closed戶@example.net, second@example.com", 1, {{"用", NULL, MY_MAILPARSE_ERR_PUNBALANCED}}},
+	{"\\用never opened)戶@example.net, second@[(the ip address) 192.0.2.30]", 2, {{NULL, NULL, MY_MAILPARSE_ERR_PUNBALANCED},
+		{"second", "[192.0.2.30]", MY_MAILPARSE_OK}}},
+	{"mimì@foà.example, second@[2001:db8::1]", 2, {{"mimì", "foà.example", MY_MAILPARSE_OK},
+		{"second", "[2001:db8::1]", MY_MAILPARSE_OK}}},
+	{"first@[2001:db8::1], second@[IPv6:2001:db8::1], third@[in fact: anything would do]", 3, {{"first", "[2001:db8::1]", MY_MAILPARSE_OK},
+		{"second", "[IPv6:2001:db8::1]", MY_MAILPARSE_OK}, {"third", "[infact:anythingwoulddo]", MY_MAILPARSE_OK}}}, // bad
+
+	// rfc5322 appendix-A.1.2, A.1.3
+	{"From: \"Joe Q. Public\" <john.q.public@example.com>", 1, {{"john.q.public", "example.com", MY_MAILPARSE_OK}}},
+	{"To: Mary Smith <mary@x.test>, jdoe@example.org, Who? <one@y.test>", 3, {{ "mary", "x.test", MY_MAILPARSE_OK},
+		{"jdoe", "example.org", MY_MAILPARSE_OK}, {"one", "y.test", MY_MAILPARSE_OK}}},
+	{"Cc: <boss@nil.test>, \"Giant; \\\"Big\\\" Box\" <sysservices@example.net>", 2, {{"boss", "nil.test", MY_MAILPARSE_OK},
+		{"sysservices", "example.net", MY_MAILPARSE_OK}}},
+	{"To: A Group:Ed Jones <c@a.test>,joe@where.test,John <jdoe@one.test>;", 3, {{"c", "a.test", MY_MAILPARSE_OK},
+		{"joe", "where.test", MY_MAILPARSE_OK}, {"jdoe", "one.test", MY_MAILPARSE_OK}}},
+	{"Cc: Undisclosed recipients:;", 1, {{ NULL, NULL, MY_MAILPARSE_ERR_NO_DOMAIN}}},
+
+	// rfc3696 section 3, discarding errata
+	{"Abc\\@def@example.com", 1, {{"Abc@def", "example.com", MY_MAILPARSE_OK}}},
+	{"Fred\\ Bloggs@example.com", 1, {{"Fred Bloggs", "example.com", MY_MAILPARSE_OK}}},
+	{"Joe.\\\\Blow@example.com", 1, {{"Joe.\\Blow", "example.com", MY_MAILPARSE_OK}}},
+	{"\"Abc@def\"@example.com", 1, {{"Abc@def", "example.com", MY_MAILPARSE_OK}}},
+	{"\"Fred Bloggs\"@example.com", 1, {{"Fred Bloggs", "example.com", MY_MAILPARSE_OK}}},
+	{"user+mailbox@example.com", 1, {{"user+mailbox", "example.com", MY_MAILPARSE_OK}}},
+	{"customer/department=shipping@example.com", 1, {{"customer/department=shipping", "example.com", MY_MAILPARSE_OK}}},
+	{"$A12345@example.com", 1, {{"$A12345", "example.com", MY_MAILPARSE_OK}}},
+	{"!def!xyz%abc@example.com", 1, {{"!def!xyz%abc", "example.com", MY_MAILPARSE_OK}}},
+	{"_somename@example.com", 1, {{"_somename", "example.com", MY_MAILPARSE_OK}}},
+	{NULL, 0, {{NULL, NULL, 0}}}
+};
+
+static int strnullcmp(char const *a, char const *b)
+{
+	if (a && b) return strcmp(a, b);
+	return a != b;
+}
+
+static const char* chknull(char const *p)
+{
+	return p? p: "NULL";
+}
+
+static void do_testsuite(void)
+{
+	int nr = 0;
+	for (struct addr_test const *t = &addr_test[0]; t->src; ++t)
+	{
+		assert(t->nres <= MAX_CONT_ARRAY);
+
+		char *in = strdup(t->src);
+		if (in)
+		{
+			int r = 0;
+			char *line = in, *domain, *user, *cont = NULL;
+			while (line && *line)
+			{
+				int rtc = my_mail_parse_c(line, &user, &domain, &cont);
+				if (r >= t->nres)
+					fprintf(stderr, "test %d/%d fail: extra result %d/%d\n",
+						nr + 1, r + 1, r, t->nres);
+				else if (rtc != t->res[r].rtc ||
+					strnullcmp(user, t->res[r].user) ||
+					strnullcmp(domain, t->res[r].domain))
+						fprintf(stderr,
+							"test %d/%d fail: have %d %s %s, not %d %s %s\n",
+							nr + 1, r + 1, rtc, chknull(user), chknull(domain),
+							t->res[r].rtc, chknull(t->res[r].user),
+								chknull(t->res[r].domain));
+				++r;
+				line = cont;
+			}
+			if (r != t->nres)
+				fprintf(stderr, "test %d/%d fail: have %d result(s) not %d in %s\n",
+					nr + 1, r + 1, r, t->nres, t->src);
+			free(in);
+		}
+		else
+			fprintf(stderr, "test %d fail: MEMORY FAULT\n", nr + 1);
+		++nr;
+	}
+}
+
+int main(int argc, char **argv)
 {
 	int err;
-	unsigned char *domain, *user, *cont;
+	char *domain, *user, *cont;
 
 	if (argc != 2)
 	{
 		fprintf(stderr, "Usage: %s mailheader\n", argv[0]);
 		exit(64);
 	}
-
-	cont = (unsigned char*) argv[1];
-	while (*cont)
+	if (strcmp(argv[1], "testsuite") == 0)
 	{
-		err = dkim_mail_parse_c(cont, &user, &domain, &cont);
+		do_testsuite();
+		return 0;
+	}
+
+	cont = argv[1];
+	while (cont && *cont)
+	{
+		err = my_mail_parse_c(cont, &user, &domain, &cont);
 
 		if (err)
 		{
@@ -539,11 +806,11 @@ main(int argc, char **argv)
 		else
 		{
 			printf("user: '%s'\ndomain: '%s'\n", 
-				user ? dkim_mail_unescape(user) : "null",
-				domain ? dkim_mail_unescape(domain) : "null");
+				user ? my_mail_unescape(user) : "null",
+				domain ? my_mail_unescape(domain) : "null");
 		}
 	}
 
 	return 0;
 }
-#endif /* DKIM_MAILPARSE_TEST */
+#endif /* TEST_MAIN */

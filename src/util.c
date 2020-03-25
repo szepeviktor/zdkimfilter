@@ -359,6 +359,7 @@ static int verbose = 0;
 
 static int my_cb(void *v, int step, name_val* nv, size_t nv_count)
 {
+	(void)v;
 	assert(v == NULL);
 
 	if (verbose)

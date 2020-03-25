@@ -2,7 +2,7 @@
 
 @SET_MAKE@
 
-MAILFILE = $(srcdir)/funnymail.noparen.eml
+MAILFILE = $(srcdir)/funnymail.noparen.eml.b64
 TESTFILE = $(srcdir)/undo_percent_relay.ctlfile.txt
 
 TESTSUITE = $(srcdir)/testsuite
@@ -30,12 +30,9 @@ CONFIG_CLEAN_FILES = atconfig atlocal
 clean-local:
 	test ! -f '$(TESTSUITE)' || $(SHELL) '$(TESTSUITE)' --clean
 
-$(MAILFILE).b64: $(MAILFILE)
-	@BASE64@ $< > $@
-
 #AUTOM4TE = $(SHELL) $(srcdir)/build-aux/missing --run autom4te
 AUTOTEST = $(AUTOM4TE) --language=autotest
-$(TESTSUITE): $(srcdir)/testsuite.at $(srcdir)/package.m4 $(MAILFILE).b64 $(TESTFILE)
+$(TESTSUITE): $(srcdir)/testsuite.at $(srcdir)/package.m4 $(MAILFILE) $(TESTFILE)
 	$(AUTOTEST) -I '$(srcdir)' -o $@.tmp $@.at
 	mv $@.tmp $@
 

@@ -2,16 +2,29 @@
 """
 reading Perl pod whith Python :-O"""
 
+import sys
 import re
 import regex
 import cgi
 from strrepl import StringReplace
 
-linkfmt = regex.compile(r'^(?:([^\|]*)\|)?(?:([^\(/]+)\([158]\))?(?:/(\w+))?$')
+linkfmt = regex.compile(r'^(?:([^\|]*)\|)?(?:([^\(/\|]+)?(?:\([158]\))?)(?:/(\w+))?$')
 
-#  = regex.compile (r'^ (?:([^\|]*)\|)?  (?:([^/]+)[158])?  (?:/(\w+))?  $')
+# no \(\)'s: ex.compile(r'^(?:([^\|]*)\|)?(?:([^  /\|]+)?(?:  [158]  )?)(?:/(\w+))?$')
+# capture:                     (  1  )       (    2    )                   ( 3 )
+#                               text             name                       sec
 
 def known_href(h):
+	"""
+	Given a keyword (which was found in an L<keyword> construct), deduce
+	the target and possibly a replacement.  The target is the actual
+	html link.  The replacement is meant to substitute the keyword
+	entirely.
+
+	Recognized keywords have the pattern "L<text|name(n)/sec>" documented
+	in L<perlpod(1)/Formatting Codes>, where text, name, sec, and (n) are
+	optional.  If given, (n) must be (1), (5), or (8), and is discarded.
+	"""
 	mo = linkfmt.match(h)
 	if mo:
 		target = None
@@ -21,6 +34,8 @@ def known_href(h):
 			target = mo.group(2) + '.html'
 		elif mo.group(2) == 'couriertcpd':
 			target = 'http://www.courier-mta.org/' + mo.group(2) + '.html'
+		elif mo.group(2) == 'postinst':
+			target = '/svn/zdkimfilter/trunk/debian/postinst'
 
 		if target != None:
 			if mo.group(3):
@@ -58,16 +73,20 @@ def pod2html(pod, prefix='<p>'):
 	html = StringReplace(pod)
 	# for mo in reversed(list(podfmt.finditer(pod, overlapped = True))):
 	for mo in podfmt.finditer(pod, overlapped = True):
+		# allow known html (<span>, </span>)
+		if mo.group(2) == '/span' or mo.group(2).startswith('span class'):
+			continue
+
 		tag = fmttag(mo.group(1))
 		if tag and mo.group(2):
 			if tag == '<a>':
 				target, repl = known_href(mo.group(2))
 				stag = '<a href="%s">' % cgi.escape(target, quote=True)
-				html.change(stag, mo.start(1), 2)
+				html.change(stag, mo.start(1), 2) # replace the "L<"
 				if repl:
 					prepl = pod2html(repl, '')
 					html.change(prepl, mo.start(1), mo.end(2) - mo.start(2))
-					html.change('</a>', mo.end(2), 1)
+					html.change('</a>', mo.end(2), 1) # replace the ">"
 					break
 			else:
 				html.change(tag, mo.start(1), 2)
@@ -78,6 +97,29 @@ def pod2html(pod, prefix='<p>'):
 				assert tag == '&', "Unsupported pod " + mo.group(1) + '<'+ mo.group(2) +'>'
 				html.change(';', mo.end(2), 1)
 	return prefix + html.final()
+
+
+# man2html turns all-caps words into smaller font size spans
+# it's horrible when it comes inside C<UPPERCASE STATEMENT WITH lowercase variables>
+# so I'd need something like:
+# a = regex.compile(r'(?!(?:[IBCLEFSXZ])<(?:[^<>]+|(?R)*)>)\b([A-Z0-9]{2,}(?:\p{Space}*[A-Z0-9]{2,})*\b)')
+# but it doesn't work.
+#
+# Skip this stuff for the time being...
+#-----------------------------------------------------------------------
+# allcaps = regex.compile(r'\b([A-Z0-9]{2,}(?:\p{Space}*[A-Z0-9]{2,})*\b)')
+#
+#def is_font(pod, prefix=''):
+#	'''Wrap all-caps words within <span> tags'''
+#	html = StringReplace(pod)
+#	for mo in allcaps.finditer(pod):
+#		html.change('<span class="is_font">', mo.start(1), 0)
+#		html.change('</span>', mo.end(1), 0)
+#	return prefix + html.final()
+#-----------------------------------------------------------------------
+def is_font(pod, prefix=''):
+	return prefix + pod
+
 
 # the formatting code  X<table name>  is used for builing table fields
 # (here it is a relic from an attempt at writing generic code for dbgraph)
@@ -172,7 +214,7 @@ def not_used_read_pod(fname):
 				tables = False
 				fields = False
 		elif tables or intro.track:
-			para_dd.para += pod2html(pod_line)
+			para_dd.para += pod2html(is_font(pod_line))
 		else:
 			if pod_line[0] == '\t':
 				if intro.pre:
@@ -180,18 +222,17 @@ def not_used_read_pod(fname):
 				else:
 					prefix = '<pre>'
 					intro.pre = True
-				intro.para += pod2html(pod_line, prefix)
+				intro.para += pod2html(is_font(pod_line), prefix)
 			else:
 				if intro.pre:
 					intro.pre = False
 					intro.para += '</pre>\n'
-				intro.para += pod2html(pod_line)
+				intro.para += pod2html(is_font(pod_line))
 	f.close()
 	return intro.para
 
 
 if __name__ == '__main__':
-	import sys
 	if (len(sys.argv) > 1):
 		for i in range(1, len(sys.argv), 1):
 			# was: print pod2html(sys.argv[i]), "\n"

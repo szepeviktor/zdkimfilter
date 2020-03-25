@@ -2,7 +2,7 @@
 * parm.c - written by ale in milano on 27sep2012
 * parameter file parsing
 
-Copyright (C) 2012-2015 Alessandro Vesely
+Copyright (C) 2012-2019 Alessandro Vesely
 
 This file is part of zdkimfilter
 
@@ -266,6 +266,7 @@ static config_conf const conf[] =
 	CONFIG(parm_t, max_signatures, "int", assign_int),
 	CONFIG(parm_t, log_dkim_order_above, "int", assign_int),
 	CONFIG(parm_t, publicsuffix, "filename", assign_ptr),
+	CONFIG(parm_t, psddmarc, "filename", assign_ptr),
 	CONFIG(parm_t, honored_report_interval, "seconds", assign_int),
 	CONFIG(parm_t, honor_dmarc, "Y/N", assign_char),
 	CONFIG(parm_t, honor_author_domain, "Y/N", assign_char),

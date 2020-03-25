@@ -26,11 +26,12 @@ allowing domain owners to claim some responsibility for the messages.
 =head2 Signing
 
 The signing domain can be inferred in two ways, either by SMTP
-authentication or by setting a non-empty RELAYCLIENT variable.  In both cases,
-Courier grants relaying privileges.
+authentication or by setting RELAYCLIENT.  The latter case works if
+either RELAYCLIENT itself contains C<@domain> or if I<default_domain>
+is set.
 
-For SMTP authentication, the domain name is determined after the user id, if it
-contains an C<@>.  Alternatively, one can define a I<default_domain>.
+For SMTP authentication, the domain name is determined after the user id,
+if it contains an C<@> or from I<default_domain>.
 
 For non-empty RELAYCLIENT variable, typically set in smtpaccess files,
 zdkimfilter signs only if the value of RELAYCLIENT starts with C<@>.  In
@@ -43,7 +44,7 @@ filter removes the appended values as long as it is installed.  To prevent
 that behavior set I<let_relayclient_alone>.  At any rate, when a client
 uses SMTP authentication, any RELAYCLIENT content is reset.
 
-In either case, the domain name can be obtained from a suitable header
+In any case, the domain name can be obtained from a suitable header
 field of the message, such as C<From:>.  Use the I<key_choice_header>
 configuration option to specify that.
 
@@ -87,7 +88,8 @@ details.
 
 Messages not qualified as I<RELAYCLIENT> are candidate for DKIM verification.
 zdkimfilter sorts signatures by domain, putting author domain and whitelisted
-domains first.  It then verifies each domain's signatures until a valid one.
+domains first.  It then verifies domain's signatures, optionally all or
+until a valid one.
 If the database is used, an attempt is made to authenticate each domain unless
 I<verify_one_domain> is set.  If I<report_all_sigs> is set, all signatures are
 processed.  Normally, there are only a few signatures in each message, so these
@@ -96,20 +98,26 @@ number of signatures are rejected (I<max_signatures>).  That's the only
 rejection done by default.
 
 Messages can be rejected or dropped according to DMARC, ADSP, and NXDOMAIN
-configurations, summarized below, and also according to an I<action_header>.
-The latter is meant to be a last resort for messages caught by anti-virus or
-anti-phishing filters that add a given header field instead of discarding the
-message tout-court.  For I<action_header>, whitelisting can be tuned by setting
-I<dnswl_worthiness_pass> and similar options.  By setting I<save_drop>, the
-messages dropped after I<action_header> can be saved.
+configurations, summarized below, and also according to an I<action_header>
+(see I<zdkimfilter.conf(5)>) or the shoot_on_sight feature (see
+I<whitelisted> in L<zfilter_db(1)>).
+The decision to reject or drop a message can be revoked after DNSWL
+(see I<dnswl_worthiness_pass> and I<whitelisted_pass> in L<zdkimfilter.conf(5)>).
+So, if a domain is tagged shoot_on_sight, but the message is authenticated
+by a domain which is whitelisted or DNSWL-worth, the latter wins and the
+message is not rejected.  However, if the sender is DNSWL-worth but tagged
+shoot_on_sight, it worthiness is discarded and the message is rejected.
 
 By default, zdkimfilter adds an C<Authentication-Results:> (A-R) header field
 only when there are noticeable results to report.  It uses the host name that
 Courier uses in its C<Received:> field.  Other A-R fields with that same name
 get zapped from the message, if found.
 
-After the message has been dealt with, zdkimfilter logs to the database the
-results.  See L<zfilter_db(1)> for the details.
+While per-domain flags (whitelisted, do_dmarc, do_adsp) are read during the
+verification process, the resulting data is logged to the database after
+handing the message back to Courier.  Those results are used to send
+aggregate reports, and in general can contribute some insight on the
+email traffic.  See L<zfilter_db(1)> for the details.
 
 =head2 DMARC and ADSP policies
 
@@ -117,6 +125,10 @@ These policies deal with the C<From:> domain.  It is not advisable to honor
 them indiscriminately, because users of a domain with a strict policy can
 subscribe to a mailing list that invalidates their signatures.  Rejecting that
 mail would then cause local users to be unsubscribed from such mailing list.
+As an alternative to whitelisting each mailing list, it is possible to enable
+or disable DMARC or ADSP on a per-domain basis.  Recall that ADSP was
+declared "Historic" in November 2013.  Albeit deprecated, C<dkim-adsp>
+is the only authentication method that provides for nxdomain.
 
 Options I<honor_dmarc> and I<honor_author_domain> set to 0 or 1 the
 corresponding flags.  Then a query I<db_sql_domain_flags> can increase or
@@ -129,15 +141,15 @@ whitelisted, vouched, or DNSWL allowed, the message is delivered even though
 the policy failed.
 
 In order to look up a DMARC record correctly, the Public Suffix List file must
-be available and configured in I<publicsuffix>.  In addition, to comply with
+be available and configured in I<publicsuffix>.  A supplemental file that
+list domains participating in PSDDMARCis distributed with this filter.
+In addition, to comply with
 DMARC, aggregate reports should be sent and received; see L<zaggregate(1)>.
 
-A DMARC policy can ask to quarantine a message.  If that is honored, A-R field
+A DMARC policy can ask to quarantine a message.  If DMARC is honored, the
+filter just adds an A-R field
 contains a C<(QUARANTINE)> comment and the message is delivered normally.
 
-Record lookup of either policy is not going to work for non-existing domains.
-For A-R, ADSP provides a C<dkim-adsp=nxdomain> result code.  Rejecting those
-messages can be enabled by I<reject_on_nxdomain>.
 
 =head1 OPTIONS
 

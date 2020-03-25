@@ -23,6 +23,7 @@ without password granted on C<test_zfilter> to user C<zfilter>.
 =head1 INSTALLATION
 
 Example files serve as a guide, you may want to arrange and complete as needed.
+The L<postinst> script implements the following guide for Debian install.
 
 =over
 
@@ -178,17 +179,17 @@ Updated by stored procedure B<recv_from_domain>.
 =item B<whitelisted>X<domain>
 
 This item is the first result from query B<db_sql_domain_flags>,
-see L<zfilter_db(1)/perdomai>.
+see L<Per-domain settings|zfilter_db(1)/perdomai>.
 
 =item B<add_dmarc>X<domain>
 
 This item is the second result from query B<db_sql_domain_flags>,
-see L<zfilter_db(1)/perdomai>.
+see L<Per-domain settings|zfilter_db(1)/perdomai>.
 
 =item B<add_adsp>X<domain>
 
 This item is the third result from query B<db_sql_domain_flags>,
-see L<zfilter_db(1)/perdomai>.
+see L<Per-domain settings|zfilter_db(1)/perdomai>.
 
 =item B<recv>X<domain>
 
@@ -205,72 +206,72 @@ Set on record creation, this field is never modified.
 =item B<content_encoding>X<message_in>
 
 Set in B<db_sql_insert_message> after the value found in the incoming message.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<content_encoding>X<message_out>
 
 Set by stored procedure B<sent_message> after the value found in the outgoing message.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<content_type>X<message_in>
 
 Value of Content-Type truncated at the semicolon.
 
 Set in B<db_sql_insert_message>.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<content_type>X<message_out>
 
 Value of Content-Type truncated at the semicolon.
 
 Set by stored procedure B<sent_message>.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<message_id>X<message_in>
 
 String value of Message-Id.
 
 Set in B<db_sql_insert_message>.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<message_id>X<message_out>
 
 String value of Message-Id.
 
 Set by stored procedure B<sent_message>.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<mailing_list>X<message_in>
 
 1 or 0, according the presence of mailing list header fields.
 Set in B<db_sql_insert_message>.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<date>X<message_in>
 
 String value of header field Date:
 
 Set in B<db_sql_insert_message>.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<date>X<message_out>
 
 String value of header field Date:
 
 Set by stored procedure B<sent_message>.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<ino>X<message_in message_out>
 
-Inode number. See L<zfilter_db(1)/traitsan> 
+Inode number. See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan> 
 
 =item B<mtime>X<message_in message_out>
 
-Unix epoch. See L<zfilter_db(1)/traitsan> 
+Unix epoch. See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan> 
 
 =item B<pid>X<message_in message_out>
 
-Process id. See L<zfilter_db(1)/traitsan>
+Process id. See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>
 
 =item B<envelope_sender>X<message_in>
 
@@ -278,14 +279,14 @@ Envelope sender email address.  It is empty for bounce messages.
 It gets truncated when it is longer than the field length.
 
 Set in B<db_sql_insert_message>.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<envelope_sender>X<message_out>
 
 String value of header field Date:
 
 Set by stored procedure B<sent_message>.
-See L<zfilter_db(1)/traitsan>.
+See L<Traits and variables common to incoming and outgoing messages|zfilter_db(1)/traitsan>.
 
 =item B<dmarc_dispo dmarc_dkim dmarc_spf dmarc_reason>X<message_in>
 
@@ -302,7 +303,7 @@ Neither set nor used by zdkim.
 =item B<rcpt_count>X<message_out>
 
 Set by stored procedure B<sent_message>, it is used in B<db_sql_check_user>
-to limit per user sending.  See L<zfilter_db(1)/storingo>.
+to limit per user sending.  See L<Storing outgoing messages|zfilter_db(1)/storingo>.
 
 The default value in F<odbx_example.conf> is too high to cover the risk of a
 user's identity being stolen by spammers.  Blocking can be tailored on a per

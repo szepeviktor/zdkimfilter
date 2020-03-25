@@ -48,6 +48,11 @@ the resulting work.
 #include <opendkim/dkim.h>
 #undef dkim_policy
 
+#include <idn2.h>
+#include <unicase.h>
+#include <unistring/version.h>
+
+
 #include <stddef.h>
 #include <time.h>
 #include <stdbool.h>
@@ -64,6 +69,8 @@ the resulting work.
 #include "util.h"
 #include "publicsuffix.h"
 #include "spf_result_string.h"
+#include "dkim-mailparse.h"
+
 #include <assert.h>
 
 #if !PATH_MAX
@@ -128,6 +135,60 @@ static char *strdup_normalize(char const *s, int stop_at)
 	else copy = strdup("");
 
 	return copy;
+}
+
+static char* normalize_utf8(unsigned char *domain)
+/*
+* domain most likely comes from dkim_getdomain(), hence unsigned.
+*/
+{
+	if (domain)
+	{
+		char *out = NULL;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
+#pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+		if (idn2_to_unicode_8z8z(domain, &out, 0) == IDN2_OK)
+			return out;
+#pragma GCC diagnostic pop
+	}
+	return NULL;
+}
+
+static int domain_is_valid(char *domain)
+/*
+* return 1 if valid, 0 if invalid
+*/
+{
+	int rtc = 0;
+	if (domain)
+	{
+		if (domain[0] == '[') // address-literal
+			return 0;
+
+		char *out = NULL;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
+#pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+		rtc = idn2_lookup_u8(domain, &out, 0) == IDN2_OK;
+#pragma GCC diagnostic pop
+		if (rtc) // conversion succeeded
+		{
+			for (char *p = out;;)
+			{
+				int ch = *(unsigned char*)p++;
+				if (isalnum(ch) || ch == '-' || ch == '.')
+					continue;
+
+				if (ch != 0) // invalid char, non l-d-h
+					rtc = 0; 
+
+				break;
+			}
+		}
+		free(out);
+	}
+	return rtc;
 }
 
 static void clean_stats_info_content(stats_info *stats)
@@ -205,7 +266,7 @@ typedef struct dkimfl_parm
 	DKIM_LIB *dklib;
 	fl_parm *fl;
 	db_work_area *dwa;
-	publicsuffix_trie *pst;
+	publicsuffix_trie *pst, *pst2;
 
 	char const *config_fname; // static (either default or argv)
 	char const *prog_name; //static, from argv[0]
@@ -359,6 +420,7 @@ static void some_cleanup(dkimfl_parm *parm) // parent
 	}
 	free(parm->blocklist.data);
 	publicsuffix_done(parm->pst);
+	publicsuffix_done(parm->pst2);
 }
 
 static int parm_config(dkimfl_parm *parm, char const *fname, int no_db)
@@ -466,28 +528,54 @@ static void clear_prescreen(domain_prescreen* dps)
 	while (dps != NULL)
 	{
 		domain_prescreen* const next = dps->next;
+		if (dps->sig)
+		{
+			for (int n = 0; n < dps->nsigs; ++n)
+				free(dps->sig[n]);
+			free(dps->sig);
+		}
 		free(dps);
 		dps = next;
 	}
 }
 
 static domain_prescreen*
-get_prescreen(domain_prescreen** dps_head, char const *domain)
+get_prescreen(domain_prescreen** dps_head, char const *c_domain)
 {
 	assert(dps_head);
-	assert(domain);
+	assert(c_domain);
+
+
+	char norm[256*4];
+	size_t ulen = sizeof norm - 1;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
+#pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+	char* n = u8_tolower(c_domain, strlen(c_domain), NULL, UNINORM_NFC, norm, &ulen);
+#pragma GCC diagnostic pop
+	if (n != &norm[0] || ulen >= sizeof norm)
+		return NULL;
+
+	norm[ulen] = 0;
+
+	char *domain = NULL;
+	if (idn2_to_unicode_8z8z(norm, &domain, 0) != IDN2_OK)
+		return NULL;
 
 	domain_prescreen**dps = dps_head;
 	while (*dps != NULL)
 	{
-		int const cmp = stricmp(domain, (*dps)->name);
+		int const cmp = strcmp(domain, (*dps)->name);
 		if (cmp < 0)
 		{
 			dps = &(*dps)->next;
 			continue;
 		}
 		if (cmp == 0)
+		{
+			free(domain);
 			return *dps;
+		}
 
 		break;
 	}
@@ -505,6 +593,7 @@ get_prescreen(domain_prescreen** dps_head, char const *domain)
 	else
 		fl_report(LOG_ALERT, "MEMORY FAULT");
 
+	free(domain);
 	return new_dps;
 }
 
@@ -624,7 +713,7 @@ static int read_key(dkimfl_parm *parm, char *fname)
 	ssize_t lsz = readlink(buf, buf2, sizeof buf2);
 	if (lsz < 0 || (size_t)lsz >= sizeof buf2)
 	{
-		if (errno != EINVAL && parm->z.verbose || parm->z.verbose >= 8)
+		if ((errno != EINVAL && parm->z.verbose) || parm->z.verbose >= 8)
 			fl_report(errno == EINVAL? LOG_INFO: LOG_ALERT,
 				"id=%s: cannot readlink for %s: readlink returns %zd: %s",
 				parm->dyn.info.id,
@@ -688,7 +777,7 @@ static int default_key_choice(dkimfl_parm *parm, int type)
 
 	int rc = 0;
 	char *domain;
-	if (type == '*' &&
+	if (type == '*' && parm->dyn.auth_or_relay &&
 		(domain = strchr(parm->dyn.auth_or_relay, '@')) != NULL)
 			++domain;
 	else  // is that how local domains work?
@@ -845,9 +934,8 @@ static int read_key_choice(dkimfl_parm *parm)
 					if (val)
 					{
 						char *domain, *user;
-						if ((dkim_mail_parse(val,
-							cast_u_char_parm_array(&user),
-							cast_u_char_parm_array(&domain))) == 0)
+						if (my_mail_parse(val, &user, &domain) == 0 &&
+							domain_is_valid(domain))
 						{
 							rtc = read_key(parm, domain);
 							if (rtc)
@@ -930,7 +1018,10 @@ my_dkim_header(dkimfl_parm *parm, DKIM *dkim, char *field, size_t len)
 	assert(len > 0);
 	assert(dkim);
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 	DKIM_STAT status = dkim_header(dkim, field, len);
+#pragma GCC diagnostic pop
 	if (status != DKIM_STAT_OK)
 	{
 		if (parm->z.verbose)
@@ -1258,7 +1349,10 @@ static int copy_body(dkimfl_parm *parm, DKIM *dkim)
 			eol = &buf[sizeof buf - 1];
 		
 		size_t const len = eol - &buf[0];
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 		DKIM_STAT status = dkim_body(dkim, buf, len);
+#pragma GCC diagnostic pop
 		if (status != DKIM_STAT_OK)
 		{
 			if (parm->z.verbose)
@@ -1345,16 +1439,16 @@ static void recipient_s_domains(dkimfl_parm *parm)
 		char *rcpt;
 		while ((rcpt = fl_rcpt_next(fre)) != NULL)
 		{
-			char *dom = strchr(rcpt, '@');
-			if (dom++)
+			char *user, *domain;
+			if (my_mail_parse(rcpt, &user, &domain) == 0 &&
+				domain_is_valid(domain))
 			{
 				if (++rcpt_count == 1 && parm->dyn.domain)
 					special_candidate =
-						stricmp(dom, parm->dyn.domain) == 0 &&
-						dom - rcpt == 11 &&
-						strincmp(rcpt, "postmaster@", 11) == 0;
+						stricmp(domain, parm->dyn.domain) == 0 &&
+						stricmp(user, "postmaster") == 0;
 
-				domain_prescreen* dps = get_prescreen(&dps_head, dom);
+				domain_prescreen* dps = get_prescreen(&dps_head, domain);
 				if (dps == NULL) // memory fault
 				{
 					clear_prescreen(dps_head);
@@ -1388,16 +1482,27 @@ static inline int user_is_blocked(dkimfl_parm *parm)
 		search_list(&parm->blocklist, parm->dyn.auth_or_relay);
 }
 
-static inline int is_postmaster(char const *from)
+static inline int is_common_address(char const *from)
 {
 	char *addr;
 	if (from == NULL || (addr = strdup(from)) == NULL)
 		return 0;
 
+	static const char *rfc2142[] = {
+		"postmaster", "abuse", "info", "sales", 
+		"list", "support", "noc", "marketing",
+		"security", "hostmaster", "webmaster", NULL};
+
 	char *domain, *user;
-	int rtc = dkim_mail_parse(addr,
-		cast_u_char_parm_array(&user), cast_u_char_parm_array(&domain)) == 0 &&
-			stricmp(user, "postmaster") == 0;
+	int rtc = 0;
+	if (my_mail_parse(addr, &user, &domain) == 0 && user)
+		for (char const **s = &rfc2142[0]; *s; ++s)
+			if (stricmp(user, *s) == 0)
+			{
+				rtc = 1;
+				break;
+			}
+
 	free(addr);
 	return rtc;
 }
@@ -1410,7 +1515,7 @@ static inline void stats_outgoing(dkimfl_parm *parm)
 		char *s = parm->dyn.stats->envelope_sender = fl_get_sender(parm->fl);
 		if (s && *s == 0)
 			parm->dyn.stats->complaint_flag |= 1;
-		if (is_postmaster(parm->dyn.stats->from))
+		if (is_common_address(parm->dyn.stats->from))
 			parm->dyn.stats->complaint_flag |= 2;
 		if (parm->dyn.stats->rcpt_count == 0)
 			recipient_s_domains(parm);
@@ -1507,6 +1612,8 @@ static void sign_message(dkimfl_parm *parm)
 		char *selector = parm->dyn.selector? parm->dyn.selector:
 			parm->z.selector? parm->z.selector: "s";
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 		DKIM_STAT status;
 		DKIM *dkim = dkim_sign(parm->dklib, parm->dyn.info.id, NULL,
 			parm->dyn.key, selector, parm->dyn.domain,
@@ -1523,6 +1630,8 @@ static void sign_message(dkimfl_parm *parm)
 				parm->dyn.domain,
 				selector);
 		memset(parm->dyn.key, 0, strlen(parm->dyn.key));
+#pragma GCC diagnostic pop
+
 		free(parm->dyn.key);
 		parm->dyn.key = NULL;
 		if (parm->dyn.selector)
@@ -1612,7 +1721,10 @@ static void sign_message(dkimfl_parm *parm)
 			}
 
 			// Write signature as first field
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 			chomp_cr(hdr);
+#pragma GCC diagnostic pop
 			fprintf(fp, DKIM_SIGNHEADER ": %s\n", hdr);
 			dkim_free(dkim);
 			dkim = NULL;
@@ -1656,7 +1768,6 @@ static void sign_message(dkimfl_parm *parm)
 
 typedef struct verify_parms
 {
-	char *org_domain;
 	domain_prescreen *domain_head, **domain_ptr;
 	vbr_info *vbr;  // store of all VBR-Info fields
 
@@ -1664,7 +1775,6 @@ typedef struct verify_parms
 
 	// not malloc'd or maintained elsewhere
 	dkimfl_parm *parm;
-	char *dkim_domain;
 
 	char const *policy_type, *policy_result, *policy_comment;
 
@@ -1673,6 +1783,7 @@ typedef struct verify_parms
 		*dnswl_dps, *reputation_dps;
 
 	void *dkim_or_file;
+	dmarc_domains dd;
 	dmarc_rec dmarc;
 	int step;
 
@@ -1691,6 +1802,7 @@ typedef struct verify_parms
 	unsigned int domain_flags:1;
 	unsigned int have_spf_pass:1;
 	unsigned int have_trusted_voucher:1;
+	unsigned int shoot_on_sight:1;
 
 } verify_parms;
 
@@ -1713,7 +1825,7 @@ has_trusted_voucher(verify_parms const *vh, vbr_info const *const vbr)
 	assert(vh);
 	assert(vh->parm);
 
-	if (vbr && vbr->mv)
+	if (vbr)
 	{
 		char const ** const tv = vh->parm->z.trusted_vouchers;
 
@@ -1750,8 +1862,10 @@ static void clean_vh(verify_parms *vh)
 	free(vh->domain_ptr);
 	free(vh->vbr_result.resp);
 	free(vh->dmarc.rua);
+	free(vh->dd.domain);
+	free(vh->dd.super_org);
 	if (vh->org_domain_in_dwa == 0)
-		free(vh->org_domain);
+		free(vh->dd.org_domain);
 }
 
 static int check_db_connected(dkimfl_parm *parm)
@@ -1806,24 +1920,45 @@ for esmtp, this is done by courieresmtpd.c as:
 and then conveyed to ctlfile 'f' (COMCTLFILE_FROMMTA).  E.g.
 
    fdns; helobuf (rdns.host.example [192.0.2.1])
+
+where host is the reverse lookup (iprev), if enabled.
 */
 	{
-		s = strrchr(s + 4, '[');
+		s = strrchr(s + 4, '(');
 		if (s && *++s)
 		{
+			char *iprev = s, *en = NULL;
+			if (*iprev == '[')
+			{
+				s = iprev;
+				iprev = NULL;
+			}
+			else
+			{
+				en = strchr(iprev, ' ');
+				if (en)
+				{
+					s = en + 1;
+					*en = 0;
+				}
+			}
 			char *e = strchr(s, ']');
 			if (e)
 			{
 				*e = 0;
-				db_set_client_ip(dwa, s);
+				if (*s == '[')
+					++s;
+				db_set_client_ip(dwa, s, iprev);
 				*e = ']';
 			}
+			if (en)
+				*en = ' ';
 		}
 	}
 	else if (fl_whence(parm->fl) == fl_whence_other && // working stdalone
 		(s = getenv("REMOTE_ADDR")) != NULL)
 	{
-		db_set_client_ip(dwa, s);
+		db_set_client_ip(dwa, s, NULL);
 	}
 
 	return 0;
@@ -1848,9 +1983,9 @@ static int domain_flags(verify_parms *vh)
 
 	if (vh->domain_flags == 0)
 	{
-		char *from = vh->dkim_domain;
+		char *from = vh->dd.domain;
 		if (from == NULL)
-			vh->dkim_domain = from = dkim_getdomain(dkim);
+			vh->dd.domain = from = normalize_utf8(dkim_getdomain(dkim));
 
 		int const vbr_count =
 			count_trusted_vouchers(vh->parm->z.trusted_vouchers);
@@ -1858,6 +1993,7 @@ static int domain_flags(verify_parms *vh)
 
 		size_t org_domain_len = 0;
 		publicsuffix_trie const *const pst = vh->parm->pst;
+		publicsuffix_trie const *const pst2 = vh->parm->pst2;
 		db_work_area *const dwa = vh->parm->dwa;
 		if (from)
 		{
@@ -1868,9 +2004,9 @@ static int domain_flags(verify_parms *vh)
 				return vh->parm->dyn.rtc = -1;
 			if (pst)
 			{
-				char *od = vh->org_domain;
+				char *od = vh->dd.org_domain;
 				if (od == NULL)
-					vh->org_domain = od = org_domain(pst, from);
+					vh->dd.org_domain = od = org_domain(pst, from);
 				if (od != NULL)
 				{
 					org_domain_len = strlen(od);
@@ -1880,11 +2016,23 @@ static int domain_flags(verify_parms *vh)
 						vh->org_domain_in_dwa = 1;
 					}
 
-					if (stricmp(from, od) != 0 &&
+					if (strcmp(from, od) != 0 &&
 						(dps = get_prescreen(&vh->domain_head, od)) == NULL)
 							return vh->parm->dyn.rtc = -1;
 
 					dps->u.f.is_org_domain = dps->u.f.is_aligned = 1;
+
+					if (pst2)
+					{
+						char *sod =
+							vh->dd.super_org = org_domain(pst2, od);
+						if (sod && strcmp(od, sod) != 0 &&
+							(dps = get_prescreen(&vh->domain_head, sod)) == NULL)
+								return vh->parm->dyn.rtc = -1;
+
+						// need a dps to get domain flags, e.g. do_dmarc
+						dps->u.f.is_super_org_domain = 1;
+					}
 				}
 			}
 		}
@@ -1899,7 +2047,7 @@ static int domain_flags(verify_parms *vh)
 			{
 				dps->domain_val += 2500;    // author's domain
 			}
-			else if (dps->u.f.is_org_domain)
+			else if (dps->u.f.is_org_domain || dps->u.f.is_super_org_domain)
 			{
 				dps->domain_val += 2000;    // author's organizational domain
 			}
@@ -1907,7 +2055,7 @@ static int domain_flags(verify_parms *vh)
 			{
 				size_t len = strlen(dps->name);
 				if (len >= org_domain_len && org_domain_len > 0 &&
-					stricmp(dps->name + len - org_domain_len, vh->org_domain) == 0)
+					strcmp(dps->name + len - org_domain_len, vh->dd.org_domain) == 0)
 				{
 					dps->u.f.is_aligned = 1;
 					dps->domain_val += 1500;
@@ -1917,24 +2065,40 @@ static int domain_flags(verify_parms *vh)
 
 			if (dwa)
 			{
-				int dmarc, adsp,
+				int dmarc, adsp, dcount,
 					c = db_get_domain_flags(dwa, dps->name,
-						&dps->whitelisted, &dmarc, &adsp);
+						&dps->whitelisted, &dmarc, &adsp, &dcount);
 				if (c > 0)
 				{
-					if (dps->whitelisted > 1)
+					if (dps->whitelisted >= 0)
 					{
-						if (dps->whitelisted > 2)
+						if (dps->whitelisted > 0)
 						{
+							if (dps->whitelisted > 1)
+							{
+								if (dps->whitelisted > 2)
+								{
+									dps->domain_val += 500;
+									dps->u.f.is_trusted = 1;
+								}
+								dps->domain_val += 500;
+								dps->u.f.is_whitelisted = 1;
+							}
 							dps->domain_val += 500;
-							dps->u.f.is_trusted = 1;
+							dps->u.f.is_known = 1;
 						}
-						dps->domain_val += 500;
-						dps->u.f.is_whitelisted = 1;
 					}
-					dps->domain_val += 500;
-					dps->u.f.is_known = 1;
-					if (c > 1 && dps->u.f.is_aligned)
+					else
+					{
+						vh->shoot_on_sight = 1;
+						dps->u.f.shoot_on_sight = 1;
+						if (vh->parm->z.verbose >= 5)
+							fl_report(LOG_NOTICE,
+								"id=%s: shoot on sight for %s",
+								vh->parm->dyn.info.id, dps->name);
+					}
+					if (c > 1 &&
+						(dps->u.f.is_aligned || dps->u.f.is_super_org_domain))
 					{
 						int old = vh->do_dmarc;
 						dmarc += old;
@@ -2044,7 +2208,10 @@ domain_sort(verify_parms *vh, DKIM_SIGINFO** sigs, int nsigs)
 	if (good)
 		for (int c = 0; c < nsigs; ++c)
 		{
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 			char *const domain = dkim_sig_getdomain(sigs[c]);
+#pragma GCC diagnostic pop
 			if (domain)
 			{
 				domain_prescreen *dps = get_prescreen(dps_head, domain);
@@ -2095,18 +2262,15 @@ domain_sort(verify_parms *vh, DKIM_SIGINFO** sigs, int nsigs)
 
 	/*
 	* Allocate indexes in the sorted sig array.  Reuse sigval as next_index.
-	* store dkim_order in dps.
 	*/
 
 	int next_ndx = 0;
-	size_t dkim_order = 0;
 	for (int c = 0; c < ndoms; ++c)
 	{
 		domain_prescreen *const dps = domain_ptr[c];
 		dps->sigval = dps->start_ndx = next_ndx;
 		next_ndx += dps->nsigs;
 		assert(dps->nsigs > 0);
-		dps->dkim_order = ++dkim_order;
 	}
 
 	/*
@@ -2219,7 +2383,7 @@ static int run_vbr_check(verify_parms *vh, domain_prescreen const *const dps)
 static inline dkim_result sig_is_good(DKIM_SIGINFO *const sig)
 {
 	unsigned int const sig_flags = dkim_sig_getflags(sig);
-	unsigned int const bh = dkim_sig_getbh(sig);
+	int const bh = dkim_sig_getbh(sig);
 	DKIM_SIGERROR const rc = dkim_sig_geterror(sig);
 
 	if (sig_flags & DKIM_SIGFLAG_IGNORE) return dkim_policy;
@@ -2230,7 +2394,7 @@ static inline dkim_result sig_is_good(DKIM_SIGINFO *const sig)
 
 	// we didn't process this sig
 	if ((sig_flags & DKIM_SIGFLAG_PROCESSED) == 0 ||
-		rc == DKIM_SIGERROR_UNKNOWN && bh == DKIM_SIGBH_UNTESTED)
+		(rc == DKIM_SIGERROR_UNKNOWN && bh == DKIM_SIGBH_UNTESTED))
 			return dkim_none;
 
 	// idea: if it's wrong in the DNS it is an error, otherwise a failure.
@@ -2253,6 +2417,22 @@ static inline dkim_result sig_is_good(DKIM_SIGINFO *const sig)
 	}
 }
 
+static signature_prescreen *new_dps_sig(char const *selector)
+{
+	size_t const len = sizeof(signature_prescreen);
+	size_t const len2 = strlen(selector) + 1;
+	signature_prescreen *new_sig = malloc(len + len2);
+	if (new_sig)
+	{
+		memset(new_sig, 0, len);
+		memcpy(&new_sig->name[0], selector, len2);
+	}
+	else
+		fl_report(LOG_ALERT, "MEMORY FAULT");
+
+	return new_sig;
+}
+
 static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 /*
 * Check author domain, whitelisted, trusted vbr.
@@ -2264,41 +2444,63 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 	int const ndoms = vh->ndoms;
 	domain_prescreen **const domain_ptr = vh->domain_ptr;
 
-	int const do_all = vh->parm->z.report_all_sigs;
 	char *const reputation_root = vh->parm->z.do_reputation?
 		vh->parm->z.reputation_root: NULL;
 
 	/*
-	* run all sigs if any of the following is true:
+	* verify all sigs if any of the following is true:
 	*  - all of them are to be reported on the message
 	*  - we use a database and report them there
 	*  - we have trusted vouchers to check
 	*  - we need reputation to accept the message
 	*/
-	int const verify_all = do_all ||
-		!vh->parm->z.verify_one_domain &&
+	int const verify_all = vh->parm->z.report_all_sigs ||
+		(!vh->parm->z.verify_one_domain &&
 		(vh->parm->dwa != NULL || vh->have_trusted_voucher ||
-			vh->parm->dyn.action_header != NULL && reputation_root);
+			(vh->parm->dyn.action_header != NULL && reputation_root)));
 
-	int do_more_sigs = 1;
-
+	int dkim_order = 0;
 	for (int c = 0; c < ndoms; ++c)
 	{
 		domain_prescreen *const dps = domain_ptr[c];
 		dps->sigval = 0; // reuse for number of verified signatures
 		if (dps->nsigs > 0)
 		{
+			if ((dps->sig = calloc(dps->nsigs, sizeof dps->sig[0])) == NULL)
+				return DKIM_CBSTAT_ERROR;
+
 			for (int n = 0; n < dps->nsigs; ++n)
 			{
 				int const ndx = n + dps->start_ndx;
 				assert(ndx >= 0 && ndx < nsigs);
 				DKIM_SIGINFO *const sig = sigs[ndx];
 				unsigned int const sig_flags = dkim_sig_getflags(sig);
-				if (do_more_sigs &&
-					(sig_flags & DKIM_SIGFLAG_IGNORE) == 0 &&
-					dkim_sig_process(dkim, sig) == DKIM_STAT_OK &&
-					(dps->dkim = sig_is_good(sig)) == dkim_pass)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
+				if ((dps->sig[n] = new_dps_sig(dkim_sig_getselector(sig))) == NULL)
+					return DKIM_CBSTAT_ERROR;
+#pragma GCC diagnostic pop
+
+				DKIM_STAT status = dkim_sig_process(dkim, sig);
+				if (status != DKIM_STAT_OK) // internal error
 				{
+					char const * err = dkim_sig_geterrorstr(dkim_sig_geterror(sig));
+					fl_report(LOG_ERR,
+						"id=%s: sig failure d=%s, s=%s: %s",
+						vh->parm->dyn.info.id, dps->name, dps->sig[n]->name,
+						err? err: "NULL");
+					continue;
+				}
+
+				if ((sig_flags & DKIM_SIGFLAG_IGNORE) != 0)
+				{
+					dps->sig[n]->dkim = dkim_none;
+					continue;
+				}
+
+				if ((dps->sig[n]->dkim = sig_is_good(sig)) == dkim_pass)
+				{
+					dps->sig[n]->dkim_order = ++dkim_order;
 					dps->u.f.sig_is_ok = 1;
 					if (dps->sigval++ == 0)
 					{
@@ -2315,11 +2517,8 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 						}
 					}
 
-					if (!do_all)
-					{
-						do_more_sigs = verify_all;
+					if (!verify_all)
 						break;
-					}
 				}
 			}
 
@@ -2343,6 +2542,17 @@ static DKIM_STAT dkim_sig_final(DKIM *dkim, DKIM_SIGINFO** sigs, int nsigs)
 				}
 			}
 		}
+	}
+
+	/*
+	* Repeat to assign dkim_order to failed signatures
+	*/
+	for (int c = 0; c < ndoms; ++c)
+	{
+		domain_prescreen *const dps = domain_ptr[c];
+		for (int n = 0; n < dps->nsigs; ++n)
+			if (dps->sig[n] && dps->sig[n]->dkim_order == 0)
+				dps->sig[n]->dkim_order = ++dkim_order;
 	}
 
 	return DKIM_CBSTAT_CONTINUE;
@@ -2648,7 +2858,12 @@ static int verify_headers(verify_parms *vh)
 		// Only on first step, acquire relevant header info, and unrename
 		else if (dkim)
 		{
-			// cache courier's SPF results, get authserv_id, count Received
+			/*
+			** cache courier's SPF results, get authserv_id, count Received
+			**
+			** Note: relevant remote host data (IP, name) is retrieved
+			** from ctlfile, see check_db_connected().
+			*/
 			if (strincmp(start, "Received", 8) == 0)
 			{
 				if ((s = hdrval(start, "Received")) != NULL)
@@ -2796,7 +3011,10 @@ static int verify_headers(verify_parms *vh)
 			size_t const len = eol - start - dkim_unrename;
 			if (dkim)
 			{
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 				status = dkim_header(dkim, start + dkim_unrename, len);
+#pragma GCC diagnostic pop
 				err = status != DKIM_STAT_OK;
 				if (err && status == DKIM_STAT_SYNTAX)
 				{
@@ -2858,14 +3076,16 @@ static int verify_headers(verify_parms *vh)
 
 	if (dkim)
 	{
-		vh->dkim_domain = dkim_getdomain(dkim);
 		dkim_set_user_context(dkim, vh);
 
 		DKIM_STAT status = dkim_eoh(dkim);
+		if (vh->dd.domain == NULL)
+			vh->dd.domain = normalize_utf8(dkim_getdomain(dkim));
+
 		if (status != DKIM_STAT_OK)
 		{
 			if (parm->z.verbose >= 7 ||
-				parm->z.verbose >= 5 && status != DKIM_STAT_NOSIG)
+				(parm->z.verbose >= 5 && status != DKIM_STAT_NOSIG))
 			{
 				char const *err = dkim_getresultstr(status);
 				fl_report(LOG_INFO,
@@ -2926,6 +3146,8 @@ static int print_signature_resinfo(FILE *fp, domain_prescreen *dps, int nsig,
 
 	char buf[80], *id = NULL, htype = 0;
 	memset(buf, 0, sizeof buf);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 	if (dkim_sig_getidentity(NULL, sig, buf, sizeof buf) == DKIM_STAT_OK)
 	{
 		id = buf;
@@ -2933,6 +3155,7 @@ static int print_signature_resinfo(FILE *fp, domain_prescreen *dps, int nsig,
 	}
 	else if ((id = dkim_sig_getdomain(sig)) != NULL)
 		htype = 'd';
+#pragma GCC diagnostic pop
 
 	char buf2[80], *id2 = NULL;
 	size_t sz2 = sizeof buf2;
@@ -3062,6 +3285,7 @@ static int print_signature_resinfo(FILE *fp, domain_prescreen *dps, int nsig,
 
 static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status)
 /*
+* Used to rewrite mail file as well as to save dropped file.
 * fp is open for writing
 */
 {
@@ -3194,9 +3418,9 @@ static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status)
 		if (POLICY_IS_DMARC(vh->policy))
 		{
 			method = "dmarc";
-			if (vh->dkim_domain)
+			if (vh->dd.domain)
 				printed = fprintf(fp, ";\n  dmarc=%s%s header.from=%s",
-					vh->policy_result, vh->policy_comment, vh->dkim_domain);
+					vh->policy_result, vh->policy_comment, vh->dd.domain);
 		}
 		else
 		/*
@@ -3208,11 +3432,11 @@ static int write_file(verify_parms *vh, FILE *fp, DKIM_STAT status)
 		{
 			method = "dkim-adsp";
 #if HAVE_DKIM_GETUSER
-			char const *const user = dkim_getuser(dkim);
-			if (user && vh->dkim_domain)
+			unsigned char const *const user = dkim_getuser(dkim);
+			if (user && vh->dd.domain)
 				printed = fprintf(fp, ";\n  dkim-adsp=%s header.from=%s@%s",
-					vh->policy_result, user, vh->dkim_domain);
-#endif			
+					vh->policy_result, user, vh->dd.domain);
+#endif
 		}
 
 		if (printed == 0)
@@ -3314,7 +3538,7 @@ save_file(dkimfl_parm *parm, char const *envelope_sender, char **fname_ptr)
 	{
 		int ch = *(unsigned char*)s++;
 		if (ch == 0 ||
-			isspace(ch) && cp_name > name_len_min)
+			(isspace(ch) && cp_name > name_len_min))
 				break;
 
 		if (!isalnum(ch) && ch != '.' && ch != '-')
@@ -3367,6 +3591,26 @@ save_file(dkimfl_parm *parm, char const *envelope_sender, char **fname_ptr)
 	return NULL;
 }
 
+typedef enum message_disposition
+{
+	dispo_deliver,
+	dispo_quarantine,
+	dispo_drop,
+	dispo_reject
+} message_disposition;
+
+static char const *explain_dispo(message_disposition dispo)
+{
+	switch (dispo)
+	{
+		case dispo_deliver: return "deliver";
+		case dispo_quarantine: return "quarantine";
+		case dispo_drop: return "drop";
+		case dispo_reject: return "reject";
+		default: return "undefined disposition";
+	}
+}
+
 static void verify_message(dkimfl_parm *parm)
 /*
 * add/remove A-R records, set rtc 1 if ok, 2 if rejected, -1 if failed,
@@ -3375,13 +3619,16 @@ static void verify_message(dkimfl_parm *parm)
 {
 	verify_parms vh;
 	memset(&vh, 0, sizeof vh);
-	vh.presult = DKIM_PRESULT_NONE;
-	vh.policy = DKIM_POLICY_NONE;
+	vh.presult = PRESULT_NOT_DONE;
+	// vh.policy = POLICY_NOT_DEFINED;
 	vh.do_adsp = parm->z.honor_author_domain != 0;
 	vh.do_dmarc = parm->z.honor_dmarc != 0;
 
 	DKIM_STAT status;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpointer-sign"
 	DKIM *dkim = dkim_verify(parm->dklib, parm->dyn.info.id, NULL, &status);
+#pragma GCC diagnostic pop
 	if (dkim == NULL || status != DKIM_STAT_OK)
 	{
 		char const *err = dkim? dkim_geterror(dkim): NULL;
@@ -3390,6 +3637,7 @@ static void verify_message(dkimfl_parm *parm)
 			parm->dyn.info.id, err? err: "NULL");
 		parm->dyn.rtc = -1;
 		clean_stats(parm);
+		query_done();
 		return;
 	}
 
@@ -3402,6 +3650,7 @@ static void verify_message(dkimfl_parm *parm)
 		clean_stats(parm);
 		clean_vh(&vh);
 		dkim_free(dkim);
+		query_done();
 		if (parm->dyn.rtc == 0)
 			fl_report(LOG_ERR,
 				"id=%s: missing Courier Received: ignoring message",
@@ -3422,7 +3671,6 @@ static void verify_message(dkimfl_parm *parm)
 
 		case DKIM_STAT_NOSIG:
 			// none
-			vh.dkim_domain = dkim_getdomain(dkim);
 
 		case DKIM_STAT_BADSIG: // should be treated as NOSIG...
 			break;
@@ -3430,6 +3678,7 @@ static void verify_message(dkimfl_parm *parm)
 		case DKIM_STAT_NORESOURCE:
 		case DKIM_STAT_INTERNAL:
 		case DKIM_STAT_CBTRYAGAIN:
+		case DKIM_STAT_CBERROR:
 		case DKIM_STAT_KEYFAIL:
 		{
 #if HAVE_LIBOPENDKIM_2A1
@@ -3464,16 +3713,10 @@ static void verify_message(dkimfl_parm *parm)
 			break;
 		}
 
-/*
-	TODO: must check DKIM_STAT_CBREJECT, which is returned by dkim_sig_sort()
-	(DKIM_CBSTAT_REJECT).  In addition, if there are no domains in domain_head
-	and parm->z.reject_on_nxdomain is set, the message should also be rejected.
-	(The latter condition implies DKIM_STAT_SYNTAX for empty or missing From:)
-
-	Mail with no mailfrom and no From: triggers "Internal error, invalid stats"
-	in db_set_stats_info.  Why that kind of message has no Received-SPF:?
-	Anyway, dyn.stats should be cleared in that case.
-*/
+		case DKIM_STAT_CBREJECT:
+			// Returned by dkim_sig_sort().  Too many signatures.
+			clean_stats(parm);
+			break;
 
 		case DKIM_STAT_SYNTAX:
 		case DKIM_STAT_NOKEY:
@@ -3482,6 +3725,34 @@ static void verify_message(dkimfl_parm *parm)
 		default:
 		{
 			// permerror
+			/* If there are no domains in domain_head
+			* and parm->z.reject_on_nxdomain is set,
+			* the message should also be rejected.
+			* (The latter condition implies DKIM_STAT_SYNTAX
+			* or DKIM_STAT_INVALID for empty or missing From:)
+			*
+			* However, domain_head != NULL doesn't imply From: is good.
+			*/
+			if (vh.domain_head == NULL)
+			{
+				if (parm->z.reject_on_nxdomain)
+				{
+					fl_pass_message(parm->fl,
+						"550 Unacceptable From: header field.\n");
+					parm->dyn.rtc = 2;
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_ERR,
+							"id=%s: no From: domain, message rejected.\n",
+							parm->dyn.info.id);
+				}
+				/*
+				* Mail with no mailfrom and no From: triggers
+				* "Internal error, invalid stats" in db_set_stats_info.
+				* Why that kind of message has no Received-SPF:?
+				*/
+				clean_stats(parm);
+			}
+
 			if (parm->z.verbose >= 4)
 			{
 				char const *err = dkim_geterror(dkim);
@@ -3505,76 +3776,104 @@ static void verify_message(dkimfl_parm *parm)
 	/*
 	* pass unauthenticated From: to database
 	*/
-	if (parm->dyn.rtc == 0 && vh.dkim_domain && parm->dyn.stats)
+	if (parm->dyn.rtc == 0 && vh.dd.domain && parm->dyn.stats)
+	{
 		if (parm->z.publicsuffix)
 			parm->dyn.stats->scope = save_unauthenticated_dmarc;
 		else if (parm->z.save_from_anyway)
 			parm->dyn.stats->scope = save_unauthenticated_from;
+	}
 
 	/*
 	* DMARC/ADSP policy check
 	*/
-	if (parm->dyn.rtc == 0 && vh.dkim_domain != NULL)
+	if (parm->dyn.rtc == 0)
 	{
-		if (vh.do_dmarc >= vh.do_adsp)
+		if (vh.dd.domain == NULL)
+			vh.presult = PRESULT_NXDOMAIN;
+		else if (vh.do_dmarc >= vh.do_adsp)
 		{
-			vh.presult = get_dmarc(vh.dkim_domain, vh.org_domain, &vh.dmarc);
+			vh.presult = get_dmarc(&vh.dd, &vh.dmarc);
 			if (vh.presult == 0)
+			{
 				vh.policy = vh.dmarc.effective_p;
+				if (parm->dwa && vh.dmarc.found_at_org > 1 && vh.dd.super_org)
+				/*
+				* Insert a domain record for zaggregate
+				*/
+				{
+					domain_prescreen *dps =
+						get_prescreen(&vh.domain_head, vh.dd.super_org);
+					if (dps)
+						dps->u.f.is_dmarc = 1;
+				}
+			}
 
 			if (parm->z.verbose >= 7)
 			{
-				char *disp = vh.dkim_domain;
-				if (vh.org_domain && strcmp(vh.dkim_domain, vh.org_domain) != 0)
+				char *disp = vh.dd.domain;
+				if (vh.dmarc.found_at_org > 0)
 				{
-					size_t len = strlen(vh.dkim_domain), le = strlen(vh.org_domain);
+					assert(vh.dd.org_domain);
+					assert(vh.dd.super_org || vh.dmarc.found_at_org < 2);
+
+					char * parent = vh.dmarc.found_at_org == 1?
+						vh.dd.org_domain: vh.dd.super_org;
+					size_t len = strlen(vh.dd.domain), le = strlen(parent);
 					char *p = len > le? malloc(len + 3): NULL;
 					if (p)
 					{
 						size_t diff = len - le;
 						disp = p;
 						*p++ = '[';
-						memcpy(p, vh.dkim_domain, diff);
+						memcpy(p, vh.dd.domain, diff);
 						p += diff;
 						*p++ = ']';
-						memcpy(p, vh.org_domain, le + 1);
+						memcpy(p, parent, le + 1);
 					}
 				}
 				fl_report(LOG_INFO,
 					"DMARC %sabled (%d), policy %s for %s",
 						vh.do_dmarc > 0? "en": "dis", vh.do_dmarc,
 						presult_explain(vh.presult), disp);
-				if (disp != vh.dkim_domain)
+				if (disp != vh.dd.domain)
 					free(disp);
 			}
 		}
 
-		if (vh.presult != 0 && vh.presult != 3 && vh.do_dmarc <= vh.do_adsp)
+		if (vh.presult != PRESULT_FOUND && vh.presult != PRESULT_NXDOMAIN &&
+			vh.do_dmarc <= vh.do_adsp)
 		{
-			vh.presult = my_get_adsp(vh.dkim_domain, &vh.policy);
+			vh.presult = my_get_adsp(vh.dd.domain, &vh.policy);
 
 			if (parm->z.verbose >= 7)
 				fl_report(LOG_INFO,
 					"ADSP %sabled (%d), policy %s for %s",
 						vh.do_adsp > 0? "en": "dis", vh.do_adsp,
-						presult_explain(vh.presult), vh.dkim_domain);
+						presult_explain(vh.presult), vh.dd.domain);
 		}
 
-		if (vh.presult <= -2 &&
+		if (vh.presult <= PRESULT_DNS_ERROR &&
 			(vh.do_dmarc > 0 || vh.do_adsp > 0 || parm->z.reject_on_nxdomain))
 		{
 			if (parm->z.verbose >= 3)
 				fl_report(LOG_ERR,
 					"id=%s: temporary author domain verification failure: %s",
 					parm->dyn.info.id,
-					vh.presult == -2? "DNS server": "garbled data");
+					vh.presult == PRESULT_DNS_ERROR? "DNS server": "garbled data");
 			parm->dyn.rtc = -1;
 		}
 	}
 
+	/*
+	* Review alignment, whitelisting, vbr, dnswl.
+	* Set vh.*_dps according to value/ preference order
+	* (domain_val is the domain preference order).
+	*/
 	int from_sig_is_ok = 0, aligned_sig_is_ok = 0, aligned_spf_is_ok = 0;
 	for (domain_prescreen *dps = vh.domain_head; dps; dps = dps->next)
 	{
+		// database whitelisted > 1, SPF or DKIM authenticated
 		if (dps->u.f.is_whitelisted &&
 			(dps->u.f.sig_is_ok || dps->u.f.spf_pass) &&
 			(vh.whitelisted_dps == NULL ||
@@ -3583,7 +3882,8 @@ static void verify_message(dkimfl_parm *parm)
 					vh.whitelisted_dps = dps;
 
 		if (dps->u.f.vbr_is_trusted && 
-			(dps->u.f.sig_is_ok || dps->u.f.spf_pass))
+			(dps->u.f.sig_is_ok || dps->u.f.spf_pass) &&
+			!dps->u.f.shoot_on_sight)
 		{
 			if (run_vbr_check(&vh, dps) == 0)
 			{
@@ -3595,13 +3895,13 @@ static void verify_message(dkimfl_parm *parm)
 				vh.vbr_dps = dps;
 		}
 
-		if (dps->u.f.is_dnswl &&
+		if (dps->u.f.is_dnswl && !dps->u.f.shoot_on_sight &&
 			(vh.dnswl_dps == NULL ||
 				vh.dnswl_dps->dnswl_value < dps->dnswl_value ||
 				vh.dnswl_dps->domain_val < dps->domain_val))
 					vh.dnswl_dps = dps;
 
-		if (dps->u.f.is_reputed_signer &&
+		if (dps->u.f.is_reputed_signer && !dps->u.f.shoot_on_sight &&
 			(vh.reputation_dps == NULL ||
 				vh.reputation_dps->reputation > dps->reputation ||
 				vh.reputation_dps->domain_val < dps->domain_val))
@@ -3624,7 +3924,7 @@ static void verify_message(dkimfl_parm *parm)
 			fl_report(LOG_INFO,
 				"id=%s: different From: is it %s (OpenDKIM) or %s (Courier SPF)?",
 				parm->dyn.info.id,
-				vh.dkim_domain? vh.dkim_domain: "NULL",
+				vh.dd.domain? vh.dd.domain: "NULL",
 				dps->name);
 			
 		if (dps->u.f.is_aligned)
@@ -3661,393 +3961,395 @@ static void verify_message(dkimfl_parm *parm)
 	*/
 	if (parm->dyn.rtc == 0)
 	{
-		if (vh.dkim_domain != NULL && vh.presult >= 0)
+		// !!if (vh.dd.domain != NULL && vh.presult >= 0)
+		// !!{
+		/*
+		* If NXDOMAIN, pretend to have a strict ADSP policy, so as to
+		* detect adsp-nxdomain --this includes vh.dd.domain == NULL
+		*/
+
+		if (vh.presult == PRESULT_NXDOMAIN)
+			vh.policy = ADSP_POLICY_ALL;
+
+		bool policy_fail = POLICY_IS_STRICT(vh.policy) &&
+			((POLICY_IS_DMARC(vh.policy) && aligned_auth_is_ok == 0) ||
+			(POLICY_IS_ADSP(vh.policy) && from_sig_is_ok == 0));
+
+		bool bad_message = parm->dyn.action_header || vh.shoot_on_sight;
+
+		if (parm->dyn.stats)
 		{
-			/*
-			* http://tools.ietf.org/html/draft-kucherawy-dmarc-base-13#section-6.3
-			*
-			* quarantine:  The Domain Owner wishes to have email that fails the
-			*    DMARC mechanism check to be treated by Mail Receivers as
-			*    suspicious.  Depending on the capabilities of the Mail
-			*    Receiver, this can mean "place into spam folder", "scrutinize
-			*    with additional intensity", and/or "flag as suspicious".
-			*
-			* Here, we assume that quarantine is going to be honored downstream,
-			* based on A-R, if do_dmarc is set.
-			*
-			* If NXDOMAIN, pretend to have a strict ADSP policy, so as to enable
-			* adsp-nxdomain.
-			*/
-
-			if (vh.presult == 3)
-				vh.policy = ADSP_POLICY_ALL;
-
-			bool policy_fail = POLICY_IS_STRICT(vh.policy) &&
-				(POLICY_IS_DMARC(vh.policy) && aligned_auth_is_ok == 0 ||
-				POLICY_IS_ADSP(vh.policy) && from_sig_is_ok == 0);
-
-			if (parm->dyn.stats)
+			if (vh.presult == PRESULT_NXDOMAIN)
 			{
-				if (vh.presult == 3)
-				{
-					parm->dyn.stats->nxdomain = 1;
-				}
-				else if (POLICY_IS_DMARC(vh.policy))
-				{
-					if (vh.dmarc.rua)
-					{
-						uint32_t ri =
-							adjust_ri(vh.dmarc.ri, parm->z.honored_report_interval);
-						if (vh.dmarc.ri != 0 &&
-							ri != vh.dmarc.ri && parm->z.verbose >= 5)
-						{
-							domain_prescreen *dps = vh.domain_head;
-							for (; dps && dps->u.f.is_dmarc == 0; dps = dps->next)
-								continue;
-							fl_report(LOG_INFO,
-								"ri of %s adjusted from %u to %u "
-								"(honored_report_interval = %d)",
-									dps? dps->name: "unknown domain", vh.dmarc.ri, ri,
-									parm->z.honored_report_interval);
-						}
-						parm->dyn.stats->dmarc_ri = ri;
-						parm->dyn.stats->original_ri = vh.dmarc.ri;
-						char *bad = NULL,
-							*rua = vh.dmarc.rua? adjust_rua(&vh.dmarc.rua, &bad): NULL;
-						if (bad && parm->z.verbose >= 5)
-						{
-							domain_prescreen *dps = vh.domain_head;
-							for (; dps && dps->u.f.is_dmarc == 0; dps = dps->next)
-								continue;
-							fl_report(LOG_INFO,
-								"rua URI of %s not supported: %s (supported: %s)",
-									dps? dps->name: "unknown domain", bad,
-									rua? rua: "none");
-						}
-						free(bad);
-						parm->dyn.stats->dmarc_rua = rua;
-					}
-					parm->dyn.stats->dmarc_record = write_dmarc_rec(&vh.dmarc);
-
-					parm->dyn.stats->dmarc_found = vh.presult == 0;
-					parm->dyn.stats->dmarc_subdomain = vh.dmarc.found_at_org != 0;
-					parm->dyn.stats->dmarc_dkim = aligned_sig_is_ok;
-					parm->dyn.stats->dmarc_spf = aligned_spf_is_ok & 1;
-					parm->dyn.stats->dkim_any = vh.ndoms > 0;
-					parm->dyn.stats->spf_any = vh.received_spf > 0;
-
-					// default values:
-					assert(parm->dyn.stats->dmarc_reason == dmarc_reason_none);
-					assert(parm->dyn.stats->dmarc_dispo == 0);
-				}
-				else
-				{
-					parm->dyn.stats->adsp_any = 1;
-					parm->dyn.stats->adsp_found = vh.presult == 0;
-					parm->dyn.stats->adsp_unknown = vh.policy == ADSP_POLICY_UNKNOWN;
-					parm->dyn.stats->adsp_all = vh.policy == ADSP_POLICY_ALL;
-					parm->dyn.stats->adsp_discardable =
-						vh.policy == ADSP_POLICY_DISCARDABLE;
-					parm->dyn.stats->adsp_fail = policy_fail;
-				}
+				parm->dyn.stats->nxdomain = 1;
 			}
-
-			/*
-			* unless disabled by parameter or whitelisted, do action:
-			* reject if dkim_domain is not valid, ADSP == all, or DMARC == reject,
-			* discard if ADSP == discardable;
-			*/
-			if (policy_fail)
+			else if (POLICY_IS_DMARC(vh.policy))
 			{
-				bool deliver_message = 0;
-
-				if (POLICY_IS_DMARC(vh.policy) && vh.dmarc.pct != 100 &&
-					random() % 100 >= vh.dmarc.pct)
+				if (vh.dmarc.rua)
 				{
-					deliver_message = true;
-					if (parm->dyn.stats)
-						parm->dyn.stats->dmarc_reason = dmarc_reason_sampled_out;
-					if (parm->z.verbose >= 7)
+					uint32_t ri =
+						adjust_ri(vh.dmarc.ri, parm->z.honored_report_interval);
+					if (vh.dmarc.ri != 0 &&
+						ri != vh.dmarc.ri && parm->z.verbose >= 5)
+					{
+						domain_prescreen *dps = vh.domain_head;
+						for (; dps && dps->u.f.is_dmarc == 0; dps = dps->next)
+							continue;
 						fl_report(LOG_INFO,
-							"id=%s: %s dmarc=fail, but toss >= %d%%",
-							parm->dyn.info.id, vh.dkim_domain, vh.dmarc.pct);
+							"ri of %s adjusted from %u to %u "
+							"(honored_report_interval = %d)",
+								dps? dps->name: "unknown domain", vh.dmarc.ri, ri,
+								parm->z.honored_report_interval);
+					}
+					parm->dyn.stats->dmarc_ri = ri;
+					parm->dyn.stats->original_ri = vh.dmarc.ri;
+					char *bad = NULL,
+						*rua = vh.dmarc.rua? adjust_rua(&vh.dmarc.rua, &bad): NULL;
+					if (bad && parm->z.verbose >= 5)
+					{
+						domain_prescreen *dps = vh.domain_head;
+						for (; dps && dps->u.f.is_dmarc == 0; dps = dps->next)
+							continue;
+						fl_report(LOG_INFO,
+							"rua URI of %s not supported: %s (supported: %s)",
+								dps? dps->name: "unknown domain", bad,
+								rua? rua: "none");
+					}
+					free(bad);
+					parm->dyn.stats->dmarc_rua = rua;
 				}
-				else if ((POLICY_IS_DMARC(vh.policy) && vh.do_dmarc > 0) ||
-					(POLICY_IS_ADSP(vh.policy) && vh.do_adsp > 0) ||
-					(parm->z.reject_on_nxdomain && vh.presult == 3))
-				{
-					char const *log_reason, *smtp_reason = NULL;
-				
-					if (vh.presult == 3)
-					{
-						log_reason = "invalid domain";
-						smtp_reason = "550 Invalid author domain\n";
-					}
-					else if (vh.policy == ADSP_POLICY_ALL)
-					{
-						log_reason = "adsp=all policy for";
-						smtp_reason = "550 DKIM signature required by ADSP\n";
-					}
-					else if (vh.policy == DMARC_POLICY_REJECT)
-					{
-						log_reason = "dmarc=reject policy for";
-						smtp_reason = "550 Reject after DMARC policy.\n";
-					}
-					else if (vh.policy == DMARC_POLICY_QUARANTINE)
-					{
-						log_reason = "dmarc=quarantine policy for";
-						vh.policy_comment = " (QUARANTINE)";
-						deliver_message = 1;
-						if (parm->dyn.stats)
-							parm->dyn.stats->dmarc_dispo = 1;
-					}
-					else if (vh.policy == ADSP_POLICY_DISCARDABLE)
-						log_reason = "adsp=discardable policy:";
-					else
-					{
-						log_reason = "INTERNAL ERROR!";
-						fl_report(LOG_CRIT,
-							"%s: policy=%d, presult=%d, do_dmarc=%d, do_adsp=%d",
-							log_reason,
-							vh.policy, vh.presult, vh.do_dmarc, vh.do_adsp);
-						deliver_message = true;
-					}
+				parm->dyn.stats->dmarc_record = write_dmarc_rec(&vh.dmarc);
 
-					if (parm->z.verbose >= 3)
-					{
-						if (vh.whitelisted_dps)
-							fl_report(LOG_INFO,
-								"id=%s: %s %s, but %s is whitelisted (auth: %s)",
-								parm->dyn.info.id,
-								log_reason,
-								vh.dkim_domain,
-								vh.whitelisted_dps->name,
-								vh.whitelisted_dps->u.f.sig_is_ok? "DKIM": "SPF");
-						else if (vh.vbr_dps)
-							fl_report(LOG_INFO,
-								"id=%s: %s %s, but %s is VBR vouched by %s (auth: %s)",
-								parm->dyn.info.id,
-								log_reason,
-								vh.dkim_domain,
-								vh.vbr_result.vbr->md,
-								vh.vbr_result.mv,
-								vh.vbr_dps->u.f.sig_is_ok? "DKIM": "SPF");
-						else if (vh.dnswl_count > 0)
-							fl_report(LOG_INFO,
-								"id=%s: %s %s, but I found %d DNSWL record(s) --%s",
-								parm->dyn.info.id,
-								log_reason,
-								vh.dkim_domain,
-								vh.dnswl_count,
-								vh.dnswl_dps?
-									vh.dnswl_dps->name: "no domain name, though");
-						else if (vh.author_dps && vh.author_dps->u.f.is_reputed)
-							fl_report(LOG_INFO,
-								"id=%s: %s %s, even if %s is in %s (%d)",
-								parm->dyn.info.id,
-								log_reason,
-								vh.dkim_domain,
-								vh.author_dps->name,
-								parm->z.reputation_root,
-								vh.author_dps->reputation);
-						else
-							fl_report(LOG_INFO,
-								"id=%s: %s %s, no VBR and no whitelist",
-								parm->dyn.info.id,
-								log_reason,
-								vh.dkim_domain);
-					}
+				parm->dyn.stats->dmarc_found = vh.presult == PRESULT_FOUND;
+				parm->dyn.stats->dmarc_subdomain = vh.dmarc.found_at_org != 0;
+				parm->dyn.stats->dmarc_dkim = aligned_sig_is_ok;
+				parm->dyn.stats->dmarc_spf = aligned_spf_is_ok & 1;
+				parm->dyn.stats->dkim_any = vh.ndoms > 0;
+				parm->dyn.stats->spf_any = vh.received_spf > 0;
 
-					if (vh.vbr_dps || vh.whitelisted_dps || vh.dnswl_count > 0)
-					{
-						deliver_message = true;
-						if (POLICY_IS_DMARC(vh.policy) && parm->dyn.stats)
-							parm->dyn.stats->dmarc_reason =
-								dmarc_reason_trusted_forwarder;
-					}
-
-					if (!deliver_message)
-					{
-						if (smtp_reason) //reject
-						{
-							fl_pass_message(parm->fl, smtp_reason);
-							if (parm->dyn.stats)
-							{
-								parm->dyn.stats->reject = 1;
-								parm->dyn.stats->dmarc_dispo = 2;
-							}
-						}
-						else // drop, and stop filtering
-						{
-							fl_pass_message(parm->fl, "050 Message dropped.\n");
-							fl_drop_message(parm->fl, "adsp=discard");
-							if (parm->dyn.stats)
-								parm->dyn.stats->drop = 1;
-						}
-
-						parm->dyn.rtc = 2;
-					}
-				}
-				else if (parm->dyn.stats)
-					parm->dyn.stats->dmarc_reason = dmarc_reason_local_policy;
+				// default values to be filled below
+				assert(parm->dyn.stats->dmarc_reason == dmarc_reason_none);
+				assert(parm->dyn.stats->dmarc_dispo == dmarc_dispo_none);
 			}
-			else if (POLICY_IS_DMARC(vh.policy) &&
-				aligned_sig_is_ok == 0 && aligned_spf_is_ok == 2)
-			// policy did not fail only because of BOFHSPFFROM
+			else
 			{
+				parm->dyn.stats->adsp_any = 1;
+				parm->dyn.stats->adsp_found = vh.presult == PRESULT_FOUND;
+				parm->dyn.stats->adsp_unknown = vh.policy == ADSP_POLICY_UNKNOWN;
+				parm->dyn.stats->adsp_all = vh.policy == ADSP_POLICY_ALL;
+				parm->dyn.stats->adsp_discardable =
+					vh.policy == ADSP_POLICY_DISCARDABLE;
+				parm->dyn.stats->adsp_fail = policy_fail;
+			}
+		}
+
+		/*
+		* Determine message disposition:
+		* unless disabled by parameter or whitelisted, do action:
+		* reject if dd.domain is not valid, ADSP == all, or DMARC == reject,
+		* discard if ADSP == discardable;
+		*/
+		if (policy_fail || bad_message)
+		{
+			message_disposition dispo;
+
+			if (policy_fail && !bad_message && POLICY_IS_DMARC(vh.policy) &&
+				vh.dmarc.pct != 100 && random() % 100 >= vh.dmarc.pct)
+			{
+				dispo = dispo_deliver;
+				if (parm->dyn.stats)
+					parm->dyn.stats->dmarc_reason = dmarc_reason_sampled_out;
 				if (parm->z.verbose >= 3)
 					fl_report(LOG_INFO,
-						"id=%s: %s pass only because BOFHSPFFROM",
-						parm->dyn.info.id, vh.dkim_domain);
-				if (parm->dyn.stats)
-					parm->dyn.stats->dmarc_reason = dmarc_reason_other;
+						"id=%s: %s dmarc=fail, but toss >= %d%%",
+						parm->dyn.info.id, vh.dd.domain, vh.dmarc.pct);
 			}
-		}
-	}
-
-	/*
-	* Header action and possible reject/drop
-	*/
-	if (parm->dyn.action_header)
-	{
-		assert(parm->z.action_header);
-
-		int good = 0;
-
-		if (vh.whitelisted_dps &&
-			vh.whitelisted_dps->whitelisted >= parm->z.whitelisted_pass)
-		{
-			good = 1;
-			if (parm->z.verbose >= 3)
-				fl_report(LOG_INFO,
-					"id=%s: %s: %s, but %s is whitelisted (%d)",
-					parm->dyn.info.id,
-					parm->z.action_header,
-					parm->dyn.action_header,
-					vh.whitelisted_dps->name,
-					vh.whitelisted_dps->whitelisted);
-		}
-		else if (vh.vbr_dps)
-		{
-			good = 1;
-			if (parm->z.verbose >= 3)
-				fl_report(LOG_INFO,
-					"id=%s: %s: %s, but %s is vouched (%s)",
-					parm->dyn.info.id,
-					parm->z.action_header,
-					parm->dyn.action_header,
-					vh.vbr_dps->name,
-					vh.vbr_dps->vbr_mv);
-		}
-		else if (vh.dnswl_dps &&
-			vh.dnswl_dps->dnswl_value >= (uint8_t)parm->z.dnswl_worthiness_pass)
-		{
-			good = 1;
-			if (parm->z.verbose >= 3)
-				fl_report(LOG_INFO,
-					"id=%s: %s: %s, but %s is in dnswl (%u)",
-					parm->dyn.info.id,
-					parm->z.action_header,
-					parm->dyn.action_header,
-					vh.dnswl_dps->name,
-					vh.dnswl_dps->dnswl_value);
-		}
-		else if (vh.author_dps && vh.author_dps->u.f.is_reputed &&
-			vh.author_dps->reputation <= parm->z.reputation_pass)
-		{
-			good = 1;
-			if (parm->z.verbose >= 3)
-				fl_report(LOG_INFO,
-					"id=%s: %s: %s, but %s is in %s (%d)",
-					parm->dyn.info.id,
-					parm->z.action_header,
-					parm->dyn.action_header,
-					vh.author_dps->name,
-					parm->z.reputation_root,
-					vh.author_dps->reputation);
-		}
-
-		if (good == 0)
-		{
-			if (parm->z.header_action_is_reject)
+			else if (bad_message ||
+				(POLICY_IS_DMARC(vh.policy) && vh.do_dmarc > 0) ||
+				(POLICY_IS_ADSP(vh.policy) && vh.do_adsp > 0) ||
+				(parm->z.reject_on_nxdomain && vh.presult == PRESULT_NXDOMAIN))
+			// candidate for reject/ quarantine/ drop
 			{
-				static const char templ[] = "550 %s.\n";
-				char *smtp_reason =
-					malloc(strlen(parm->z.action_header) + sizeof templ);
-				if (smtp_reason == NULL)
-					parm->dyn.rtc = -1;
-				else
+				dispo = dispo_reject; // most likely
+
+				char const *smtp_reason = NULL, *drop_reason = NULL;
+				char *free_reason = NULL;
+
+				if (vh.presult == PRESULT_NXDOMAIN &&
+					parm->z.reject_on_nxdomain)
 				{
-					sprintf(smtp_reason, templ, parm->z.action_header);
-					fl_pass_message(parm->fl, smtp_reason);
-					fl_free_on_exit(parm->fl, smtp_reason);
+					smtp_reason = "550 Invalid author domain\n";
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: reject! invalid domain %s",
+							parm->dyn.info.id, vh.dd.domain);
+				}
+				else if (policy_fail &&
+					vh.policy == ADSP_POLICY_ALL && vh.do_adsp > 0)
+				{
+					smtp_reason = "550 DKIM signature required by ADSP\n";
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: reject! ADSP policy=all fail for %s",
+							parm->dyn.info.id, vh.dd.domain);
+				}
+				else if (policy_fail &&
+					vh.policy == DMARC_POLICY_REJECT && vh.do_dmarc > 0)
+				{
+					smtp_reason = "550 Reject after DMARC policy.\n";
 					if (parm->dyn.stats)
-						parm->dyn.stats->reject = 1;
+						parm->dyn.stats->dmarc_dispo = dmarc_dispo_reject;
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: reject! DMARC policy=reject for %s",
+							parm->dyn.info.id, vh.dd.domain);
+				}
+				else if (policy_fail &&
+					vh.policy == ADSP_POLICY_DISCARDABLE && vh.do_adsp > 0)
+				{
+					dispo = dispo_drop;
+					drop_reason = "ADSP discardable";
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: drop! ADSP policy=discardable for %s",
+							parm->dyn.info.id, vh.dd.domain);
+				}
+				else if (parm->dyn.action_header)
+				{
+					assert(parm->z.action_header);
+
+					if (parm->z.header_action_is_reject)
+					{
+						size_t size = strlen(parm->z.action_header) + 10;
+						free_reason = malloc(size);
+						if (free_reason)
+						{
+							snprintf(free_reason, size,
+								"550 %s.\n", parm->z.action_header);
+							smtp_reason = free_reason;
+						}
+					}
+					else
+					{
+						dispo = dispo_drop;
+						drop_reason = parm->z.action_header;
+					}
 
 					if (parm->z.verbose >= 3)
 						fl_report(LOG_INFO,
-							"id=%s: 550 %s (was: %s)",
+							"id=%s: %s! %s: %s",
 							parm->dyn.info.id,
+							dispo == dispo_reject? "reject": "drop",
 							parm->z.action_header,
 							parm->dyn.action_header);
 
-					parm->dyn.rtc = 2;
 				}
-			}
-			else // drop, and stop filtering
-			{
-				int droperr = 0;
-				if (parm->z.save_drop)
+				else if (vh.shoot_on_sight)
 				{
-					char *envelope_sender = fl_get_sender(parm->fl), *fname = NULL;
-					FILE *fp = save_file(parm, envelope_sender, &fname);
-					droperr = 1;
-					if (fp)
-					{
-						if (write_file(&vh, fp, status) >= 0)
-							droperr = ferror(fp);
+					smtp_reason =
+						"550 Rejected for policy reasons (blacklisted).\n";
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: reject! shoot on sight",
+							parm->dyn.info.id);
+				}
+				else if (policy_fail &&
+					vh.policy == DMARC_POLICY_QUARANTINE && vh.do_dmarc > 0)
+				/*
+				* Here, we assume that quarantine is going to be
+				* honored downstream based on A-R, if do_dmarc is set.
+				*/
+				{
+					vh.policy_comment = " (QUARANTINE)";
+					dispo = dispo_quarantine;
+					if (parm->dyn.stats)
+						parm->dyn.stats->dmarc_dispo = dmarc_dispo_quarantine;
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: quarantine! DMARC policy=quarantine for %s",
+							parm->dyn.info.id, vh.dd.domain);
+				}
+				else // should never happen
+				{
+					assert(false);
+					dispo = dispo_deliver;
+					fl_report(LOG_CRIT,
+						"INTERNAL ERROR!!: %spolicy_fail, %sbad_message, "
+						"policy=%d, presult=%d, do_dmarc=%d, do_adsp=%d",
+						policy_fail? "": "!", bad_message? "": "!",
+						vh.policy, vh.presult, vh.do_dmarc, vh.do_adsp);
+				}
 
-						droperr |= fclose(fp);
-						if (droperr == 0 && parm->z.verbose >= 4 && fname)
-							fl_report(LOG_INFO,
-								"dropped message saved in %s", my_basename(fname));
+				// whitelisting
+				bool override_dispo = false;
+				if (vh.whitelisted_dps &&
+					vh.whitelisted_dps->whitelisted >= parm->z.whitelisted_pass)
+				{
+					override_dispo = true;
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: %s->deliver!! %s is whitelisted (%d) (auth: %s)",
+							parm->dyn.info.id,
+							explain_dispo(dispo),
+							vh.whitelisted_dps->name,
+							vh.whitelisted_dps->whitelisted,
+							vh.whitelisted_dps->u.f.sig_is_ok? "DKIM": "SPF");
+				}
+				else if (vh.vbr_dps)
+				{
+					override_dispo = true;
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: %s->deliver!! %s is vouched by %s (auth: %s)",
+							parm->dyn.info.id,
+							explain_dispo(dispo),
+							vh.vbr_dps->name,
+							vh.vbr_dps->vbr_mv,
+							vh.vbr_dps->u.f.sig_is_ok? "DKIM": "SPF");
+				}
+				else if (vh.dnswl_dps &&
+					vh.dnswl_dps->dnswl_value >= (uint8_t)parm->z.dnswl_worthiness_pass)
+				{
+					override_dispo = true;
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: %s->deliver!! %s is in dnswl (%u)",
+							parm->dyn.info.id,
+							explain_dispo(dispo),
+							vh.dnswl_dps->name,
+							vh.dnswl_dps->dnswl_value);
+				}
+				else if (vh.author_dps && vh.author_dps->u.f.is_reputed &&
+					vh.author_dps->reputation <= parm->z.reputation_pass)
+				{
+					override_dispo = true;
+					if (parm->z.verbose >= 3)
+						fl_report(LOG_INFO,
+							"id=%s: %s->deliver!! %s is in %s (%d)",
+							parm->dyn.info.id,
+							explain_dispo(dispo),
+							vh.author_dps->name,
+							parm->z.reputation_root,
+							vh.author_dps->reputation);
+				}
+
+				if (override_dispo)
+				{
+					if (policy_fail && POLICY_IS_DMARC(vh.policy) &&
+						parm->dyn.stats)
+					{
+						parm->dyn.stats->dmarc_dispo = dmarc_dispo_none;
+						parm->dyn.stats->dmarc_reason =
+							dmarc_reason_trusted_forwarder;
 					}
+					dispo = dispo_deliver;
+				}
 
-					if (parm->dyn.rtc >= 0)
+				if (dispo != dispo_deliver)
+				{
+					if (parm->dyn.stats)
 					{
-						if (droperr)
+						if (dispo == dispo_reject)
 						{
-							fl_report(LOG_ERR, "error on %s: %s",
-								fname? fname: "drop file", strerror(errno));
-							parm->dyn.rtc = -1;
+							parm->dyn.stats->reject = 1;
+							if (POLICY_IS_DMARC(vh.policy))
+							{
+								parm->dyn.stats->dmarc_dispo = dmarc_dispo_reject;
+								if (aligned_auth_is_ok) // reject even if pass
+									parm->dyn.stats->dmarc_reason =
+										dmarc_reason_local_policy;
+							}
+						}
+						else // quarantine or drop
+						{
+							if (POLICY_IS_DMARC(vh.policy))
+							{
+								parm->dyn.stats->dmarc_dispo = dmarc_dispo_quarantine;
+								if (aligned_auth_is_ok) // presumably drop albeit pass
+									parm->dyn.stats->dmarc_reason =
+										dmarc_reason_local_policy;
+							}
+							if (dispo == dispo_drop)
+								parm->dyn.stats->drop = 1;
 						}
 					}
 
-					if (parm->dyn.stats)
-						parm->dyn.stats->envelope_sender = envelope_sender;
-					else
-						free(envelope_sender);
-					free(fname);
+					if (dispo == dispo_reject)
+					{
+						fl_pass_message(parm->fl,
+							smtp_reason? smtp_reason: "550 bad message.\n");
+						parm->dyn.rtc = 2;
+					}
+					else if (dispo == dispo_drop) // drop, and stop filtering
+					{
+						int droperr = 0;
+						if (parm->z.save_drop)
+						{
+							char *envelope_sender = fl_get_sender(parm->fl), *fname = NULL;
+							FILE *fp = save_file(parm, envelope_sender, &fname);
+							droperr = 1;
+							if (fp)
+							{
+								if (write_file(&vh, fp, status) >= 0)
+									droperr = ferror(fp);
+
+								droperr |= fclose(fp);
+								if (droperr == 0 && parm->z.verbose >= 4 && fname)
+									fl_report(LOG_INFO,
+										"dropped message saved in %s", my_basename(fname));
+							}
+
+							if (droperr)
+								fl_report(LOG_CRIT, "error on %s: %s",
+									fname? fname: "drop file", strerror(errno));
+
+							if (parm->dyn.stats)
+								parm->dyn.stats->envelope_sender = envelope_sender;
+							else
+								free(envelope_sender);
+							free(fname);
+						}
+
+						fl_pass_message(parm->fl,
+							smtp_reason? smtp_reason: "050 Message dropped.\n");
+						fl_drop_message(parm->fl, drop_reason);
+						parm->dyn.rtc = 2;
+					}
 				}
 
-				if (parm->dyn.rtc >= 0)
-				{
-					parm->dyn.rtc = 2;
-					fl_pass_message(parm->fl, "050 Message dropped.\n");
-					fl_drop_message(parm->fl, parm->z.action_header);
-					if (parm->dyn.stats)
-						parm->dyn.stats->drop = 1;
-				}
+				if (free_reason)
+					fl_free_on_exit(parm->fl, free_reason);
 			}
+			else if (policy_fail && POLICY_IS_DMARC(vh.policy) && parm->dyn.stats)
+			// not applying DMARC policy, why?  do_dmarc <= 0
+			{
+				parm->dyn.stats->dmarc_reason = dmarc_reason_local_policy;
+			}
+		}
+
+		/*
+		* Policy did not fail only because of BOFHSPFFROM.
+		* This is non-standard, so log it.
+		*/
+		if (!policy_fail && POLICY_IS_DMARC(vh.policy) &&
+			aligned_sig_is_ok == 0 && aligned_spf_is_ok == 2)
+		{
+			if (parm->z.verbose >= 3)
+				fl_report(LOG_INFO,
+					"id=%s: %s pass only because BOFHSPFFROM",
+					parm->dyn.info.id, vh.dd.domain);
+			if (parm->dyn.stats &&
+				parm->dyn.stats->dmarc_reason == dmarc_reason_none)
+				parm->dyn.stats->dmarc_reason = dmarc_reason_other;
 		}
 	}
 
 	/*
-	* prepare DMARC/ADSP results
+	* prepare DMARC/ADSP results for printing A-R
 	*/
 	if (parm->dyn.rtc == 0)
 	{
-		if (vh.presult == 3)
+		if (vh.presult == PRESULT_NXDOMAIN)
 		{
 			if (POLICY_IS_ADSP(vh.policy))
 			{
@@ -4098,6 +4400,7 @@ static void verify_message(dkimfl_parm *parm)
 			clean_stats(parm);
 			clean_vh(&vh);
 			dkim_free(dkim);
+			query_done();
 			return;
 		}
 		write_file(&vh, fp, status);
@@ -4118,6 +4421,7 @@ static void verify_message(dkimfl_parm *parm)
 	}
 	clean_vh(&vh);
 	dkim_free(dkim);
+	query_done();
 }
 
 // after filter functions
@@ -4206,7 +4510,7 @@ static int update_blocked_user_list(dkimfl_parm *parm)
 		if (failed_action)
 			fl_report(LOG_ALERT, "cannot %s %s: %s",
 				failed_action, fname, strerror(errno));
-		else if (updated && parm->z.verbose >= 2 || parm->z.verbose >= 8)
+		else if ((updated && parm->z.verbose >= 2) || parm->z.verbose >= 8)
 		{
 			struct tm tm;
 			localtime_r(&parm->blocklist.mtime, &tm);
@@ -4242,7 +4546,7 @@ static void block_user(dkimfl_parm *parm, char *reason)
 	int rtc;
 	if (fname == NULL ||
 		(rtc = update_blocked_user_list(parm)) < 0 ||
-		rtc > 0 && search_list(&parm->blocklist, parm->dyn.auth_or_relay) != 0)
+		(rtc > 0 && search_list(&parm->blocklist, parm->dyn.auth_or_relay) != 0))
 			return;
 
 	/*
@@ -4364,7 +4668,7 @@ static void after_filter_stats(fl_parm *fl)
 					while (isspace(*(unsigned char*)p))
 						++p;
 					long l = strtol(p, &t, 0);
-					if (l || t == p && *p)
+					if (l || (t == p && *p))
 						block_user(parm, p);
 					free(block);
 				}
@@ -4412,6 +4716,25 @@ static void dkimfilter(fl_parm *fl)
 			{
 				parm->dyn.auth_or_relay = parm->dyn.info.relayclient;
 				parm->dyn.undo_percent_relay = 1;
+			}
+			else if (parm->z.default_domain)
+			{
+				size_t n = strlen(parm->z.default_domain) + 2;
+				char *a_or_r = malloc(n);
+				if (a_or_r)
+				{
+					snprintf(a_or_r, n, "@%s", parm->z.default_domain);
+					fl_free_on_exit(fl, a_or_r);
+					parm->dyn.auth_or_relay = a_or_r;
+				}
+			}
+			else if (parm->z.verbose >= 3)
+			{
+				fl_report(LOG_WARNING,
+					"Cannot sign message: "
+					"no authenticated sender, "
+					"empty or disabled RELAYCLIENT, "
+					"and no default_domain");
 			}
 
 			if (parm->dyn.auth_or_relay)
@@ -4570,7 +4893,8 @@ static int pid_file_name(dkimfl_parm *parm, char *fname)
 	return 0;
 }
 
-static void write_pid_file_and_check_split_and_init_pst(fl_parm *fl)
+static int
+write_pid_file_and_check_split_and_init_pst(fl_parm *fl, int is_batch_test)
 // this is init_complete, called once before fl_main loop
 {
 	assert(fl);
@@ -4580,30 +4904,49 @@ static void write_pid_file_and_check_split_and_init_pst(fl_parm *fl)
 	// random is used for DMARC pct=
 	srandom((unsigned int)time(NULL));
 
-	char const *failed_action = NULL;
-	char pid_file[PATH_MAX];
-	if (pid_file_name(parm, pid_file))
-		failed_action = "name";
-	else
+	if (!is_batch_test)
 	{
-		FILE *fp = fopen(pid_file, "w");
-		if (fp)
-		{
-			fprintf(fp, "%lu\n", (unsigned long) getpid());
-			if ((ferror(fp) | fclose(fp)) != 0)
-				failed_action = "write";
-			parm->pid_created = 1;
-		}
+		char const *failed_action = NULL;
+		char pid_file[PATH_MAX];
+		if (pid_file_name(parm, pid_file))
+			failed_action = "name";
 		else
-			failed_action = "open";
+		{
+			FILE *fp = fopen(pid_file, "w");
+			if (fp)
+			{
+				fprintf(fp, "%lu\n", (unsigned long) getpid());
+				if ((ferror(fp) | fclose(fp)) != 0)
+					failed_action = "write";
+				parm->pid_created = 1;
+			}
+			else
+				failed_action = "open";
+		}
+		if (failed_action)
+			fl_report(LOG_ALERT, "cannot %s %s/%s.pid: %s",
+				failed_action, pid_dir, parm->prog_name, strerror(errno));
 	}
-	if (failed_action)
-		fl_report(LOG_ALERT, "cannot %s %s/%s.pid: %s",
-			failed_action, pid_dir, parm->prog_name, strerror(errno));
 
 	check_split(parm);
-	if (parm->split != split_sign_only && parm->z.publicsuffix)
-		parm->pst = publicsuffix_init(parm->z.publicsuffix, NULL);
+	if (parm->split != split_sign_only)
+	{
+		if (query_init() < 0)
+		{
+			fl_report(LOG_CRIT,
+				"cannot init query: %s", strerror(errno));
+			return 1;
+		}
+
+		if (parm->z.publicsuffix)
+		{
+			parm->pst = publicsuffix_init(parm->z.publicsuffix, NULL);
+			if (parm->z.psddmarc)
+				parm->pst2 = publicsuffix_init(parm->z.psddmarc, NULL);
+		}
+	}
+
+	return 0;
 }
 
 static void delete_pid_file(dkimfl_parm *parm)
@@ -4718,7 +5061,7 @@ static void reload_config(fl_parm *fl)
 	int rtc = 1;
 	dkimfl_parm *new_parm = calloc(1, sizeof *new_parm);
 	if (new_parm == NULL)
-		fl_report(LOG_ERR, "MEMORY FAULT");
+		fl_report(LOG_ALERT, "MEMORY FAULT");
 	else if (parm_config(new_parm, (*parm)->config_fname, DEFAULT_NO_DB))
 		fl_report(LOG_ERR, "Unable to read new config file");
 	else if (init_dkim(new_parm) == 0)
@@ -4730,11 +5073,34 @@ static void reload_config(fl_parm *fl)
 				"New config file read from %s", (*parm)->config_fname);
 		new_parm->prog_name = (*parm)->prog_name;
 		check_split(new_parm);
-		if (new_parm->z.publicsuffix && new_parm->split != split_sign_only)
+		if (new_parm->split != split_sign_only)
 		{
-			new_parm->pst =
-				publicsuffix_init(new_parm->z.publicsuffix, (*parm)->pst);
-			(*parm)->pst = NULL;
+			/*
+			* re-read resolv.conf, in case it has changed
+			*/
+			if (query_init() < 0)
+			{
+				fl_report(LOG_CRIT,
+					"cannot init query: %s", strerror(errno));
+				rtc = 1;
+			}
+
+			/*
+			* publicsuffix_init returns the old pointer if file not changed,
+			* in any case, it manages cleanup.
+			*/
+			if (rtc == 0 && new_parm->z.publicsuffix)
+			{
+				new_parm->pst =
+					publicsuffix_init(new_parm->z.publicsuffix, (*parm)->pst);
+				(*parm)->pst = NULL;
+				if (new_parm->z.psddmarc)
+				{
+					new_parm->pst2 =
+						publicsuffix_init(new_parm->z.psddmarc, (*parm)->pst2);
+					(*parm)->pst2 = NULL;
+				}
+			}
 		}
 	}
 
@@ -4793,6 +5159,8 @@ int main(int argc, char *argv[])
 #if HAVE_DKIM_LIBVERSION
 				"Linked with OpenDKIM library version: %#lX (%smatch)\n"
 #endif
+				"and with libunistring version: %#lX (%smatch)\n"
+				"and with IDN2 version: %#lX (%smatch)\n"
 				"Reported SSL/TLS version: %#lX\n",
 				(long)(OPENDKIM_LIB_VERSION),
 #if HAVE_DKIM_LIBVERSION
@@ -4800,6 +5168,11 @@ int main(int argc, char *argv[])
 				(unsigned long)dkim_libversion() ==
 					(unsigned long)(OPENDKIM_LIB_VERSION)? "": "DO NOT ",
 #endif
+				(unsigned long)_libunistring_version,
+				(unsigned long)_libunistring_version ==
+					(unsigned long)(_LIBUNISTRING_VERSION)? "": "DO NOT ",
+				(unsigned long)IDN2_VERSION,
+				idn2_check_version(IDN2_VERSION)? "": "DO NOT ",
 				dkim_ssl_version());
 			return 0;
 		}

@@ -1,0 +1,43 @@
+=pod
+
+=head1 NAME
+
+urldecode - an URL-decoding utility
+
+=head1 SYNOPSIS
+
+urldecode arg...
+
+=head1 DESCRIPTION
+
+The utility decodes any argument by replacing percent encoded triplets
+with the corresponding character.
+
+Decoded words are put on standard output, terminated by newlines.
+
+No attempt is made to check arguments' validity.  Badly encoded
+arguments result in rubbish out.
+
+=head1 EXAMPLES
+
+    urldecode user%40example.org
+    user@example.com
+
+    cmp="$(head -c 20 < /dev/urandom | tr -cd '[:print:]')"
+    test "$cmp" = "$(urldecode $(urlencode "$cmp"))" && echo ok
+    ok
+
+=head1 AUTHOR
+
+Alessandro Vesely E<lt>vesely@tana.itE<gt>
+
+=head1 SEE ALSO
+
+=over
+
+=item B<urlencode>(1)
+
+=back
+
+=cut
+

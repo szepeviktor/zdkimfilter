@@ -2,11 +2,15 @@
 
 @SET_MAKE@
 
-man_MANS = zdkimfilter.conf.5 zdkimfilter.8 zfilter_db.1 dkimsign.1 redact.1 zaggregate.1
+man_MANS = zdkimfilter.conf.5 zdkimfilter.8 zfilter_db.1 dkimsign.1 \
+ redact.1 zaggregate.1 urlencode.1 urldecode.1 2idn.1
+
 noinst_DATA = odbx_example.pod
 
 CLEANFILES = zdkimfilter.conf.pod zdkimfilter.conf.5 zdkimfilter.8 \
- zfilter_db.1 dkimsign.1 redact.1 zaggregate.1 odbx_example.pod
+ zfilter_db.1 dkimsign.1 redact.1 zaggregate.1 odbx_example.pod \
+ zfilter_db.pod dkimsign.pod redact.pod zaggregate.pod odbx_example.pod \
+ zdkimfilter.pod urlencode.1 urldecode.1 2idn.1
 
 if BUILD_DOC
 

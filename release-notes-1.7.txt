@@ -1,0 +1,77 @@
+Test failure:
+=============
+
+The last test in the "make check" suite is doomed to fail unless
+libopendkim is upgraded or patched so as to support EAI.
+
+
+PSDDMARC:
+=========
+
+Added support for experimental extension to DMARC.  This is enabled
+by setting a new option, psddmarc, to a file like the distributed
+tentative-psddmarc-list.txt.  See https://psddmarc.org/.
+
+
+Database changes:
+================
+Convert to UTF-8, since domains and email addresses can now be encoded
+that way.  SQL commands:
+
+ALTER TABLE domain \
+  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+ALTER TABLE message_in \
+  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+ALTER TABLE message_out \
+  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+ALTER TABLE msg_out_ref \
+  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+ALTER TABLE msg_ref \
+  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+ALTER TABLE user \
+  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+
+Before running zdkimfilter again, the database can be converted using
+a script like db_conv.sh (distributed but not installed).  It calls
+2idn, a command inverse of idn2 (distributed and installed).  Then,
+domain names will be converted to utf-8 before storing them.
+
+
+New table dmarc_bounce (see odbx_example.sql).  It is queried via
+db_sql_check_dmarc_rcpt before sending aggregate reports.  The .sql
+file contains a procedure to insert addresses in there, for use with
+the new -1 option of zaggregate (not tested).
+
+
+Add two 'spamtrap' fields, one in message_in to be turned on by
+spamtrap recipes, one in domains which accumulates the former at
+end-of-day:
+
+ALTER TABLE message_in \
+  ADD COLUMN spamtrap TINYINT NOT NULL DEFAULT 0 AFTER mailing_list;
+ALTER TABLE domain \
+  ADD COLUMN spamtrap INT UNSIGNED NOT NULL DEFAULT 0 AFTER sent;
+
+
+In v1.6, db_sql_select_domain was not used, db_sql_insert_msg_ref did
+insert/update of domain as well as new msg_ref record.  In v1.7 there
+may be multiple msg_ref records.  So, in .conf:
+
+add     db_sql_select_domain (call to reduced recv_from_domain())
+change  db_sql_insert_msg_ref (plain insert)
+
+From .sql: re-define stored procedure recv_from_domain(), and
+
+ALTER TABLE msg_ref \
+  ADD COLUMN dkim_selector VARCHAR(63) NOT NULL DEFAULT '' AFTER vbr;
+
+
+Other changes:
+==============
+zaggregate-example.sh:  add a subdomain, to avoid autosustained report
+loops.  Thanks to Juri Haberland for the hint.
+
+zaggregate-cancel-example.sh:  new script for cancelling unsent reports.
+
+urlencode, urldecode, and 2idn: new executable utilities.
+

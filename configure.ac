@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT([zdkimfilter for courier],[1.6],[vesely@tana.it],[zdkimfilter])
+AC_INIT([zdkimfilter for courier],[2.0],[vesely@tana.it],[zdkimfilter])
 
 AC_CONFIG_SRCDIR([src/zdkimfilter.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -74,10 +74,31 @@ AC_ARG_ENABLE([dkimsign-setuid],
 	])
 AC_SUBST([DKIMSIGN_MODE])
 
-
-# find courier-config and get variables
-AC_PATH_PROG([COURIER_CONFIG], [courier-config], [no],
-	[${PATH}])
+# XCOMPILE: accept courier-config output file
+# or find courier-config and get its output
+COURIER_CONFIG_OUT=""
+m4_pattern_allow([AS_HELP_STRING])
+m4_pattern_allow([AC_MSG_ERROR])
+AC_ARG_WITH([courier-config-output],
+	[AS_HELP_STRING([--with-courier-config-output=file],
+		[supply a file with the output of running courier-config on the
+		target system; if not given, assume this is the target system
+		and run courier-config to learn installation directories.])],
+	[
+	if test -r "$withval" -a -s "$withval"; then
+		COURIER_CONFIG_OUT=$(<$withval)
+	else
+		AC_MSG_ERROR([bad file with-courier-config-output $withval])
+	fi
+	],
+	[
+	AC_PATH_PROG([COURIER_CONFIG], [courier-config], [no], [${PATH}])
+	if test "$COURIER_CONFIG" = "no"; then
+		:
+	else
+		COURIER_CONFIG_OUT=$($COURIER_CONFIG)
+	fi
+	])
 
 courier_bindir=""
 courier_sbindir=""
@@ -89,18 +110,13 @@ courier_mailgroup=""
 courier_mailuid=""
 courier_mailgid=""
 
-
-if test "$COURIER_CONFIG" = "no"; then
-	:
+if test -z "$COURIER_CONFIG_OUT"; then
+	AC_MSG_ERROR([cannot find courier-config, use --with-courier-config-output])
 else
 	vars=""
-	eval "`$COURIER_CONFIG |\
+	eval $(echo "$COURIER_CONFIG_OUT" |\
 		$EGREP '^(bindir|sbindir|libexecdir|sysconfdir|localstatedir|mailuser|mailgroup|mailgid|mailuid)=' |\
-		sed 's/^/courier_/'`"
-fi
-
-if test "$COURIER_CONFIG" = "no"; then
-	AC_MSG_ERROR([cannot find courier-config])
+		sed 's/^/courier_/')
 fi
 
 all_ok="ok"
@@ -117,7 +133,7 @@ test "x$courier_mailuid" = "x" && all_ok="ui"
 if test "$all_ok" = "ok"; then
 	:
 else
-	AC_MSG_ERROR([["cannot get courier config data ($all_ok)"]])
+	AC_MSG_ERROR([["bad courier-config data (miss $all_ok)"]])
 fi
 
 # get courier version
@@ -135,11 +151,11 @@ AC_ARG_WITH([courier-version],
 		if test -x "${courier_bindir}/imapd"; then
 			courier_version=`${courier_bindir}/imapd --version | sed -n 's/^[^0-9]*.[0-9]*.\([0-9]*\).*/\1/p'`
 			if test -z "$courier_version"; then
-				courier_version="40"
+				courier_version="0.40.0"
 				how_do_i_know=" (imapd ante 2003)"
 			fi
 		else
-			courier_version="60"
+			courier_version="0.60.0"
 			how_do_i_know=" (assumed)"
 		fi
 	]])
@@ -147,33 +163,22 @@ AC_MSG_RESULT([${courier_version}${how_do_i_know}])
 
 # this was COURIERSUBMIT_WANTS_UGLY_HACK (until zdkimfilter 1.4)
 # Courier version 57.1 fixes that, I check 58
-if test $courier_version -lt 58; then
-	AC_MSG_ERROR([too old courier version])
-fi
+AX_COMPARE_VERSION($courier_version, [lt], [0.58.0],
+	[AC_MSG_ERROR([too old courier version])])
 
 # set installation path
 AC_MSG_CHECKING([filter installation directory])
 COURIER_FILTER_INSTALL=${courier_libexecdir}/filters
 AC_MSG_RESULT([$COURIER_FILTER_INSTALL])
-if test -d "$COURIER_FILTER_INSTALL"; then
-	:
-else
-	AC_MSG_ERROR([cannot find the filter directory])
-fi
 AC_SUBST([COURIER_FILTER_INSTALL])
 
 # check courier/etc directory (zdkimfilter.conf goes in its "filters" subdir
-# and below check the content of maildrop)
 AC_MSG_CHECKING([courier configuration directory])
 COURIER_SYSCONF_INSTALL=${courier_sysconfdir}
 AC_MSG_RESULT([$COURIER_SYSCONF_INSTALL])
-if test -d "$COURIER_SYSCONF_INSTALL"; then
-	:
-else
-	AC_MSG_ERROR([cannot find courier configuration directory])
-fi
 AC_SUBST([COURIER_SYSCONF_INSTALL])
 
+# XCOMPILE: nothing for add option for library containing accept
 # Checks for libraries.
 SOCKET_LIB=""
 SAVE_LIBS="$LIBS"
@@ -192,6 +197,7 @@ fi
 LIBS="$SAVE_LIBS"
 AC_SUBST([SOCKET_LIB])
 
+# XCOMPILE: nothing for OpenDKIM.  It must be installed the same version
 AC_CACHE_CHECK([if opendkim.pc exists], [av_cv_opendkim_version],
 	[av_cv_opendkim_version=`$PKG_CONFIG --modversion opendkim 2>/dev/null || echo false`
 	])
@@ -259,6 +265,8 @@ AC_CACHE_CHECK([opendkim 2.10.1 or better], [av_cv_opendkim_version_2A1],
 	fi
 	])
 
+# XCOMPILE: nothing for OpenDKIM.  It must be installed the same way;
+# that is, linked to either OpenSSL or GNUTLS, static or dynamic.
 AC_CACHE_CHECK([cflags for opendkim],
 	av_cv_cflags_opendkim,
 	[
@@ -292,7 +300,6 @@ else
 fi
 AC_SUBST([OPENDKIM_CFLAGS])
 
-
 OPENDKIM_LIB="`$PKG_CONFIG --libs-only-L opendkim` -lopendkim $OPENDKIM_LIB"
 AC_MSG_CHECKING([flags for opendkim library])
 	av_cv_flags_library_opendkim="none"
@@ -323,7 +330,7 @@ CFLAGS="$SAVE_CFLAGS"
 ac_link="$save_ac_link"
 LIBS="$SAVE_LIBS"
 
-#
+# XCOMPILE: option for HAVE_OPENDBX, OPENDBX_CFLAGS, OPENDBX_LIB
 AC_CACHE_CHECK([opendbx version],
 	av_cv_opendbx_version,
 	[
@@ -440,7 +447,7 @@ UUID_LIB=
 AC_CHECK_LIB([uuid], [uuid_generate], [av_cv_libuuid=yes], [av_cv_libuuid=no])
 AC_CHECK_HEADER([uuid/uuid.h], [av_cv_uuid_h=yes], [av_cv_uuid_h=no])
 if test "$av_cv_libuuid" = "yes" && test "$av_cv_uuid_h" = "yes"; then
-	AC_DEFINE([HAVE_UUID], [1], [Define to 1 if you have `uuid' library (-luuid)])
+	AC_DEFINE([HAVE_UUID], [1], [Define to 1 if you have uuid library (-luuid)])
 	UUID_LIB="-luuid"
 fi
 AC_SUBST([UUID_LIB])
@@ -463,6 +470,7 @@ AC_FUNC_VPRINTF
 AC_CHECK_FUNCS([alarm memmove memset pselect random])
 AX_VAR_TIMEZONE_EXTERNALS
 AX_FUNC_SNPRINTF
+
 
 # Check if nettle exists (for redact.c)
 NETTLE_LIB=" -lnettle"
@@ -594,6 +602,7 @@ AC_CONFIG_FILES([Makefile
                  etc/zfilter_db.pod
                  etc/zaggregate.pod
                  etc/odbx_example.pod
+                 etc/2idn.pod
                  tests/atlocal
                  tests/Makefile
                  debian/Makefile

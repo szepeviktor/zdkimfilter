@@ -5,6 +5,7 @@ use warnings;
 use HTML::PullParser;
 use Data::Dumper;
 use File::Slurp qw(slurp);
+use DateTime;
 
 # Pipe as, e.g.: man2html zdkimfilter.conf.5 | perl mangle_doc.pl h1
 # or groff -T xhtml -mandoc zdkimfilter.8 | perl mangle_doc.pl title
@@ -79,7 +80,7 @@ sub open_target
 			$decla =
 			' PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd"';
 			$oldstyle = '
-	<link href="zdkimfilter.css" rel="stylesheet" type="text/css" media="screen">';
+	<link href="zdkimfilter.css" rel="stylesheet" media="screen">';
 		}
 	}
 	else
@@ -100,13 +101,13 @@ sub open_target
 	}
 
 	print $outfile '<!DOCTYPE HTML', $decla, '>
-<html>
+<html lang="en">
 <head>
    <meta name="KeyWords" content="courier, Courier-MTA, DKIM, DMARC, filter, C, zdkimfilter, sign, verify">
    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
    <title>', $title, '</title>
-	<link href="/site.css" rel="stylesheet" type="text/css" media="screen">
-	<link href="z.css" rel="stylesheet" type="text/css" media="screen">', $oldstyle, $js, '
+	<link href="/site.css" rel="stylesheet" media="screen">
+	<link href="z.css" rel="stylesheet" media="screen">', $oldstyle, $js, '
 </head>
 <body>
 <div id="topbar">';
@@ -354,7 +355,9 @@ while ($tok = $par->get_token)
 		elsif ($tok->[1] eq 'body')
 		{
 			close_box();
-			print $outfile '<p class="copy">Copyright &copy; 2012-2015 Alessandro Vesely</p>';
+			printf $outfile
+				'<p class="copy">Copyright &copy; 2012-%04d Alessandro Vesely</p>',
+				DateTime->now->year;
 			print $outfile $tok->[3] if defined $tok->[3];
 		}
 		elsif (!grep($_ eq $tok->[1], @ignored_tags))

@@ -438,6 +438,15 @@ as discovering DMARC policy records published by the organizational domain
 Setting this value also enables storage of unauthenticated domains, in a way
 similar to B<save_from_anyway>.
 
+=item B<psddmarc> string
+
+The full path to a file similar in format to F<effective_tld_names.dat>
+whose contents implements the Public Suffix Domain DMARC, as maintained
+by psddmarc.org.
+
+Only domains actually having a _dmarc TXT record need to be listed.
+
+
 =item B<honored_report_interval>
 
 The number of seconds between successive invocations of zaggregate, according
@@ -454,24 +463,24 @@ Honor ADSP policy, if any.  This item can be changed on a per-domain basis.
 
 =item B<reject_on_nxdomain> bool
 
-The filter may reject or drop messages according to ADSP.  The three 
-conditions that may cause this behavior are as follows: 
-
+This option can be set to complement ADSP, or independently of ADSP.
+This catches invalid From: 
+like E<lt>john.doe@NOSPAM.example.comE<gt>, typical of some mailing lists.
+The three conditions that drive the resulting behavior are as follows: 
 
 =over
 
-
-=item  B<nxdomain>
+=item  B<1 nxdomain>
 
 the author's address, as given in the C<From:> header, contains 
-a non-existing domain name. 
+a non-existing domain name.
 
-=item  B<all>
+=item  B<2 all>
 
 the author domain specifies a policy whereby all messages must 
 have an author domain signature, but this messages has none. 
 
-=item  B<discardable>
+=item  B<3 discardable>
 
 as case all, but the author domain further asks that 
 non-compliant messages be just discarded, in order to avoid 
@@ -479,36 +488,30 @@ useless backscatter.
 
 =back
 
+When I<reject_on_nxdomain> is enabled, the filter rejects in case 1.
+When I<honor_author_domain> is enabled, the filter rejects in case 2
+and drops in case 3.  In any case, the action is retracted if an
+authenticated domain is whitelisted in the database, vouched by a
+trusted VBR (an outmoded protocol), or authenticated by dnswl=pass.
+Any of SPF and DKIM authentications are valid to establish whitelisting,
+but only "MAIL FROM" SPF and DKIM can be used for VBR. 
 
-When ADSP is enabled, the filter honors author domain's policy --that is, the 
-second and third cases above cause reject and drop respectively-- unless an 
-authenticated domain is whitelisted in the database, vouched by a trusted VBR 
-(see the next option), or authenticated by dnswl=pass.  Any of SPF and DKIM 
-authentications are valid to establish whitelisting, but only "MAIL FROM" SPF 
-and DKIM can be used for VBR. 
+If one of the cases above is detected, but the action not enforced,
+an A-R field will have a line specifying the result as dkim-adsp=nxdomain
+(for case 1), dkim-adsp=fail (case 2), or dkim-adsp=discard (3). 
 
-
-Rejecting on nxdomain can be enabled separately.  This catches invalid From: 
-like E<lt>john.doe@NOSPAM.example.comE<gt>, typical of some mailing lists. 
-
-
-When ADSP is disabled, the filter never rejects nor drops messages.  If one 
-of the cases above is detected, the A-R field will have a line specifying 
-the result as dkim-adsp=nxdomain (for nxdomain), dkim-adsp=fail (for all), or 
-dkim-adsp=discard (for discardable). 
-
-
-If any user may subscribe to a mailing list, enabling ADSP will result in 
-malfunctions when someone publishes a non-default ADSP policy.  Conversely, 
-unless you can prevent your users from subscribing to mailing lists, don't 
-publish an ADSP policy different from C<unknown>.  (Publishing C<unknown> may 
-result in better caching, though.) 
+Recall that ADSP was declared "Historic" in November 2013.
 
 =item B<action_header> string
 
 An RFC 822 header field name that an upstream filter adds to the message to
 mark it as bad.  If that header is found, the message is dropped or rejected
 according to the next option.
+
+This option is meant to be a last resort for messages caught by anti-virus or
+anti-phishing filters that add a given header field instead of discarding the
+message tout-court.  That way, a reject/drop decision can be undone according
+to I<dnswl_worthiness_pass> and/or I<whitelisted_pass>.
 
 =item B<header_action_is_reject> bool
 
@@ -581,8 +584,11 @@ See http://www.spamhauswhitelist.com/en/about.html for more info.
 
 =item B<dnswl_worthiness_pass>
 
-A worthiness greater or equal than this causes acceptance if an
-I<action_header> is found.  Must be a number between 0 and 255.
+This item refers to the externally retrieved dnswl value.
+
+A worthiness greater or equal than this causes acceptance of a message
+even if it if it should have been rejected due to DMARC or ADSP policy,
+I<action_header> or I<shoot_on_sight>.  Must be a number between 0 and 255.
 
 Default: 1 (low for dnswl.org)
 
@@ -628,8 +634,15 @@ example:
 
 =item B<whitelisted_pass> int
 
-A whitelisted value greater or equal than this causes acceptance if an
-I<action_header> is found.
+This refers to the internal whitelisting, not to be conflated with dnswl.
+
+A value greater or equal than this configured value causes acceptance of a
+message even if it should have been rejected due to DMARC or ADSP policy,
+I<action_header> or I<shoot_on_sight>.
+
+This value should be greater than 2, since a value of 1 can be set
+automatically when a DKIM signature verifies, and a value of 2 is set
+when sending to a domain from a personal address (not an rfc2142 address.)
 
 Default: 3
 

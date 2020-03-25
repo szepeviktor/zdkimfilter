@@ -2,19 +2,24 @@
 # postinst script for zdkimfilter
 # (use bash for arithmetic expantion)
 
+# use dbconfig-common; see:
+# https://www.debian.org/doc/manuals/dbconfig-common/ch-develguide.html
 . /usr/share/debconf/confmodule
 . /usr/share/dbconfig-common/dpkg/postinst.mysql
 
+# in 1.6 was: db_version 2.0
+# what is it?
 db_version 2.0
 dbc_go zdkimfilter "$@"
 
+# sysconfdir --courier-config must exist!
+eval $(courier-config | grep -E ^sysconfdir)
+
 # mail user and group (should use courier-config?)
-mailuser=$(stat --printf=%U /usr/bin/mailq)
-mailgroup=$(stat --printf=%G /usr/bin/mailq)
+mailuser="$(source ${sysconfdir}/esmtpd; echo "$MAILUSER")"
+mailgroup="$(source ${sysconfdir}/esmtpd; echo "$MAILGROUP")"
 
-
-# /etc/courier is Courier's sysconfdir;  how to check?
-CONFIGFILE=/etc/courier/filters/zdkimfilter.conf
+CONFIGFILE=${sysconfdir}/filters/zdkimfilter.conf
 
 if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 
@@ -73,13 +78,14 @@ if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 	# public suffix list
 	echo "" >> $USRCONFIG
 	echo "publicsuffix /usr/share/publicsuffix/effective_tld_names.dat" >> $USRCONFIG
+	echo "psddmarc /usr/share/zdkimfilter/tentative-psddmarc-list.txt" >> $USRCONFIG
 
 	echo "" >> $USRCONFIG
 	echo "# DB SQL" >> $USRCONFIG
 	echo "#" >> $USRCONFIG
 	cat /usr/share/zdkimfilter/db_sql.conf >> $USRCONFIG
 
-	ucf --debconf-ok $USRCONFIG $CONFIGFILE
+	ucf --debconf-ok --three-way $USRCONFIG $CONFIGFILE
 	ucfr zdkimfilter $CONFIGFILE
 
 	## a script to trim database entries
@@ -104,35 +110,37 @@ if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 	echo "EOQUERY" >> $DELOLDSCRIPT
 
 	chmod u=rx,go= $DELOLDSCRIPT
+	echo "Installed $DELOLDSCRIPT"
 
 	## a script to send DMARC reports
 	DMARC_SEND=/usr/share/zdkimfilter/dmarc_send
 
-	if [ -s /etc/courier/defaultdomain ]; then
-		org_domain=$(</etc/courier/defaultdomain)
-	elif [ -s /etc/courier/dsnfrom ]; then
-		org_domain=$(sed -nr 's/[^@]*@([^>]*).*/\1/p' /etc/courier/dsnfrom)
+	if [ -s ${sysconfdir}/defaultdomain ]; then
+		org_domain=$(<${sysconfdir}/defaultdomain)
+	elif [ -s ${sysconfdir}/dsnfrom ]; then
+		org_domain=$(sed -nr 's/[^@]*@([^>]*).*/\1/p' ${sysconfdir}/dsnfrom)
 	fi
 
 	if [ -z "$org_domain" ]; then
 		chmod a-x $DMARC_SEND
 	else
-		name=$(echo "$org_domain" | tr "a-z" "A-Z")
+		# The "organization" item is usually set to the domain name
+		# see https://us.dmarcian.com/dmarc-data-providers/
 		sed -ri -e "s/example\.com/$org_domain/" \
-			-e "s/This is an example/$name/" $DMARC_SEND
+			-e "s/This is an example/$org_domain/" $DMARC_SEND
 		chown $mailuser:$mailgroup $DMARC_SEND
 		chmod a+x $DMARC_SEND
 
 		## a DKIM signing key for the domain
 		# let size=1148 so that the whole string will be less than 256 bytes
 		# a string length believed to be supported by all DNS tools
-		if [ ! -f /etc/courier/filters/keys/deb.private ]; then
+		if [ ! -f ${sysconfdir}/filters/keys/deb.private ]; then
 			opendkim-genkey -D /usr/share/zdkimfilter -s deb -d $org_domain -b 1148
-			mkdir -p /etc/courier/filters/keys
-			rm -f "/etc/courier/filters/keys/$org_domain"
-			mv /usr/share/zdkimfilter/deb.private /etc/courier/filters/keys
-			chown $mailuser:$mailgroup /etc/courier/filters/keys/deb.private
-			ln -n -s -T deb.private "/etc/courier/filters/keys/$org_domain"
+			mkdir -p ${sysconfdir}/filters/keys
+			rm -f "${sysconfdir}/filters/keys/$org_domain"
+			mv /usr/share/zdkimfilter/deb.private ${sysconfdir}/filters/keys
+			chown $mailuser:$mailgroup ${sysconfdir}/filters/keys/deb.private
+			ln -n -s -T deb.private "${sysconfdir}/filters/keys/$org_domain"
 			echo "Created DKIM signing key pair, public key in /usr/share/zdkimfilter/deb.txt"
 		fi
 
@@ -178,20 +186,20 @@ if [ "$1" = "configure" -a "$dbc_install" = "true" ]; then
 		fi
 
 		echo "$minute $hour * * * daemon test ! -x $DMARC_SEND || $DMARC_SEND" >> $DMARCFILE
-		echo "Installed $DELOLDSCRIPT and $DMARCFILE"
+		echo "Installed $DMARCFILE"
 	fi
 fi
 
 # It would seem to be a neat idea to enable filtering, since we're installing one.
 # Is there a Debian policy about this?
-if [ ! -e /etc/courier/enablefiltering ]; then
-	echo "esmtp" > /etc/courier/enablefiltering
-	chown $mailuser:$mailgroup /etc/courier/enablefiltering
+if [ ! -e ${sysconfdir}/enablefiltering ]; then
+	echo "esmtp" > ${sysconfdir}/enablefiltering
+	chown $mailuser:$mailgroup ${sysconfdir}/enablefiltering
 	echo "Mail filtering enabled"
 fi
 
 # if we stopped filters, then restart them, otherwise run zdkimfilter anew
-if [ -e /etc/courier/filters/active/zdkimfilter ]; then
+if [ -e ${sysconfdir}/filters/active/zdkimfilter ]; then
 	courierfilter start
 	echo "Courier filter started"
 else

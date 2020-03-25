@@ -3,19 +3,23 @@ Section: mail
 Priority: optional
 Maintainer: Viktor Szépe <viktor@szepe.net>
 Standards-Version: 3.9.6
-Homepage: https://github.com/szepeviktor/zdkimfilter
-Build-Depends: debhelper (>= 9), dh-autoreconf, libtool, unzip, courier-mta, libopendkim-dev,
- uuid-dev, nettle-dev, zlib1g-dev, libidn2-0-dev, libunistring-dev, libopendbx1-dev
+Homepage: https://www.tana.it/sw/zdkimfilter/
+Build-Depends: debhelper (>= 9), dh-autoreconf, libtool, unzip,
+ courier-base, libopendkim-dev, uuid-dev, nettle-dev, zlib1g-dev,
+ libidn2-dev, libunistring-dev, libopendbx1-dev, libopendbx1,
+ libidn2-0, file, perl
 
 Package: zdkimfilter
-Architecture: amd64
+Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, courier-mta, ucf (>= 0.28),
- publicsuffix, libopendbx1-mysql | dbconfig-no-thanks, dbconfig-mysql | dbconfig-no-thanks
+ publicsuffix, libopendbx1-mysql | dbconfig-no-thanks,
+ dbconfig-mysql | dbconfig-no-thanks
 Description: DKIM filter for Courier-MTA
  This filter uses the OpenDKIM Project's library to sign messages from
  authenticated users, or verify relayed messages and add an
- Authentication-Results: header field if configured to do so. The source package
- contains example scripts for building a database to save message details to.
- Database details allow one to configure sending DMARC aggregate reports.
- SPF results are imported from Courier processing. DMARC rejection (as well
- as historic ADSP) can be enabled or disabled on a per-domain basis.
+ Authentication-Results: header field if configured to do so. The source
+ package contains example scripts for building a database to save message
+ details to. Database details allow one to configure sending DMARC
+ aggregate reports.  SPF results are imported from Courier processing.
+ DMARC rejection (as well as historic ADSP) can be enabled or disabled
+ globally and/or on a per-domain basis.

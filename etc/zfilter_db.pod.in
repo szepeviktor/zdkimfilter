@@ -120,7 +120,7 @@ The first query, new in version 1.5, extends the second one.
 
 =item B<db_sql_domain_flags>
 
-Three variables are allowed:
+Four variables are allowed:
 
 =over
 
@@ -137,17 +137,38 @@ The organizational domain of the domain part of the From: address.
 The IP number of the client.  This variable is given as a hex string, but
 with no leading C<0x>.
 
+=item B<iprev>
+
+The reverse DNS name of the client.  This variable is available a reverse
+DNS PTR RRset is defined and if looking it up by Courier is enabled (by
+setting the C<BOFHCHECKDNS> option in the esmtp configuration file).
+
 =back
 
-The query can return one to three integer values, in this order:
+The query runs for the From: domain, and for any domain mentioned in
+SPF, DKIM, or DMARC results.  It can return one to four integer values,
+in this order:
 
 =over
 
 =item I<whitelisted>X<domain>
 
+This is the internal whitelisting, not to be conflated with dnswl.
+
+A negative value, -1, triggers I<shoot_on_sight> mode.  The message is rejected
+"for policy reasons", whether the domain is authenticated or not.
+
+A value of 0 is ignored.
+
 A value of 1 or higher affects the order in which DKIM signatures verification
-is attempted.  A value of 2 or higher prevents a message from being rejected
-or dropped due to DMARC policy or ADSP, if the domain is authenticated.
+is attempted and reported.  This value can be increased automatically to 1
+when a DKIM signature of the domain verifies successfully, to 2 when
+sending to a domain from a personal address (not an rfc2142 address.)
+
+When this value is greater or equal to the I<whitelisted_pass> configured
+value, it prevents a message from being rejected or dropped due to DMARC
+or ADSP policy, shoot_on_sight or action_header.  The domain needs to be
+authenticated and not flagged shoot_on_sight itself.
 
 =item I<add_dmarc>X<domain>
 
@@ -164,12 +185,17 @@ this is added (with sign) to the global value.
 
 Unless B<domain> matches the From: address, this result is discarded.
 
+=item I<count>
+
+This can be set to C<COUNT(*)> in order to learn how many records there were.
+Currently not used.
+
 =back
 
 =item B<db_sql_whitelisted>
 
 This query is kept for compatibility, and is only used if the previous one is
-not defined.  It can use two variables only:
+not defined.  It can use three variables only:
 
 =over
 
@@ -182,6 +208,12 @@ A domain name.
 The IP number of the client.  This variable is given as a hex string, but
 with no leading C<0x>.
 
+=item B<iprev>
+
+The reverse DNS name of the client.  This variable is available a reverse
+DNS PTR RRset is defined and if looking it up by Courier is enabled (by
+setting the C<BOFHCHECKDNS> option in the esmtp configuration file).
+
 =back
 
 This query should return a single integer, the whitelist value.
@@ -192,7 +224,7 @@ This query should return a single integer, the whitelist value.
 
 After filtering is complete and response to Courier given, zdkimfilter stores
 relevant message data to the database.  Each message is either incoming or
-outgoing, but the following twelve variables are available in either case:
+outgoing, but the following thirteen variables are available in either case:
 
 =over
 
@@ -225,6 +257,12 @@ The bounce address, also known as envelop from or mailfrom.
 =item B<ip>
 
 The IP number of the client, given as a hex string with no leading C<0x>.
+
+=item B<iprev>
+
+The reverse DNS name of the client.  This variable is available a reverse
+DNS PTR RRset is defined and if looking it up by Courier is enabled (by
+setting the C<BOFHCHECKDNS> option in the esmtp configuration file).
 
 =back
 
@@ -472,24 +510,17 @@ truncation.  In that case, the DMARC record is looked up anew.  Even if DB
 queries are usually faster than DNS ones, reserving too much room might degrade
 performance, so a compromise length that fits most domains could be preferred.
 
-
-=item B<dkim>X<msg_ref>
-
-Sometimes called dkim_result, it is the verification result, set to I<none>
-if a message contains no DKIM-Signature by the domain.
-
-=item B<dkim_order>X<msg_ref>
-
-The 1-based position of this domain's signature(s), preferred domains first.
-
-Ordering is done before verifying signatures, and it is reported to domains
-which accept DMARC aggregate reports.
-
 =item B<spf>X<msg_ref>
 
 Sometimes called spf_result, it is the SPF result, if the domain appears in any
 of helo, mailfrom, or From:.  SPF results originate from Courier's BOFHSPFHELO
 and BOFHSPFMAILFROM.
+
+=item B<dkim_result>
+
+This is set to 1 if any DKIM signature from the given domain verified.
+0 otherwise.  Note that a variable with the same name but different
+content is available for db_sql_insert_msg_ref.
 
 =item B<reputation>X<msg_ref>
 
@@ -544,11 +575,28 @@ existed already.
 
 =item B<db_sql_insert_msg_ref>
 
-This is the last query in the domain loop.  It can be used to select, insert,
-and update domain data, leaving the preceding three domain queries undefined.
-Or it can use the two additional variables:
+This is the last query in the domain loop.  It is used to insert msg_ref
+records.  If a message was signed multiple times by a given domain, this
+query is executed multiple times, one for each signature.  If a message
+has no signatures, the query is still executed once, to link the domain
+to the message.  It has the following additional variables:
 
 =over
+
+=item B<dkim>X<msg_ref>
+
+Sometimes called dkim_result, it is the verification result proper, one
+of I<none>, I<pass>, I<fail>, I<policy>, I<neutral>, I<temperror>,
+I<permerror>.  Note that a variable with the same name but different
+content is available in the domain calls.
+
+
+=item B<dkim_order>X<msg_ref>
+
+The 1-based position of this domain's signature(s), preferred domains first.
+
+Ordering is done before verifying signatures, and it is reported to domains
+which accept DMARC aggregate reports.
 
 =item B<message_ref>
 
@@ -608,7 +656,7 @@ The From: field contains "postmaster"
 
 =item B<db_sql_select_user>
 
-This can additionally use B<local_part> and B<domain> is the
+This can additionally use B<local_part> and B<domain>, which identify the
 authenticated user who sent the message.  It is the first query called for each
 message.  It can return two values, that is one row with two columns, that will
 be available as variables B<user_ref> and B<message_ref> to the remaining
@@ -824,6 +872,21 @@ The corresponding result.
 The number I<N> of DKIM pairs may vary from a row to another.  If either
 member is NULL the pair is skipped.
 
+=head3 Check recipient address
+
+The query B<db_sql_check_dmarc_rcpt> checks an email address,
+which is available as a variable.  Returns zero on good addresses.
+
+The only variable is the address to be checked.
+
+=over
+
+=item B<dmarc_rcpt>
+
+The email address given in C<rua=> (possibly overridden).
+
+=back
+
 =head3 Set DMARC aggregate query
 
 The query B<db_sql_set_dmarc_agg> updates the I<last_report> using the value of
@@ -872,8 +935,13 @@ option is the same as setting I<db_backend> to C<test>.
 
 =item B<--db-sql-whitelisted> I<domain> ...
 
-Run the query for each domain.  Before displaying the result, the query itself
-is displayed, even with no I<-v> option.  An option --that is, an argument
+Run the query for each domain.  An option --that is, an argument
+starting with C<->-- marks the end of the domains.
+
+=item B<--db-sql-domain-flags> [org=I<org_domain>] I<domain> ...
+
+Run the query for each domain and the same org_domain (if given).
+An option --that is, an argument
 starting with C<->-- marks the end of the domains.
 
 =item B<--set-stats> I<dir> [I<message data>|I<domain>[/I<token>]]
@@ -948,7 +1016,7 @@ otherwise the call fails with a critical error.
 =item B<--set-stats-domain> I<domain>[/I<token>[:value]]... ...
 
 Domain names are given one per argument either after this I<option> or after
-the previous one.  Each domain name can be followed by a slash-separated list
+the previous one.  Each domain name can be followed by a slash- or comma-separated list
 of tokens, some of which can take a value.  Spaces must be omitted, escaped, or
 quoted so as to have one argument per domain.  Valid tokens are:
 
@@ -1009,7 +1077,7 @@ Check what happens receiving a message:
 Same as above, with a DKIM signature and a VBR vouch:
 
   $ zfilter_db -f test.conf \
-  > --set-stats i example.com,dkim,vbr:dwl.spamhaus.org:all
+  > --set-stats i example.com/dkim/vbr:dwl.spamhaus.org:all
 
 In each case, the configured db queries are displayed.  Their effect can be
 verified using mysql client:

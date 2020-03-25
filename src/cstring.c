@@ -99,7 +99,7 @@ cstring* cstr_reserve(cstring* const s, size_t const total)
 	assert(rtc == NULL || cstr_assert(rtc));
 	return rtc;
 
-#if 0	
+#if 0
 	if ((rtc = (cstring*)malloc(total + sizeof(cstring))) != NULL)
 	{
 		size_t const l = rtc->length = s->length;
@@ -260,7 +260,9 @@ cstring *cstr_printf(cstring *s, char const *fmt, ...)
 
 	size_t size = strlen(fmt) + 80;
 	s = cstr_reserve(s, size);
-	
+	if (s == NULL)
+		return NULL;
+
 	va_list ap;
 	size_t l = s->length, avail = s->alloc - l;
 	for (;;)
@@ -269,14 +271,21 @@ cstring *cstr_printf(cstring *s, char const *fmt, ...)
 		int grow = vsnprintf(s->data + l, avail, fmt, ap);
 		va_end(ap);
 
-		if (grow > -1 && (size_t)grow < avail)
+		// Until glibc 2.0.6, vsnprintf would return -1 when the output was truncated
+		if (grow > -1)
 		{
-			s->length += strlen(s->data + l);
-			break;
+			if ((size_t)grow < avail)
+			{
+				s->length += grow;
+				break;
+			}
+
+			size += grow;
 		}
+		else
+			size *= 2;
 
 		s->data[l] = 0;
-		size *= 2; // beware buggy implementations
 		s = cstr_grow(s, size);
 		if (s == NULL)
 			break;
@@ -319,10 +328,19 @@ int main(int argc, char *argv[])
 		if (s == NULL)
 			break;
 
+		static char const lorem_ipsum[] =
+			"lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum\n"
+			"lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum\n"
+			"lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum\n"
+			"lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum\n"
+			"lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum\n"
+			"lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum\n"
+			"lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum\n";
+
 		if (strcmp(argv[i], "printf") == 0)
 			for (j = 0; j < 4 && s; ++j)
-				s = cstr_printf(s, "\nj=%d, s->alloc=%zu, s->length=%zu",
-					j, s->alloc, s->length);
+				s = cstr_printf(s, "\nj=%d, s->alloc=%zu, s->length=%zu\n%s",
+					j, s->alloc, s->length, lorem_ipsum);
 		else
 		{
 			j = 0;
