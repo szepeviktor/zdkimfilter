@@ -1,4 +1,4 @@
-dist: xenial
+dist: bionic
 sudo: required
 language: c
 
@@ -8,14 +8,14 @@ services:
 before_install:
   - sudo apt-get update -qq
   # Backport libopendkim-dev
-  - sudo apt-get install -y devscripts fakeroot debhelper dh-autoreconf pkg-config libmilter-dev libdb-dev libunbound-dev libldap2-dev liblua5.1-0-dev libidn2-0-dev autotools-dev libbsd-dev libopendbx1-dev libssl-dev dh-systemd libjansson-dev libsasl2-dev libmemcached-dev
+  - sudo apt-get install -y devscripts fakeroot debhelper dh-autoreconf pkg-config libmilter-dev libdb-dev libunbound-dev libldap2-dev liblua5.1-0-dev libidn2-dev autotools-dev libbsd-dev libopendbx1-dev libssl-dev dh-systemd libjansson-dev libsasl2-dev libmemcached-dev
   - dget -ux "http://archive.ubuntu.com/ubuntu/pool/universe/o/opendkim/opendkim_2.11.0~alpha-11build1.dsc"
   - cd opendkim-2.11*/
   - dpkg-buildpackage -uc -us -B
   - sudo dpkg -i ../libopendkim-dev_2.11*.deb ../libopendkim11_2.11*.deb
   - cd -
   # Debian packages for building zdkimfilter
-  - sudo apt-get install -y devscripts debhelper dh-autoreconf pkg-config libtool courier-mta uuid-dev zlib1g-dev libunistring-dev libidn2-0-dev nettle-dev libopendbx1-dev publicsuffix
+  - sudo apt-get install -y devscripts debhelper dh-autoreconf pkg-config libtool courier-mta uuid-dev zlib1g-dev libunistring-dev libidn2-dev nettle-dev libopendbx1-dev publicsuffix
 
 script:
   - dpkg-buildpackage -uc -us -B
